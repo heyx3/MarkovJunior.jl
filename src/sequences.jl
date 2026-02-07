@@ -261,43 +261,81 @@ dsl_string(da::Sequence_DoAll) = string("@do_all begin
     (iter_join(dsl_string.(da.rules), "\n    "))..., "
 end")
 
-"Executes a list of sequences, in order"
+"
+Executes a list of inner sequences, in order.
+
+If put in repeating mode, it will keep executing the list
+  for as long as the first element of it can find a match.
+Note that a repeating Ordered sequence could exit without even running once!
+"
 struct Sequence_Ordered <: AbstractSequence
     list::Vector{AbstractSequence}
+    repeats::Bool
     inference::AllInference
 
-    Sequence_Ordered(sequences, inference=AllInference()) = new(
+    Sequence_Ordered(sequences, repeats=false, inference=AllInference()) = new(
         if sequences isa Vector{AbstractSequence}
             sequences
         else
             collect(AbstractSequence, sequences)
         end,
+        convert(Bool, repeats),
         inference
     )
 end
-function start_sequence(d::Sequence_Ordered, grid::CellGrid{N}, outer_inference::AllInference, rng::PRNG) where {N}
-    if isempty(d.list)
+struct Sequence_Ordered_State
+    current_i::Int
+    current_state::Any
+    current_any_matches_yet::Bool
+    inference::AllInference
+end
+function start_sequence(s::Sequence_Ordered, grid::CellGrid{N}, outer_inference::AllInference, rng::PRNG) where {N}
+    if isempty(s.list)
         return nothing
     else
-        inf = AllInference(outer_inference, d.inference)
-        return (1, start_sequence(d.list[1], grid, inf, rng), inf)
+        inf = AllInference(outer_inference, s.inference)
+        return Sequence_Ordered_State(
+            1, start_sequence(s.list[1], grid, inf, rng),
+            false, inf
+        )
     end
 end
-execute_sequence(d::Sequence_Ordered, grid::CellGrid, rng::PRNG, ::Nothing) = nothing
-function execute_sequence(d::Sequence_Ordered, grid::CellGrid{N}, rng::PRNG,
-                          (current_i, element_state, inference)::Tuple{Int, Any, AllInference}) where {N}
-    next_from_element = execute_sequence(d.list[current_i], grid, rng, element_state)
+execute_sequence(s::Sequence_Ordered, grid::CellGrid, rng::PRNG, ::Nothing) = nothing
+function execute_sequence(s::Sequence_Ordered, grid::CellGrid{N}, rng::PRNG,
+                          iter::Sequence_Ordered_State) where {N}
+    next_from_element = execute_sequence(s.list[iter.current_i], grid, rng, iter.current_state)
     if exists(next_from_element)
-        return (current_i, next_from_element, inference)
-    elseif current_i < length(d.list)
-        return execute_sequence(d, grid, rng,
-                                (current_i + 1,
-                                 start_sequence(d.list[current_i + 1], grid, inference, rng),
-                                 inference))
+        return Sequence_Ordered_State(iter.current_i, next_from_element, true, iter.inference)
+    elseif s.repeats && (iter.current_i == 1) && !iter.current_any_matches_yet
+        # We failed to restart, so give up.
+        return nothing
+    elseif iter.current_i < length(s.list)
+        # Recursively move on to the next iteration.
+        return execute_sequence(s, grid, rng, Sequence_Ordered_State(
+            iter.current_i + 1,
+            start_sequence(s.list[iter.current_i + 1], grid, iter.inference, rng),
+            false, iter.inference
+        ))
+    elseif s.repeats
+        # Start anew.
+        return execute_sequence(s, grid, rng, Sequence_Ordered_State(
+            1, start_sequence(s.list[1], grid, iter.inference, rng),
+            false, iter.inference
+        ))
     else
+        # We ran out of things to do.
         return nothing
     end
 end
+dsl_string(o::Sequence_Ordered) = string(
+    "@block ",
+    o.repeats ? "repeat " : "",
+    """begin
+    """,
+    inference_exists(o.inference) ? string("    ", dsl_string(o.inference), "\n") : "",
+    (string.(Ref("    "), dsl_string.(o.list), Ref("\n")))...,
+    "    end"
+)
 
 "Draws a rectangle of pixels, specified in UV space"
 struct Sequence_DrawBox{N} <: AbstractSequence

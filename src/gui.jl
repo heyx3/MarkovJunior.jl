@@ -368,7 +368,7 @@ function gui_main(runner::GuiRunner, delta_seconds::Float32)
                     ctx = IOContext(io, :displaysize=>(5000, 999999))
 
                     println(ctx, "========================================\n==    Flat")
-                    Profile.print(ctx, format=:flat)
+                    Profile.print(ctx, format=:flat, mincount=100)
 
                     println(ctx, "\n\n\n")
 

@@ -153,18 +153,7 @@ function parse_markovjunior(_macro_args::Tuple)::ParsedMarkovAlgorithm
     main_sequence = Vector{AbstractSequence}()
     for (i, a) in enumerate(macro_args)
         if a isa Expr && a.head == :block
-            parse_markovjunior_block(a.args) do location, line
-                if (line isa Expr) && (line.head == :macrocall)
-                    push!(main_sequence, parse_markovjunior_block_entry(
-                        inputs, Val(line.args[1]::Symbol),
-                        line.args[2]::LineNumberNode,
-                        line.args[3:end]
-                    ))
-                else
-                    raise_error_at(location, "Unexpected sequence expression: '", line, "'")
-                end
-            end
-
+            main_sequence = parse_markovjunior_main_sequence(inputs, a.args)
             deleteat!(macro_args, i)
             break
         end
@@ -181,6 +170,7 @@ function parse_markovjunior(_macro_args::Tuple)::ParsedMarkovAlgorithm
     else
         max(maximum(inputs.reported_dimensions), inputs.dims)
     end
+    #TODO: If max_dim is 1, set it back to `nothing`; then make sure DrawBox{1} can broadcast to any dimension.
     # Check for inconsistencies.
     if exists(inputs.dims) && inputs.dims > 1 && inputs.dims < max_dim
         error("You reported this algorithm as ", inputs.dims,
@@ -219,6 +209,7 @@ end
 export ParsedMarkovAlgorithm, @markovjunior, parse_markovjunior,
        markov_initial_fill, markov_main_sequence,
        markov_fixed_dimension, markov_fixed_resolution
+#
 
 
 ####################################
@@ -236,6 +227,27 @@ struct BlockParseInputs
     dims::Optional{Int}
     resolution::Optional{Tuple{Vararg{Int}}}
     reported_dimensions::Set{Int} # Number of dimensions *according to* individual sequences
+end
+
+function parse_markovjunior_main_sequence(try_handle_line, inputs::BlockParseInputs, block_args)::Vector{AbstractSequence}
+    output = Vector{AbstractSequence}()
+    parse_markovjunior_block(block_args) do location, line
+        if try_handle_line(location, line)
+            # Do nothing; the line was handled.
+        elseif (line isa Expr) && (line.head == :macrocall)
+            push!(output, parse_markovjunior_block_entry(
+                inputs, Val(line.args[1]::Symbol),
+                line.args[2]::LineNumberNode,
+                line.args[3:end]
+            ))
+        else
+            raise_error_at(location, "Unexpected sequence expression: '", line, "'")
+        end
+    end
+    return output
+end
+function parse_markovjunior_main_sequence(inputs::BlockParseInputs, block_args)::Vector{AbstractSequence}
+    return parse_markovjunior_main_sequence((loc, line) -> false, inputs, block_args)
 end
 
 function parse_markovjunior_block(to_do, block_lines)
@@ -550,4 +562,40 @@ function parse_markovjunior_block_entry(inputs::BlockParseInputs,
         exists(inference[]) ? inference[] : AllInference()
     )
 end
-#TODO: :@do_n_relative, @sequence
+function parse_markovjunior_block_entry(inputs::BlockParseInputs,
+                                        ::Val{Symbol("@block")},
+                                        location::LineNumberNode,
+                                        block_args)
+    if !in(length(block_args), 1:2) || !Meta.isexpr(block_args[end], :block)
+        raise_error_at(location, "Unsupported syntax: expected @block [repeat] begin ... end")
+    end
+
+    # Parse each statement within the block.
+    repeats = Ref(false)
+    sequence = Vector{AbstractSequence}()
+    inference = Ref{Optional{AllInference}}(nothing)
+    parse_markovjunior_block(block_args) do inner_location, line
+        if line == :repeat
+            repeats[] = true
+        elseif Meta.isexpr(line, :block)
+            sequence = parse_markovjunior_main_sequence(inputs, line.args) do inner_location2, line
+                if Meta.isexpr(line, :macrocall) && line.args[1] == Symbol("@infer")
+                    macro_args = line.args[3:end]
+                    if isnothing(inference[])
+                        inference[] = parse_markovjunior_inference(inputs, line.args[2], macro_args)
+                    else
+                        raise_error_at(line.args[2], "`@infer` appeared more than once")
+                    end
+                else
+                    return false
+                end
+                return true
+            end
+        else
+            raise_error_at(inner_location, "Unexpected @block argument: `", line, "`")
+        end
+    end
+
+    return Sequence_Ordered(sequence, repeats[], get_something(inference[], AllInference()))
+end
+#TODO: :@do_n_relative

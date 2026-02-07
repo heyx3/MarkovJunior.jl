@@ -131,7 +131,7 @@ const DEFAULT_SEQUENCE =
             # Mark the min corner.
             @draw_box 'B' min=0 size=0
 
-            # Pick an "across-brick" axis (ideally Y).
+            # Pick an "across-brick" axis (ideally vertical but whatever).
             @do_n 1 begin
                 @rule Bbb => BYY
             end
@@ -140,52 +140,98 @@ const DEFAULT_SEQUENCE =
                 @rule YYbbbbbbb => GGGGGGRYY
                 @rule YYbbbbbbbbb => GGGGGGGGRYY
             end
-            # Finish off the last brick row.
+            # Push the marker to the end of the across-brick axis.
             @do_all begin
                 @sequential
                 @rule YYb => GYY
                 @rule YY => GG
-                @rule B => R # Make the min-corner marker look like any other row marker
+            end
+            # Draw out each row.
+            @do_all begin
+                @sequential
+                @rule Bbb => BYY
+                @rule Rbb => RYY
+                @rule YYb => IYY
+                @rule YY => II
             end
 
-            # Now fully draw out each row.
-            # Within them, insert column markers to define the bricks underneath it,
-            #    very similarly to how the rows were first defined.
-            @do_all begin
-                @rule Rbb => GYY
-            end
-            @do_all begin
-                @rule YYbbbbbbbbbbb => GGGGGGGGGGRYY
-                @rule YYbbbbbbbbbbbbb => GGGGGGGGGGGGRYY
-                @rule YYbbbbbbbbbbbbbbb => GGGGGGGGGGGGGGRYY
-            end
-            @do_all begin
-                @sequential
-                @rule YYb => GYY
-                @rule YY => GG
-            end
+            # Now fully draw out each row, starting with the first.
+            @block repeat begin
+                @do_all begin
+                    @rule BII => BYY
+                end
+                # As it's drawn out, insert column markers for the bricks underneath.
+                @do_all begin
+                    @rule YYIIIIIIIIIII => TTTTTTTTTTMYY
+                    @rule YYIIIIIIIIIIIII => TTTTTTTTTTTTMYY
+                    @rule YYIIIIIIIIIIIIIII => TTTTTTTTTTTTTTMYY
+                end
+                @do_all begin
+                    @sequential
+                    @rule YYI => TYY
+                    @rule YY => TT
+                end
 
-            # Draw the columns within each brick line.
-            @do_all begin
-                @sequential
-                @rule Rbb => GYY
-                @rule YYb => GYY
-                @rule YY => GG
+                # Draw downward to the next row.
+                #   1. Start with the min edge, and mark the row below it to eventually go through this same process.
+                @do_all begin
+                    @rule BGG => OYY
+                end
+                @do_all begin
+                    @sequential
+                    @rule YYG => OYY
+                    @rule YYR => OOB
+                    @rule YY => OO # At the bottom of the grid there is no other row to process
+                end
+                #   2. Draw the rest of the column markers down.
+                @do_all begin
+                    @sequential
+                    @rule Mbb => TYY
+                    @rule YYb => PYY
+                    @rule YY => PP
+                end
+                #   3. Fill in the bricks.
+                @do_all begin
+                    @sequential
+                    @rule YYb => LYY
+                    @rule YY => LL
+                    @rule Tbb => TYY
+                end
             end
 
             # Finalize the colors!
             @do_all begin
                 # Start with larger lines to speed up the process.
                 @sequential
-                @rule GGGG => wwww
-                @rule GGG => www
-                @rule GG => ww
-                @rule G => w
+                @rule OOOO => TTTT
+                @rule OOO => TTT
+                @rule OO => TT
+                @rule O => T
 
-                @rule bbbb => RRRR
-                @rule bbb => RRR
-                @rule bb => RR
-                @rule b => R
+                @rule PPPP => TTTT
+                @rule PPP => TTT
+                @rule PP => TT
+                @rule P => T
+
+                @rule TTTTTTTT => wwwwwwww
+                @rule TTTTTTT => wwwwwww
+                @rule TTTTTT => wwwwww
+                @rule TTTTT => wwwww
+                @rule TTTT => wwww
+                @rule TTT => www
+                @rule TT => ww
+                @rule T => w
+
+                @rule LLLLLLLLLL => RRRRRRRRRR
+                @rule LLLLLLLLL => RRRRRRRRR
+                @rule LLLLLLLL => RRRRRRRR
+                @rule LLLLLLL => RRRRRRR
+                @rule LLLLLL => RRRRRR
+                @rule LLLLL => RRRRR
+                @rule LLLL => RRRR
+                @rule LLL => RRR
+                @rule LL => RR
+                @rule L => R
             end
         end
     else # Blank screen
@@ -204,17 +250,9 @@ function main(; sequence::ParsedMarkovAlgorithm = DEFAULT_SEQUENCE,
         SETUP = begin
             LOOP.max_fps = nothing
 
-            gui_editor_font_config = CImGui.ImFontConfig_ImFontConfig()
-            unsafe_store!(gui_editor_font_config.OversampleH, Cint(8))
-            unsafe_store!(gui_editor_font_config.OversampleV, Cint(8))
-            unsafe_store!(gui_editor_font_config.FontDataOwnedByAtlas, false)
-            gui_editor_font = CImGui.AddFontFromMemoryTTF(
-                unsafe_load(CImGui.GetIO().Fonts),
-                ASSET_BYTES_EDITOR_FONT, length(ASSET_BYTES_EDITOR_FONT),
-                19, gui_editor_font_config
-            )
-            CImGui.ImFontConfig_destroy(gui_editor_font_config)
-
+            gui_editor_font = gui_add_font_from_memory_ttf(
+                ASSET_BYTES_EDITOR_FONT, [ 19 ]
+            )[1]
             gui = GuiRunner(dsl_string(sequence), gui_editor_font, seed)
         end
         LOOP = begin
@@ -235,8 +273,6 @@ function main(; sequence::ParsedMarkovAlgorithm = DEFAULT_SEQUENCE,
     return 0
 end
 
-# Precompile code using a basic sequence.
-# The sequence logic is super type-unstable, so this is very important to performance.
 function run_game(; sequence::ParsedMarkovAlgorithm = DEFAULT_SEQUENCE,
                     resolution::NTuple{2, Int} = get_something(
                         markov_fixed_resolution(sequence),
@@ -254,7 +290,12 @@ function run_game(; sequence::ParsedMarkovAlgorithm = DEFAULT_SEQUENCE,
 
     return grid
 end
-@info "Running once for precompilation..."
-run_game()
 
-end
+# Precompile code using a basic sequence.
+# The sequence logic is super type-unstable, so this is very important to performance.
+@info "Running once for precompilation..."
+run_game(sequence = eval(Meta.parse(dsl_string(DEFAULT_SEQUENCE))),
+         resolution = (25, 25))
+
+
+end # module
