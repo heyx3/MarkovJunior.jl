@@ -41,6 +41,11 @@ mutable struct GuiRunner
     next_algorithm_font::Ptr{CImGui.LibCImGui.ImFont}
     algorithm_error_msg::String
 
+    available_scenes::Vector{String}
+    current_scene::String
+    current_scene_idx::Int
+    current_scene_has_changes::Bool
+
     is_playing::Bool
     ticks_per_second::Float32
     time_till_next_tick::Float32
@@ -76,6 +81,8 @@ function GuiRunner(initial_algorithm_str::String,
         algorithm_editor_font,
         "Uh-OH: UNINITIALIZED!!!!",
 
+        String[ ], "", 1, false,
+
         false, 5.0f0, -1.0f0,
 
         10, 1000, 10.0f0
@@ -83,12 +90,43 @@ function GuiRunner(initial_algorithm_str::String,
 
     reset_gui_runner_algo(runner, true, true)
     update_gui_runner_texture_2D(runner)
+    update_gui_runner_scenes(runner)
 
     return runner
 end
 function Base.close(runner::GuiRunner)
     close(runner.state_texture)
     close(runner.algorithm_render2D[])
+end
+
+function update_gui_runner_scenes(runner::GuiRunner)
+    empty!(runner.available_scenes)
+    append!(runner.available_scenes,
+        (name for name in readdir(scenes_path())
+          if endswith(name, ".jl"))
+    )
+    next_scene_idx = findfirst(s -> s == runner.current_scene, runner.available_scenes)
+
+    if isnothing(next_scene_idx)
+        # On initial construction, the "current scene" is left empty.
+        if isempty(runner.current_scene)
+            next_scene_idx = 1
+            runner.current_scene = runner.available_scenes[1]
+            runner.current_scene_has_changes = false
+        else
+            push!(runner.available_scenes, runner.current_scene)
+            sort!(runner.available_scenes)
+            next_scene_idx = findfirst(s -> s == runner.current_scene, runner.available_scenes)
+
+            open(io -> write(io, string(runner.next_algorithm)),
+                joinpath(scenes_path(), runner.current_scene),
+                "w")
+            runner.current_scene_has_changes = false
+        end
+    end
+
+    runner.current_scene_idx = next_scene_idx
+    return nothing
 end
 
 function update_gui_runner_texture_2D(runner::GuiRunner)
@@ -127,7 +165,7 @@ function reset_gui_runner_algo(runner::GuiRunner,
     if parse_new_algorithm
         runner.algorithm_error_msg = ""
         try
-            algorithm_ast = Meta.parse(string(runner.next_algorithm))
+            algorithm_ast = Meta.parse(string(runner.next_algorithm), filename=runner.current_scene[1:end-3])
             if !Base.isexpr(algorithm_ast, :macrocall) || algorithm_ast.args[1] != Symbol("@markovjunior")
                 runner.algorithm_error_msg = string(
                     "Invalid header: Expected `@markovjunior ... begin ... end`",
@@ -418,6 +456,7 @@ function gui_main(runner::GuiRunner, delta_seconds::Float32)
     )
     gui_window("Legend", C_NULL, CImGui.LibCImGui.ImGuiWindowFlags_NoDecoration) do
         print_wnd_sizes && println("Legend wnd: ", CImGui.GetWindowSize())
+        CImGui.Separator(); CImGui.SameLine(30); CImGui.Text("Legend")
         gui_within_group() do
             for (color, greyscale, text) in GUI_LEGEND_DATA
                 gui_draw_rect(
@@ -442,7 +481,36 @@ function gui_main(runner::GuiRunner, delta_seconds::Float32)
         )
     )
     gui_window("Files", C_NULL, CImGui.LibCImGui.ImGuiWindowFlags_NoDecoration) do
-        #TODO: File saving/loading
+        CImGui.Separator(); CImGui.SameLine(30); CImGui.Text("Files")
+        if CImGui.Button("Refresh")
+            update_gui_runner_scenes(runner)
+        end
+        CImGui.SameLine(0, 20)
+        gui_with_style(CImGui.LibCImGui.ImGuiCol_Button, v3f(0.2, 0.1, 0.1), unchanged=runner.current_scene_has_changes) do
+         gui_with_style(CImGui.LibCImGui.ImGuiCol_ButtonHovered, v3f(0.2, 0.1, 0.1), unchanged=runner.current_scene_has_changes) do
+          gui_with_style(CImGui.LibCImGui.ImGuiCol_ButtonActive, v3f(0.2, 0.1, 0.1), unchanged=runner.current_scene_has_changes) do
+            if CImGui.Button("Reset changes") && runner.current_scene_has_changes
+                update!(runner.next_algorithm,
+                        read(joinpath(scenes_path(), runner.current_scene), String))
+                runner.current_scene_has_changes = false
+            end
+            CImGui.SameLine(0, 20)
+            if CImGui.Button("Save changes") && runner.current_scene_has_changes
+                open(io -> print(io, string(runner.next_algorithm)),
+                      joinpath(scenes_path(), runner.current_scene),
+                      "w")
+                runner.current_scene_has_changes = false
+            end
+        end end end
+
+        next_scene_idx_c = convert(Int32, runner.current_scene_idx - 1)
+        @c CImGui.ListBox("Scenes", &next_scene_idx_c,
+                          runner.available_scenes, length(runner.available_scenes))
+        if (next_scene_idx_c+1 != runner.current_scene_idx) && !runner.current_scene_has_changes
+            runner.current_scene_idx = next_scene_idx_c+1
+            runner.current_scene = runner.available_scenes[runner.current_scene_idx]
+            update!(runner.next_algorithm, read(joinpath(scenes_path(), runner.current_scene), String))
+        end
     end
 
     gui_next_window_space(Box2Df(
@@ -457,7 +525,7 @@ function gui_main(runner::GuiRunner, delta_seconds::Float32)
             (content_size - v2f(20, 50)).data
         )
         gui_with_font(runner.next_algorithm_font) do
-            gui_text!(runner.next_algorithm)
+            runner.current_scene_has_changes |= gui_text!(runner.next_algorithm)
         end
 
         if CImGui.Button("Restart##WithNewAlgorithm")

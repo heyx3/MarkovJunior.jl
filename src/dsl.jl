@@ -256,7 +256,6 @@ function parse_markovjunior_block(to_do, block_lines)
         if block_line isa LineNumberNode
             last_src_line = block_line
         else
-            @markovjunior_assert exists(last_src_line) block_lines
             to_do(last_src_line, block_line)
         end
     end
@@ -592,7 +591,8 @@ function parse_markovjunior_block_entry(inputs::BlockParseInputs,
                 return true
             end
         else
-            raise_error_at(inner_location, "Unexpected @block argument: `", line, "`")
+            raise_error_at(get_something(inner_location, location),
+                           "Unexpected @block argument: `", line, "`")
         end
     end
 
