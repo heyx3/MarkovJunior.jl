@@ -36,10 +36,14 @@ Bplus.@make_toggleable_asserts markovjunior_
 # markovjunior_asserts_enabled() = true
 
 "
-A compile-time flag that disables accelerated lookups,
+A edit-time flag that disables accelerated lookups,
   falling back to simpler behavior that's much less likely to have bugs.
 "
 const SKIP_CACHE = false
+"
+An edit-time flag that enables verbose logging of Path Inference potential fields computation.
+"
+const LOG_INFERENCE_PATH = false
 
 
 "Converts various pieces of MarkovJunior algorithm definitions into their DSL representation"

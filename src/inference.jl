@@ -71,11 +71,18 @@ end
 function recalculate!(ips::InferPath_State{N}) where {N}
     @markovjunior_assert(isempty(ips.search_frontier_buffer))
 
+    LOG_INFERENCE_PATH && println(
+        "Calculating ", dsl_string(ips.constraint), "...\n",
+        "\tSource=", collect(ips.constraint.source_types),
+          " | Paths=", collect(ips.constraint.path_types),
+          " | Dest=", collect(ips.constraint.dest_types))
+
     # Seed the potential field by setting the dest cells' potentials to 0.
     fill!(ips.potential, typemax(UInt32))
-    for grid_idx::CellIdx{N} in one(CellIdx{N}):Bplus.Math.vsize(ips.grid)
+    for grid_idx::CellIdx{N} in one(CellIdx{N}):vsize(ips.grid)
         if ips.grid[grid_idx] in ips.constraint.dest_types
             ips.search_frontier_buffer[grid_idx] = UInt32(0)
+            LOG_INFERENCE_PATH && println("\tDest at ", grid_idx)
         end
     end
 
@@ -83,11 +90,18 @@ function recalculate!(ips::InferPath_State{N}) where {N}
     #    each time queueing up neighboring cells to be re-evaluated.
     while !isempty(ips.search_frontier_buffer)
         (grid_idx, new_value) = pop!(ips.search_frontier_buffer)
+        LOG_INFERENCE_PATH && println(
+            "\tProcessing ", grid_idx,
+            " | previous=", ips.potential[grid_idx], " | new=", new_value
+        )
 
         @markovjunior_assert(new_value < ips.potential[grid_idx])
         ips.potential[grid_idx] = new_value
 
         neighbor_new_value = new_value + UInt32(1)
+        LOG_INFERENCE_PATH && println(
+            "\t\tNeighbors could have potential ", neighbor_new_value
+        )
         for neighbor_axis in 1:N
             for neighbor_dir in -1:2:1
                 neighbor_axis_pos = grid_idx[neighbor_axis] + neighbor_dir
@@ -96,15 +110,30 @@ function recalculate!(ips::InferPath_State{N}) where {N}
                     neighbor_grid_idx = let i = grid_idx
                         @set i[neighbor_axis] = neighbor_axis_pos
                     end
-
+                    LOG_INFERENCE_PATH && println(
+                        "\t\tChecking neighbor at ", neighbor_grid_idx, " | value=", ips.grid[neighbor_grid_idx],
+                            " | officialPotential=", ips.potential[neighbor_grid_idx],
+                            " | upcomingPotential=", get(ips.search_frontier_buffer, neighbor_grid_idx, NaN),
+                            " | ", ips.grid[neighbor_grid_idx] in ips.constraint.path_types,
+                                   "/", neighbor_new_value < get(ips.search_frontier_buffer, neighbor_grid_idx, ips.potential[neighbor_grid_idx])
+                    )
                     if (ips.grid[neighbor_grid_idx] in ips.constraint.path_types) &&
                         (neighbor_new_value < get(ips.search_frontier_buffer, neighbor_grid_idx, ips.potential[neighbor_grid_idx]))
                     #begin
                         ips.search_frontier_buffer[neighbor_grid_idx] = neighbor_new_value
+                        LOG_INFERENCE_PATH && println(
+                            "\t\t\tOur new potential is better! Adding it to the search frontier!"
+                        )
                     end
                 end
             end
         end
+    end
+
+    LOG_INFERENCE_PATH && begin
+        println("Final potential:")
+        display(ips.potential') # Transposed to match the display
+        println("\n")
     end
 
     return nothing
@@ -221,6 +250,8 @@ struct AllInference_State{N}
 end
 
 "
+Get the effect on inference of applying the given rule to the given location.
+
 It's recommended to check `inference_exists()`
    and have a fast path in case you don't need to calculate inference at all.
 "
@@ -247,6 +278,23 @@ function infer_weight(inference::AllInference_State{N},
                                rng)
     end
 
+    return weight
+end
+"
+Checks the total potential of a grid cell (mainly for debugging/visualization).
+May have a negative value (if the cell's color is off all inference paths).
+"
+function infer_weight(inference::AllInference_State{N}, at::CellIdx{N}) where {N}
+    weight::Float32 = 0
+    for path in inference.paths
+        weight += let u = path.potential[at]
+            if u == typemax(UInt32)
+                -1.0f0
+            else
+                convert(Float32, u)
+            end
+        end
+    end
     return weight
 end
 

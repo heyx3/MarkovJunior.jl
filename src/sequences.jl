@@ -17,6 +17,8 @@ Mainly used for dimension-specific sequences to allow 1D versions to apply to an
 Default behavior: returns itself.
 "
 broadcast_sequence(seq::AbstractSequence, new_dims::Int) = seq
+"Asks an executing sequence for the current state of Inference logic"
+inference_of_sequence(seq::AbstractSequence, current_state)::Optional{AllInference_State} = error("Unimplemented: ", typeof.((seq, current_state)))
 
 
 "Executes a set of rules exactly N times"
@@ -172,6 +174,11 @@ dsl_string(dn::Sequence_DoN) = string("@do_n ", dn.count, " begin
     inference_exists(dn.inference) ? "$(dsl_string(dn.inference))\n    " : "",
     (iter_join(dsl_string.(dn.rules), "\n    "))..., "
 end")
+inference_of_sequence(::Sequence_DoN, (next_i, cache, inference, applications_buffer
+                                      )::Tuple{Int, RuleCache{N},
+                                               AllInference_State{N},
+                                               Vector{Tuple{RuleApplication{N}, Float32}}}
+                     ) where {N} = inference
 
 
 "Executes a set of rules `round(N*C)` times, where C is the number of cells in the grid"
@@ -223,6 +230,8 @@ function execute_sequence(d::Sequence_DoNRelative, grid::CellGrid{N}, rng::PRNG,
         return (inner_sequence, new_inner_state)
     end
 end
+inference_of_sequence(::Sequence_DoNRelative, (inner_sequence, inner_state)::Tuple{Sequence_DoN, Any}) =
+    inference_of_sequence(inner_sequence, inner_state)
 
 "Executes a set of rules until there are no more matches"
 struct Sequence_DoAll <: AbstractSequence
@@ -260,6 +269,8 @@ dsl_string(da::Sequence_DoAll) = string("@do_all begin
     inference_exists(da.inference) ? "$(dsl_string(da.inference))\n    " : "",
     (iter_join(dsl_string.(da.rules), "\n    "))..., "
 end")
+inference_of_sequence(::Sequence_DoAll, (inner_sequence, inner_state)::Tuple{Sequence_DoN, Any}) =
+    inference_of_sequence(inner_sequence, inner_state)
 
 "
 Executes a list of inner sequences, in order.
@@ -335,6 +346,11 @@ dsl_string(o::Sequence_Ordered) = string(
     inference_exists(o.inference) ? string("    ", dsl_string(o.inference), "\n") : "",
     (string.(Ref("    "), dsl_string.(o.list), Ref("\n")))...,
     "    end"
+)
+inference_of_sequence(o::Sequence_Ordered, ::Nothing) = nothing
+inference_of_sequence(o::Sequence_Ordered, iter::Sequence_Ordered_State) = inference_of_sequence(
+    o.list[iter.current_i],
+    iter.current_state
 )
 
 "Draws a rectangle of pixels, specified in UV space"
@@ -422,5 +438,6 @@ dsl_string(b::Sequence_DrawBox{N}) where {N} = string(
     "size=", size(b.area).data,
     ")"
 )
+inference_of_sequence(::Sequence_DrawBox, ::NTuple{3, VecI{N}}) where {N} = nothing
 
 #TODO: Slice a grid to individual M-dimensional areas, and execute a sequence on each such area

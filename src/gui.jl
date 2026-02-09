@@ -1,7 +1,3 @@
-@bp_bitflag(MarkovJuniorGuiRenderFlags,
-    NONE,
-    potentials, rules
-)
 const GUI_LEGEND_DATA = map(enumerate(CELL_TYPES)) do (i,t)
     return (
         t.color,
@@ -13,14 +9,15 @@ end
 const gVec2 = Bplus.GUI.gVec2
 const gVec4 = Bplus.GUI.gVec4
 
+const RENDER_2D_MODE_NAMES = collect(string.(Render2DMode.instances()))
+
 
 "The state of the GUI for our MarkovJunior tool"
 mutable struct GuiRunner
     draw_monochrome::Bool
-    draw_flags::E_MarkovJuniorGuiRenderFlags
 
     next_dimensionality::Int
-    next_resolution::Vector{Int}
+    next_resolution::Vector{Int32}
 
     state_grid::CellGrid
     state_grid_tex2D_slice::CellGrid{2}
@@ -30,8 +27,7 @@ mutable struct GuiRunner
     algorithm_state::Optional
     algorithm_rng::PRNG
 
-    algorithm_render2D::Ref{Texture}
-    algorithm_render2D_buffer::Ref{Matrix{v3f}}
+    render2D::Render2DData
 
     current_seed::UInt64
     current_seed_display::String
@@ -61,7 +57,7 @@ function GuiRunner(initial_algorithm_str::String,
     # Create a half-baked initial instance, then "restart" the algorithm.
     fake_size = 64
     runner = GuiRunner(
-        false, MarkovJuniorGuiRenderFlags.NONE,
+        false,
 
         2, [ fake_size, fake_size ],
         fill(zero(UInt8), fake_size, fake_size),
@@ -70,7 +66,8 @@ function GuiRunner(initial_algorithm_str::String,
                                                      #   or else it won't be properly reallocated
 
         @markovjunior(begin end), nothing, PRNG(1),
-        Ref{Texture}(), Ref{Matrix{v3f}}(),
+        Render2DData(),
+
         zero(UInt64), "[NULL]",
         GuiText(string(seed)),
 
@@ -88,7 +85,7 @@ function GuiRunner(initial_algorithm_str::String,
         10, 1000, 10.0f0
     )
 
-    reset_gui_runner_algo(runner, true, true)
+    reset_gui_runner_algo(runner, true, true, true)
     update_gui_runner_texture_2D(runner)
     update_gui_runner_scenes(runner)
 
@@ -96,7 +93,7 @@ function GuiRunner(initial_algorithm_str::String,
 end
 function Base.close(runner::GuiRunner)
     close(runner.state_texture)
-    close(runner.algorithm_render2D[])
+    isassigned(runner.render2D.output) && close(runner.render2D.output[])
 end
 
 function update_gui_runner_scenes(runner::GuiRunner)
@@ -153,14 +150,14 @@ function update_gui_runner_texture_2D(runner::GuiRunner)
     end
 
     render_markov_2d(runner.state_grid_tex2D_slice, v3f(0.2, 0.2, 0.2),
-                     runner.algorithm_render2D_buffer,
-                     runner.algorithm_render2D)
+                     runner.render2D,
+                     runner.algorithm.main_sequence, runner.algorithm_state)
 
     return nothing
 end
 
 function reset_gui_runner_algo(runner::GuiRunner,
-                               parse_new_seed::Bool, parse_new_algorithm::Bool)
+                               parse_new_seed::Bool, parse_new_algorithm::Bool, update_resolution::Bool)
     # Re-parse the algorithm textbox, if requested.
     if parse_new_algorithm
         runner.algorithm_error_msg = ""
@@ -185,30 +182,34 @@ function reset_gui_runner_algo(runner::GuiRunner,
         n_dims = markov_fixed_dimension(runner.algorithm)
         if exists(n_dims)
             while length(runner.next_resolution) < n_dims
-                push!(runner.next_resolution, 1)
+                push!(runner.next_resolution, one(Int32))
             end
             while length(runner.next_resolution) > n_dims
-                deleteat!(runner.next_resolution, length(runner.next_resolution))
+                deleteat!(runner.next_resolution, convert(Int32, length(runner.next_resolution)))
             end
         end
     end
 
     # Initialize the grid.
-    dimensions = let d = markov_fixed_dimension(runner.algorithm)
-        if exists(d)
-            d
-        else
-            runner.next_dimensionality
+    if update_resolution
+        dimensions = let d = markov_fixed_dimension(runner.algorithm)
+            if exists(d)
+                d
+            else
+                runner.next_dimensionality
+            end
         end
-    end
-    resolution = let r = markov_fixed_resolution(runner.algorithm)
-        if exists(r)
-            r
-        else
-            Tuple(runner.next_resolution)
+        resolution = let r = markov_fixed_resolution(runner.algorithm)
+            if exists(r)
+                r
+            else
+                Tuple(runner.next_resolution)
+            end
         end
+        runner.state_grid = fill(runner.algorithm.initial_fill, resolution)
+    else
+        fill!(runner.state_grid, runner.algorithm.initial_fill)
     end
-    runner.state_grid = fill(runner.algorithm.initial_fill, resolution)
 
     # Initialize the RNG.
     if parse_new_seed
@@ -252,7 +253,9 @@ end
 gui_runner_is_finished(runner::GuiRunner)::Bool = isnothing(runner.algorithm_state)
 
 function gui_main(runner::GuiRunner, delta_seconds::Float32)
-    print_wnd_sizes::Bool = @markovjunior_debug(rand(Float32) < 0.01, false)
+    print_wnd_sizes::Bool = false && @markovjunior_debug(rand(Float32) < 0.01, false)
+    pane_flags = CImGui.LibCImGui.ImGuiWindowFlags_HorizontalScrollbar |
+                 (CImGui.LibCImGui.ImGuiWindowFlags_NoDecoration & (~CImGui.LibCImGui.ImGuiWindowFlags_NoScrollbar))
 
     gui_next_window_space(
         Box2Df(
@@ -261,48 +264,49 @@ function gui_main(runner::GuiRunner, delta_seconds::Float32)
         ),
         min_pixel_size = v2i(323, -1)
     )
-    gui_window("Runner", C_NULL, CImGui.LibCImGui.ImGuiWindowFlags_NoDecoration) do
+    gui_window("Runner", C_NULL, pane_flags) do
         content_size = convert(v2f, CImGui.GetContentRegionAvail())
         print_wnd_sizes && println("Rnn: ", CImGui.GetWindowSize())
 
-        # Render settings:
-        @c CImGui.Selectable("Monochrome", &runner.draw_monochrome)
-        CImGui.SameLine(0, 20)
-        for (name, flag) in [ ("Potentials", MarkovJuniorGuiRenderFlags.potentials),
-                                ("Rules", MarkovJuniorGuiRenderFlags.rules) ]
-        #begin
-            if runner.draw_monochrome
-                if CImGui.Selectable(name, contains(flag, runner.draw_flags))
-                    runner.draw_flags |= flag
-                else
-                    runner.draw_flags -= flag
-                end
-            else
-                # Draw a disabled version of the widget.
-                CImGui.Text(name)
-            end
-            CImGui.SameLine(0, 5)
+        should_update_texture = Ref(false)
+
+        # Display a 'render mode' selection box.
+        current_render2D_mode_idx = convert(Int32, Render2DMode.to_index(runner.render2D.mode)-1)
+        next_render2D_mode_idx = current_render2D_mode_idx
+        @c CImGui.ListBox("Mode", &current_render2D_mode_idx, RENDER_2D_MODE_NAMES, length(RENDER_2D_MODE_NAMES))
+        if next_render2D_mode_idx != current_render2D_mode_idx
+            should_update_texture[] = true
         end
-        CImGui.Dummy(0, 0) # To cancel the last SameLine() call
+        runner.render2D.mode = Render2DMode.from_index(convert(Int, current_render2D_mode_idx+1))
+        # Display info about the current render mode.
+        CImGui.SameLine(0, 15)
+        gui_within_group() do
+            if runner.render2D.mode == Render2DMode.normal
+                CImGui.Dummy(1, 1)
+            elseif runner.render2D.mode == Render2DMode.potentials
+                CImGui.Text("Potential range: ")
+                CImGui.Text(@sprintf("%f to %f",
+                    min_inclusive(runner.render2D.inference_potentials_range),
+                    max_inclusive(runner.render2D.inference_potentials_range)
+                ))
+            else
+                error("Unhandled: ", runner.render2D.mode)
+            end
+        end
+
+        CImGui.Separator()
 
         # Current state:
-        CImGui.BeginChild(CImGui.GetID("StateDisplayArea"),
-                          gVec2(content_size.x - 20,
-                                content_size.y - 200))
-            img_size = convert(v2f, runner.algorithm_render2D[].size.xy)
-            min_img_size::Float32 = content_size.x - 4
-            scale::Float32 = max(1.0f0, (min_img_size / img_size)...)
-            @set! img_size *= scale
+        img_size = convert(v2f, runner.render2D.output[].size.xy)
+        min_img_size::Float32 = content_size.x - 10
+        scale::Float32 = max(1.0f0, (min_img_size / img_size)...)
+        @set! img_size *= scale
+        CImGui.Image(gui_tex_handle(runner.render2D.output[]),
+                     convert(gVec2, img_size),
+                     gVec2(0, 0), gVec2(1, 1),
+                     gVec4(1, 1, 1, 1), gVec4(0, 0, 0, 0))
 
-            CImGui.Image(gui_tex_handle(runner.algorithm_render2D[]),
-                         convert(gVec2, img_size),
-                         gVec2(0, 0), gVec2(1, 1),
-                         gVec4(1, 1, 1, 1), gVec4(0, 0, 0, 0))
-        CImGui.EndChild()
-        #TODO: Add B+ helper for scroll regions once this is verified working
-
-        # Below actions may invalidate the algorithm state.
-        should_update_texture = Ref(false)
+        CImGui.Separator()
 
         # Run buttons:
         #   * Step
@@ -383,7 +387,7 @@ function gui_main(runner::GuiRunner, delta_seconds::Float32)
             end
             CImGui.SameLine(0, 40)
             if CImGui.Button("Reset")
-                reset_gui_runner_algo(runner, false, false)
+                reset_gui_runner_algo(runner, false, false, false)
                 should_update_texture[] = true
             end
             CImGui.SameLine(0, 20)
@@ -433,13 +437,59 @@ function gui_main(runner::GuiRunner, delta_seconds::Float32)
         end
         CImGui.SameLine(0, 10)
         if CImGui.Button("Restart##WithNewSeed")
-            reset_gui_runner_algo(runner, true, false)
+            reset_gui_runner_algo(runner, true, false, false)
             should_update_texture[] = true
         end
         CImGui.SameLine(0, 20)
         CImGui.Text(isnothing(tryparse(UInt64, string(runner.next_seed))) ?
                       "as String" :
                       "as number")
+
+        # Resolution data:
+        fixed_dims = markov_fixed_dimension(runner.algorithm)
+        fixed_resolution::Optional{Tuple} = markov_fixed_resolution(runner.algorithm)
+        dims = convert(Int32, get_something(fixed_dims, runner.next_dimensionality))
+        resolution::Vector = if exists(fixed_resolution)
+            collect(fixed_resolution)
+        else
+            runner.next_resolution
+        end
+        gui_with_item_width(60) do
+            if exists(fixed_dims)
+                CImGui.LabelText("Dimensions: ", string(dims))
+            else
+                @c CImGui.InputInt("Dimensions: ", &dims)
+                runner.next_dimensionality = clamp(dims, 2, 3)
+                dims = runner.next_dimensionality
+            end
+            CImGui.SameLine(0, 20)
+            # Update the resolution to match the dimensions.
+            while length(runner.next_resolution) < dims
+                push!(runner.next_resolution, 1)
+            end
+            while length(runner.next_resolution) > dims
+                deleteat!(runner.next_resolution, length(runner.next_resolution))
+            end
+            if exists(fixed_resolution)
+                CImGui.LabelText("Resolution: ", string(fixed_resolution))
+            elseif dims == 2
+                CImGui.InputInt2("Resolution: ", Ref(resolution, 1))
+            elseif dims == 3
+                CImGui.InputInt3("Resolution: ", Ref(resolution, 1))
+            else
+                CImGui.Text("ERROR: Unhandled: $dims/$resoution")
+            end
+        end
+        CImGui.SameLine(0, 20)
+        resolution_is_different::Bool = (dims != ndims(runner.state_grid)) ||
+                                        any(t->t[1]!=t[2], zip(resolution, size(runner.state_grid)))
+        gui_with_style(CImGui.LibCImGui.ImGuiCol_Button, v3f(0.2, 0.1, 0.1), unchanged=resolution_is_different) do
+         gui_with_style(CImGui.LibCImGui.ImGuiCol_ButtonHovered, v3f(0.2, 0.1, 0.1), unchanged=resolution_is_different) do
+          gui_with_style(CImGui.LibCImGui.ImGuiCol_ButtonActive, v3f(0.2, 0.1, 0.1), unchanged=resolution_is_different) do
+            if CImGui.Button("Reset with new resolution", v2f(200, 45)) && resolution_is_different
+                reset_gui_runner_algo(runner, false, false, true)
+            end
+        end end end
 
         # Update the state texture, if any above code changed the state.
         if should_update_texture[]
@@ -454,7 +504,7 @@ function gui_main(runner::GuiRunner, delta_seconds::Float32)
         ),
         max_pixel_size = v2i(-1, 316)
     )
-    gui_window("Legend", C_NULL, CImGui.LibCImGui.ImGuiWindowFlags_NoDecoration) do
+    gui_window("Legend", C_NULL, pane_flags) do
         print_wnd_sizes && println("Legend wnd: ", CImGui.GetWindowSize())
         CImGui.Separator(); CImGui.SameLine(30); CImGui.Text("Legend")
         gui_within_group() do
@@ -480,22 +530,23 @@ function gui_main(runner::GuiRunner, delta_seconds::Float32)
             max=v2f(0.65, 1.0)
         )
     )
-    gui_window("Files", C_NULL, CImGui.LibCImGui.ImGuiWindowFlags_NoDecoration) do
+    gui_window("Files", C_NULL, pane_flags) do
+        BUTTON_SIZE = v2f(100, 35)
         CImGui.Separator(); CImGui.SameLine(30); CImGui.Text("Files")
-        if CImGui.Button("Refresh")
+        if CImGui.Button("Refresh", BUTTON_SIZE)
             update_gui_runner_scenes(runner)
         end
         CImGui.SameLine(0, 20)
         gui_with_style(CImGui.LibCImGui.ImGuiCol_Button, v3f(0.2, 0.1, 0.1), unchanged=runner.current_scene_has_changes) do
          gui_with_style(CImGui.LibCImGui.ImGuiCol_ButtonHovered, v3f(0.2, 0.1, 0.1), unchanged=runner.current_scene_has_changes) do
           gui_with_style(CImGui.LibCImGui.ImGuiCol_ButtonActive, v3f(0.2, 0.1, 0.1), unchanged=runner.current_scene_has_changes) do
-            if CImGui.Button("Reset changes") && runner.current_scene_has_changes
+            if CImGui.Button("Reset changes", BUTTON_SIZE) && runner.current_scene_has_changes
                 update!(runner.next_algorithm,
                         read(joinpath(scenes_path(), runner.current_scene), String))
                 runner.current_scene_has_changes = false
             end
             CImGui.SameLine(0, 20)
-            if CImGui.Button("Save changes") && runner.current_scene_has_changes
+            if CImGui.Button("Save changes", BUTTON_SIZE) && runner.current_scene_has_changes
                 open(io -> print(io, string(runner.next_algorithm)),
                       joinpath(scenes_path(), runner.current_scene),
                       "w")
@@ -517,7 +568,7 @@ function gui_main(runner::GuiRunner, delta_seconds::Float32)
         min=v2f(0.65, 0),
         max=v2f(1.0, isempty(runner.algorithm_error_msg) ? 1.0 : 0.8)
     ))
-    gui_window("Editor", C_NULL, CImGui.LibCImGui.ImGuiWindowFlags_NoDecoration) do
+    gui_window("Editor", C_NULL, pane_flags) do
         content_size = convert(v2f, CImGui.GetContentRegionAvail())
         print_wnd_sizes && println("Editor wnd: ", CImGui.GetWindowSize())
 
@@ -529,7 +580,7 @@ function gui_main(runner::GuiRunner, delta_seconds::Float32)
         end
 
         if CImGui.Button("Restart##WithNewAlgorithm")
-            reset_gui_runner_algo(runner, false, true)
+            reset_gui_runner_algo(runner, false, true, true)
             update_gui_runner_texture_2D(runner)
         end
     end
@@ -550,6 +601,4 @@ function gui_main(runner::GuiRunner, delta_seconds::Float32)
     end
 
     print_wnd_sizes && println()
-
-    #TODO: File management window
 end
