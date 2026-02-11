@@ -63,19 +63,22 @@ function execute_sequence(d::Sequence_DoN, grid::CellGrid{N}, rng::PRNG,
 
         # Get all possible applications.
         empty!(applications_buffer)
-        max_inference_weight = Ref(-Inf32)
+        min_inference_weight = Ref(Inf32)
         first_matching_rule_idx = Ref{Int32}(0)
         find_rule_matches(grid, d.rules) do i, c
             inference_weight = use_inference ? infer_weight(inference, d.rules[i], c, rng) : 0.0f0
 
             if first_matching_rule_idx[] <= 0
                 first_matching_rule_idx[] = i
-                max_inference_weight[] = -Inf32
+                min_inference_weight[] = Inf32
             end
-            max_inference_weight[] = max(max_inference_weight[], inference_weight)
-            #TODO: Exit early (requires rewriting the helper functions) once we hit the second rule idx
 
-            push!(applications_buffer, (RuleApplication{N}(i, c), inference_weight))
+            if exists(inference_weight)
+                min_inference_weight[] = min(min_inference_weight[], inference_weight)
+                #TODO: Exit early (requires rewriting the helper functions) once we hit the second rule idx
+
+                push!(applications_buffer, (RuleApplication{N}(i, c), inference_weight))
+            end
         end
         if isempty(applications_buffer)
             return nothing
@@ -83,7 +86,7 @@ function execute_sequence(d::Sequence_DoN, grid::CellGrid{N}, rng::PRNG,
 
         # Pick an applicable option.
         filter!(t -> (!d.sequential || t[1].rule_idx == first_matching_rule_idx[]) &&
-                     (t[2] == max_inference_weight[]),
+                     (t[2] == min_inference_weight[]),
                 applications_buffer)
         option = rand(rng, applications_buffer)
         chosen_rule_idx = option[1].rule_idx
@@ -110,18 +113,20 @@ function execute_sequence(d::Sequence_DoN, grid::CellGrid{N}, rng::PRNG,
         rule = d.rules[rule_idx]
 
         empty!(applications_buffer)
-        max_inference_weight = Ref(-Inf32)
+        min_inference_weight = Ref(Inf32)
         for (at, dir) in applications_set
             line = CellLine(at, dir, rule.length)
             app = RuleApplication(rule_idx, line)
 
             inference_weight = use_inference ? infer_weight(inference, rule, line, rng) : 0.0f0
-            if inference_weight > max_inference_weight[]
-                empty!(applications_buffer)
-                max_inference_weight[] = inference_weight
-            end
-            if inference_weight == max_inference_weight[]
-                push!(applications_buffer, (app, inference_weight))
+            if exists(inference_weight)
+                if inference_weight < min_inference_weight[]
+                    empty!(applications_buffer)
+                    min_inference_weight[] = inference_weight
+                end
+                if inference_weight == min_inference_weight[]
+                    push!(applications_buffer, (app, inference_weight))
+                end
             end
         end
 
@@ -130,18 +135,20 @@ function execute_sequence(d::Sequence_DoN, grid::CellGrid{N}, rng::PRNG,
     else
         # Otherwise we must check *all* rules.
         if use_inference
-            # Randomly select from the options with the highest inference weight.
-            max_inference_weight = Ref(-Inf32)
+            # Randomly select from the options with the lowest inference weight.
+            min_inference_weight = Ref(Inf32)
             empty!(applications_buffer)
             for_each_cached_rule_application(cache) do app::RuleApplication{N}
                 next_inference_weight = infer_weight(inference, d.rules[app.rule_idx], app.at, rng)
-                # We only care about applications with the largest inference weighting.
-                if next_inference_weight > max_inference_weight[]
-                    max_inference_weight[] = next_inference_weight
-                    empty!(applications_buffer)
-                end
-                if next_inference_weight == max_inference_weight[]
-                    push!(applications_buffer, (app, next_inference_weight))
+                if exists(next_inference_weight)
+                    # We only care about applications with the largest inference weighting.
+                    if next_inference_weight < min_inference_weight[]
+                        min_inference_weight[] = next_inference_weight
+                        empty!(applications_buffer)
+                    end
+                    if next_inference_weight == min_inference_weight[]
+                        push!(applications_buffer, (app, next_inference_weight))
+                    end
                 end
             end
 

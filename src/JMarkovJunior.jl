@@ -1,12 +1,15 @@
 "Based on [https://github.com/mxgmn/MarkovJunior](mxgmn/MarkovJunior)"
 module JMarkovJunior
 
-using Random, Setfield, Profile, Printf
+using Random, Setfield, Profile, Printf, DataStructures
 const System = Base.Sys
 
 using OrderedCollections, GLFW, CImGui
 using CSyntax # Simplifies CImGui calls
 using Bplus; @using_bplus
+
+# B+ and DataStructures both define `update! :(
+const update! = Bplus.update!
 
 "
 Retrieves the key from an ordered dictionary (or element from an ordered set),
@@ -75,7 +78,7 @@ function main(; sequence_str::String = DEFAULT_SEQUENCE_STR,
              )::Int
     @game_loop begin
         INIT(
-            v2i(800, 800), "Markov Junior Playground",
+            v2i(1210, 800), "Markov Junior Playground",
             vsync=VsyncModes.on
         )
 

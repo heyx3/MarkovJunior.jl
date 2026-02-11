@@ -101,6 +101,7 @@ function Base.union(s::CellTypeSet, elements...)
     end
     return s
 end
+Base.union(a::CellTypeSet, b::CellTypeSet, rest...) = union(CellTypeSet(a.bitfield | b.bitfield), rest...)
 
 function Base.iterate(s::CellTypeSet)
     for i in UInt8(0):UInt8(N_CELL_TYPES)
@@ -213,15 +214,25 @@ function Base.print(io::IO, l::CellLine)
     print(io, "<", p_start, " to ", p_end, ">")
 end
 
-"Walks through every cell in a small contiguous line"
-function for_each_cell_in_line(toDo, line::CellLine{N})::Nothing where {N}
+"
+Walks through every cell in a small contiguous line.
+Optionally, you can break the loop early by making your lambda return `true`
+  and then this returns whether that happened.
+"
+function for_each_cell_in_line(toDo, line::CellLine{N},
+                               ::Val{Breakable}
+                              )::(Breakable ? Bool : Nothing) where {N, Breakable}
     for iz in zero(Int32):(line.length - one(Int32))
         cell = line.start_cell
         @set! cell[line.movement.axis] += (iz * line.movement.dir)
-        toDo(iz + one(Int32), cell)
+        result = toDo(iz + one(Int32), cell)
+        if Breakable && convert(Bool, result)
+            return true
+        end
     end
-    return nothing
+    return Breakable ? false : nothing
 end
+@inline for_each_cell_in_line(toDo, line, breakable::Bool=false) = for_each_cell_in_line(toDo, line, Val(breakable))
 
 function cell_line_aabb(line::CellLine{N})::Box{N, Int32} where {N}
     start_pos = line.start_cell

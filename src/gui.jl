@@ -80,7 +80,7 @@ function GuiRunner(initial_algorithm_str::String,
 
         String[ ], "", 1, false,
 
-        false, 5.0f0, -1.0f0,
+        false, 150.0f0, -1.0f0,
 
         10, 1000, 10.0f0
     )
@@ -149,7 +149,7 @@ function update_gui_runner_texture_2D(runner::GuiRunner)
         set_tex_pixels(runner.state_texture, runner.state_grid_tex2D_slice)
     end
 
-    render_markov_2d(runner.state_grid_tex2D_slice, v3f(0.2, 0.2, 0.2),
+    render_markov_2d(runner.state_grid_tex2D_slice, v3f(1, 0, 1),
                      runner.render2D,
                      runner.algorithm.main_sequence, runner.algorithm_state)
 
@@ -242,11 +242,6 @@ function step_gui_runner_algo(runner::GuiRunner)
         )
     end
 
-    # Always stop Playing if the algorithm is finished.
-    if isnothing(runner.algorithm_state)
-        runner.is_playing = false
-    end
-
     return nothing
 end
 
@@ -308,94 +303,88 @@ function gui_main(runner::GuiRunner, delta_seconds::Float32)
 
         CImGui.Separator()
 
-        # Run buttons:
-        #   * Step
-        if CImGui.Button("Step")
-            step_gui_runner_algo(runner)
-            should_update_texture[] = true
+        # Execute Play logic.
+        if runner.is_playing && !gui_runner_is_finished(runner)
+            runner.time_till_next_tick -= delta_seconds
+            while runner.time_till_next_tick <= 0
+                step_gui_runner_algo(runner)
+                should_update_texture[] = true
+                runner.time_till_next_tick += 1.0f0 / runner.ticks_per_second
+            end
         end
-        CImGui.SameLine(0, 40)
-        #   * Jump
-        gui_with_item_width(20) do
-            @c CImGui.DragInt("##TicksPerJump", &runner.ticks_per_jump, 1.0, 1, 0, "%d")
-        end
-        CImGui.SameLine()
-        if CImGui.Button("Jump")
-            for i in 1:runner.ticks_per_jump
+
+        # Runner control panel, diagram below:
+        #=   C1    | C2|   C3  |     C4       |  C5|   C6
+            [Step]                [Reset]
+            [Jump]   N  Ticks     [Profile]     500  ticks
+            [Pause]  N  Ticks     [Run to End]  45   max seconds
+        =#
+        LCIG = CImGui.LibCImGui
+        CImGui.BeginTable("##RunButtons", 6, |(
+            LCIG.ImGuiTableFlags_NoSavedSettings,
+            LCIG.ImGuiTableFlags_RowBg,
+            LCIG.ImGuiTableFlags_BordersInnerH,
+            LCIG.ImGuiTableFlags_SizingFixedFit
+        ))
+        BUTTON_SIZE_RUN_PLAIN = v2f(80, 30)
+        BUTTON_SIZE_RUN_SPECIAL = v2f(94, 45)
+        BUTTON_VPAD_RUN_PLAIN = max(0.0, (BUTTON_SIZE_RUN_SPECIAL.y - BUTTON_SIZE_RUN_PLAIN.y) / 2)
+        UNITS_VPAD = 12
+        BUTTON_COLOR_RUN_SPECIAL = v3f(0.3, 0.1, 0.0)
+        BUTTON_COLUMN_FLAGS = |(
+            LCIG.ImGuiTableColumnFlags_NoResize,
+            LCIG.ImGuiTableColumnFlags_NoReorder,
+            LCIG.ImGuiTableColumnFlags_NoHide,
+            LCIG.ImGuiTableColumnFlags_NoSort
+        )
+        CImGui.TableSetupColumn("##PlainButtons", BUTTON_COLUMN_FLAGS, 84)
+        CImGui.TableSetupColumn("##PlainButtonParams", BUTTON_COLUMN_FLAGS, 50)
+        CImGui.TableSetupColumn("##PlainButtonUnits", BUTTON_COLUMN_FLAGS, 85)
+        CImGui.TableSetupColumn("##SpecialButtons", BUTTON_COLUMN_FLAGS, 98)
+        CImGui.TableSetupColumn("##SpecialButtonParams", BUTTON_COLUMN_FLAGS, 50)
+        CImGui.TableSetupColumn("##SpecialButtonUnits", BUTTON_COLUMN_FLAGS, 60)
+        # First row
+        CImGui.TableNextColumn()
+            CImGui.Dummy(0, BUTTON_VPAD_RUN_PLAIN)
+            CImGui.SetNextItemWidth(-1)
+            if CImGui.Button("Step", BUTTON_SIZE_RUN_PLAIN)
                 step_gui_runner_algo(runner)
                 should_update_texture[] = true
             end
-        end
-        CImGui.SameLine(0, 40)
-        #    * Play/Pause
-        if runner.is_playing
-            if gui_runner_is_finished(runner)
-                runner.is_playing = false
-            else
-                runner.time_till_next_tick -= delta_seconds
-                while runner.time_till_next_tick <= 0
-                    step_gui_runner_algo(runner)
+        CImGui.TableNextColumn()
+        CImGui.TableNextColumn()
+        CImGui.TableNextColumn()
+            CImGui.SetNextItemWidth(-1)
+            gui_with_style(CImGui.LibCImGui.ImGuiCol_Button, BUTTON_COLOR_RUN_SPECIAL) do
+                if CImGui.Button("Reset", BUTTON_SIZE_RUN_SPECIAL)
+                    reset_gui_runner_algo(runner, false, false, false)
                     should_update_texture[] = true
-                    runner.time_till_next_tick += 1.0f0 / runner.ticks_per_second
                 end
             end
-        end
-        gui_with_item_width(30) do
-            @c CImGui.DragFloat("##TicksPerSecond", &runner.ticks_per_second, 0.1, 0.00001, 0, "%.1f", 1.0)
-        end
-        CImGui.SameLine()
-        new_is_playing = Ref(runner.is_playing)
-        gui_with_item_width(60) do
-            CImGui.Selectable(new_is_playing[] ? "Pause" : "Play",
-                              new_is_playing)
-        end
-        if new_is_playing[] && !runner.is_playing
-            runner.time_till_next_tick = 1.0f0 / runner.ticks_per_second
-        end
-        runner.is_playing = new_is_playing[]
-
-        CImGui.Dummy(0, 20)
-
-        # Special control buttons:
-        gui_with_style(CImGui.LibCImGui.ImGuiCol_Button, v3f(0.5, 0.3, 0.35)) do
-            gui_with_item_width(30) do
-                @c CImGui.DragFloat(
-                    "##MaxSecondsRunningToEnd",
-                    &runner.max_seconds_for_run_to_end,
-                    0.1,
-                    0.0, 0.0,
-                    "%.1f", 1.0
-                )
-            end
-            CImGui.SameLine()
-            gui_tooltip("Max seconds, before canceling the run-to-end")
-            if CImGui.Button("Run to End")
-                start_t = time()
-                while !gui_runner_is_finished(runner)
+        CImGui.TableNextColumn()
+        CImGui.TableNextColumn()
+        # Second row:
+        CImGui.TableNextColumn()
+            CImGui.Dummy(0, BUTTON_VPAD_RUN_PLAIN)
+            CImGui.SetNextItemWidth(-1)
+            if CImGui.Button("Jump", BUTTON_SIZE_RUN_PLAIN)
+                for i in 1:runner.ticks_per_jump
                     step_gui_runner_algo(runner)
                     should_update_texture[] = true
-
-                    if (time() - start_t) > runner.max_seconds_for_run_to_end
-                        runner.algorithm_error_msg = string(
-                            "ENDLESS RUN DETECTED: took longer than ",
-                            runner.max_seconds_for_run_to_end, " seconds to run to the end!",
-                            "\n\nYou may increase this cutoff time if you like."
-                        )
-                        break
-                    end
                 end
             end
-            CImGui.SameLine(0, 40)
-            if CImGui.Button("Reset")
-                reset_gui_runner_algo(runner, false, false, false)
-                should_update_texture[] = true
-            end
-            CImGui.SameLine(0, 20)
-            gui_with_item_width(20) do
-                @c CImGui.DragInt("##TicksForProfile", &runner.ticks_for_profile, 1.0, 1, 0, "%d")
-            end
-            CImGui.SameLine()
-            if CImGui.Button("Profile")
+        CImGui.TableNextColumn()
+            CImGui.Dummy(0, UNITS_VPAD)
+            CImGui.SetNextItemWidth(-1)
+            @c CImGui.DragInt("##TicksPerJump", &runner.ticks_per_jump, 1.0, 1, 0, "%d")
+        CImGui.TableNextColumn()
+            CImGui.Dummy(0, UNITS_VPAD)
+            CImGui.Text("Ticks")
+        CImGui.TableNextColumn()
+            CImGui.SetNextItemWidth(-1)
+            if gui_with_style(() -> CImGui.Button("Profile", BUTTON_SIZE_RUN_SPECIAL),
+                              CImGui.LibCImGui.ImGuiCol_Button, BUTTON_COLOR_RUN_SPECIAL)
+            #begin
                 Profile.start_timer()
                 for i in 1:runner.ticks_for_profile
                     step_gui_runner_algo(runner)
@@ -410,40 +399,114 @@ function gui_main(runner::GuiRunner, delta_seconds::Float32)
                     ctx = IOContext(io, :displaysize=>(5000, 999999))
 
                     println(ctx, "========================================\n==    Flat")
-                    Profile.print(ctx, format=:flat, mincount=100)
+                    Profile.print(ctx, format=:flat, mincount=100, sortedby=:count)
 
                     println(ctx, "\n\n\n")
 
                     println(ctx, "========================================\n==    Tree")
                     Profile.print(ctx, format=:tree, noisefloor=2.0)
                 end
+
+                #TODO: modal display of profiler results?
                 if Sys.iswindows()
                     run(`cmd /C $(abspath(prof_text_path))`)
                 else
                     run(`$(abspath(prof_text_path))`)
                 end
             end
-            CImGui.SameLine(0, 10)
-            CImGui.Text("#TODO: profiled modal view")
-        end
+        CImGui.TableNextColumn()
+            CImGui.Dummy(0, UNITS_VPAD)
+            CImGui.SetNextItemWidth(-1)
+            @c CImGui.DragInt("##TicksForProfile", &runner.ticks_for_profile, 1.0, 1, 0, "%d")
+        CImGui.TableNextColumn()
+            CImGui.Dummy(0, UNITS_VPAD)
+            CImGui.Text("ticks")
+        # Third row:
+        CImGui.TableNextColumn()
+            CImGui.Dummy(0, BUTTON_VPAD_RUN_PLAIN)
+            CImGui.SetNextItemWidth(-1)
+            new_is_playing = Ref(runner.is_playing)
+            gui_with_style(LCIG.ImGuiCol_Button, new_is_playing[] ? v3f(0.3, 0.8, 0.5) : v3f(0.8, 0.2, 0.05)) do
+                if CImGui.Button(new_is_playing[] ? "Pause" : "Play", BUTTON_SIZE_RUN_PLAIN)
+                    new_is_playing[] = !new_is_playing[]
+                end
+            end
+            if new_is_playing[] && !runner.is_playing
+                runner.time_till_next_tick = 1.0f0 / runner.ticks_per_second
+            end
+            runner.is_playing = new_is_playing[]
+        CImGui.TableNextColumn()
+            CImGui.Dummy(0, UNITS_VPAD)
+            CImGui.SetNextItemWidth(-1)
+            @c CImGui.DragFloat("##TicksPerSecond", &runner.ticks_per_second,
+                                0.1, 0.00001, 0, "%.0f", 1.0)
+        CImGui.TableNextColumn()
+            CImGui.Dummy(0, UNITS_VPAD)
+            CImGui.Text("ticks/s")
+        CImGui.TableNextColumn()
+            CImGui.SetNextItemWidth(-1)
+            if gui_with_style(() -> CImGui.Button("Run to End", BUTTON_SIZE_RUN_SPECIAL),
+                              LCIG.ImGuiCol_Button, BUTTON_COLOR_RUN_SPECIAL)
+            #begin
+                start_t = time()
+                while !gui_runner_is_finished(runner)
+                    step_gui_runner_algo(runner)
+                    should_update_texture[] = true
+                    if (time() - start_t) > runner.max_seconds_for_run_to_end
+                        runner.algorithm_error_msg = string(
+                            "ENDLESS RUN DETECTED: took longer than ",
+                            runner.max_seconds_for_run_to_end,
+                            " seconds to complete the grid!"
+                        )
+                        break
+                    end
+                end
+            end
+        CImGui.TableNextColumn()
+            CImGui.Dummy(0, UNITS_VPAD)
+            CImGui.SetNextItemWidth(-1)
+            @c CImGui.DragFloat(
+                "##MaxSecondsRunningToEnd",
+                &runner.max_seconds_for_run_to_end,
+                0.1,
+                0.0, 0.0,
+                "%.1f", 1.0
+            )
+        CImGui.TableNextColumn()
+            CImGui.Dummy(0, UNITS_VPAD)
+            CImGui.Text("s timeout")
+        # All done!
+        CImGui.EndTable()
+        #TODO: B+ helpers for tables
 
-        CImGui.Dummy(0, 20)
+        CImGui.Separator()
 
         # Seed data:
-        CImGui.Text(runner.current_seed_display)
-        CImGui.Dummy(20, 0); CImGui.SameLine()
-        gui_with_item_width(100) do
-            gui_text!(runner.next_seed)
+        new_seed = tryparse(UInt64, string(runner.next_seed))
+        new_seed_is_int = exists(new_seed)
+        if !new_seed_is_int
+            new_seed = hash(string(runner.next_seed))
         end
-        CImGui.SameLine(0, 10)
-        if CImGui.Button("Restart##WithNewSeed")
+        gui_within_group() do
+            CImGui.Text(runner.current_seed_display)
+            CImGui.Dummy(10, 0); CImGui.SameLine()
+            gui_with_item_width(150) do
+                gui_text!(runner.next_seed)
+            end
+            CImGui.SameLine(0, 5)
+            CImGui.Text(new_seed_is_int ? "(is number)" : "(is string)")
+        end
+        seed_has_changed::Bool = (new_seed != runner.current_seed)
+        CImGui.SameLine(0, 40)
+        if gui_with_style(() -> CImGui.Button("Reset with new seed", v2f(150, 32)) && seed_has_changed,
+                          LCIG.ImGuiCol_Button, v3f(0.2, 0.1, 0.1),
+                          unchanged = seed_has_changed)
+        #begin
             reset_gui_runner_algo(runner, true, false, false)
             should_update_texture[] = true
         end
-        CImGui.SameLine(0, 20)
-        CImGui.Text(isnothing(tryparse(UInt64, string(runner.next_seed))) ?
-                      "as String" :
-                      "as number")
+
+        CImGui.Separator()
 
         # Resolution data:
         fixed_dims = markov_fixed_dimension(runner.algorithm)
@@ -456,13 +519,13 @@ function gui_main(runner::GuiRunner, delta_seconds::Float32)
         end
         gui_with_item_width(60) do
             if exists(fixed_dims)
-                CImGui.LabelText("Dimensions: ", string(dims))
+                CImGui.LabelText("Dimension", string(dims))
             else
-                @c CImGui.InputInt("Dimensions: ", &dims)
+                @c CImGui.InputInt("Dimension", &dims)
                 runner.next_dimensionality = clamp(dims, 2, 3)
                 dims = runner.next_dimensionality
             end
-            CImGui.SameLine(0, 20)
+            CImGui.SameLine(0, 30)
             # Update the resolution to match the dimensions.
             while length(runner.next_resolution) < dims
                 push!(runner.next_resolution, 1)
@@ -471,23 +534,24 @@ function gui_main(runner::GuiRunner, delta_seconds::Float32)
                 deleteat!(runner.next_resolution, length(runner.next_resolution))
             end
             if exists(fixed_resolution)
-                CImGui.LabelText("Resolution: ", string(fixed_resolution))
+                CImGui.LabelText("Resolution", string(fixed_resolution))
             elseif dims == 2
-                CImGui.InputInt2("Resolution: ", Ref(resolution, 1))
+                CImGui.InputInt2("Resolution", Ref(resolution, 1))
             elseif dims == 3
-                CImGui.InputInt3("Resolution: ", Ref(resolution, 1))
+                CImGui.InputInt3("Resolution", Ref(resolution, 1))
             else
                 CImGui.Text("ERROR: Unhandled: $dims/$resoution")
             end
         end
-        CImGui.SameLine(0, 20)
         resolution_is_different::Bool = (dims != ndims(runner.state_grid)) ||
                                         any(t->t[1]!=t[2], zip(resolution, size(runner.state_grid)))
+        CImGui.SameLine(0, 10)
         gui_with_style(CImGui.LibCImGui.ImGuiCol_Button, v3f(0.2, 0.1, 0.1), unchanged=resolution_is_different) do
          gui_with_style(CImGui.LibCImGui.ImGuiCol_ButtonHovered, v3f(0.2, 0.1, 0.1), unchanged=resolution_is_different) do
           gui_with_style(CImGui.LibCImGui.ImGuiCol_ButtonActive, v3f(0.2, 0.1, 0.1), unchanged=resolution_is_different) do
-            if CImGui.Button("Reset with new resolution", v2f(200, 45)) && resolution_is_different
+            if CImGui.Button("Reset with new size", v2f(150, 25)) && resolution_is_different
                 reset_gui_runner_algo(runner, false, false, true)
+                should_update_texture[] = true
             end
         end end end
 

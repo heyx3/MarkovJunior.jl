@@ -88,7 +88,7 @@ Generates a markov algorithm using our DSL.
         @rule "wbb" => "wGw"
         @sequential
         @infer begin
-            @path "w" => 'b' => "N" recompute
+            @path "w" => 'b' => "N"  recompute  penalty=1.2
             3.5 # Temperature, optional (defaults to 0)
         end
     end
@@ -303,6 +303,7 @@ function parse_markovjunior_inference(inputs::BlockParseInputs,
                 path_invert = nothing
                 path_temperature = nothing
                 path_recomputes = nothing
+                path_penalty = nothing
                 for path_arg in path_args
                     if path_arg == :recompute
                         if exists(path_recomputes)
@@ -321,6 +322,16 @@ function parse_markovjunior_inference(inputs::BlockParseInputs,
                             raise_error_at(location, "Temperature value was given more than once")
                         else
                             path_temperature = convert(Float32, path_arg)
+                        end
+                    elseif Base.isexpr(path_arg, :(=)) && path_arg.args[1] == :penalty
+                        if exists(path_penalty)
+                            raise_error_at(location, "Penalty was given more than once")
+                        else
+                            try
+                                path_penalty = convert(Float32, path_arg.args[2])
+                            catch
+                                raise_error_at(location, "Invalid penalty number for @path: ", path_arg.args[2])
+                            end
                         end
                     elseif Base.isexpr(path_arg, :call) && (path_arg.args[1] == :(=>)) &&
                            Base.isexpr(path_arg.args[3], :call) && (path_arg.args[3].args[1] == :(=>))
@@ -346,7 +357,8 @@ function parse_markovjunior_inference(inputs::BlockParseInputs,
                     path_src, path_dest, path_through,
                     invert = isnothing(path_invert) ? false : path_invert,
                     temperature = isnothing(path_temperature) ? 0.0f0 : path_temperature,
-                    recompute_each_time = isnothing(path_recomputes) ? true : path_recomputes
+                    recompute_each_time = isnothing(path_recomputes) ? false : path_recomputes,
+                    penalty = isnothing(path_penalty) ? 1.0f0 : path_penalty
                 ))
             else
                 raise_error_at(location, "Unknown command '", line.args[1], "'")

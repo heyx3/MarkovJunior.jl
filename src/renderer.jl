@@ -47,19 +47,22 @@ function render_markov_2d(grid::CellGrid{2}, null_color::v3f,
 
     if data.mode == Render2DMode.potentials
         if isnothing(inference) || !inference_exists(inference.source)
-            fill!(data.inference_potentials_buffer[], 0.0f0)
+            fill!(data.inference_potentials_buffer[], NaN32)
             data.inference_potentials_range = IntervalF(
                 min=0,
                 max=0.000001
             )
         else
             for p in one(Int32):convert(v2i, vsize(grid))
-                data.inference_potentials_buffer[][p] = infer_weight(inference, p)
+                data.inference_potentials_buffer[][p] = let w = visualize_weight(inference, p)
+                    (w < 0) ? NaN32 : w
+                end
             end
-            start = minimum(data.inference_potentials_buffer[])
+            eligible_values = (f for f in data.inference_potentials_buffer[] if !isnan(f))
+            start = minimum(eligible_values)
             data.inference_potentials_range = IntervalF(
                 min=start,
-                max=max(start + 0.0001f0, maximum(data.inference_potentials_buffer[]))
+                max=max(start + 0.0001f0, maximum(eligible_values))
             )
         end
     end
@@ -84,8 +87,12 @@ function render_markov_2d(grid::CellGrid{2}, null_color::v3f,
                     CELL_TYPES[cell + 1].color
                 end
             elseif Mode == Render2DMode.potentials
-                f = inv_lerp(min_inclusive(potential_range), max_inclusive(potential_range), potentials[pixel])
-                v3f(f, f, f)
+                if isnan(potentials[pixel])
+                    null_color
+                else
+                    f = inv_lerp(min_inclusive(potential_range), max_inclusive(potential_range), potentials[pixel])
+                    v3f(f, f, f)
+                end
             else
                 error("Unhandled: ", Mode)
             end

@@ -2,20 +2,23 @@
     @do_n 5 begin
         @rule b => G
     end
-    @do_all begin
-        @sequential
-        @rule Gbb => GBB
-        @rule Gb => GB
-    end
-    @do_all begin
-		@sequential
-		@rule BbB => BRB
-        @rule BBb => BBB
-    end
+	@block repeat begin
+		@do_n 1 begin
+			@rule Gbb => GYY
+		end
+		@do_all begin
+			@sequential
+			@rule YYR => BBR
+			@rule BBb => RRb
+			@rule YYb => BYY
+			@rule BYY => BBR
+		end
+	end
+
 	@do_all begin
 		@rule bb => YY
 		@infer begin
-			@path recompute 0 R => bB => G
+			@path 3 bB => bB => R
 		end
 	end
 end
