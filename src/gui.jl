@@ -11,13 +11,52 @@ const gVec4 = Bplus.GUI.gVec4
 
 const RENDER_2D_MODE_NAMES = collect(string.(Render2DMode.instances()))
 
+"User state that should persist between program runs; serializable to/from JSON"
+mutable struct GuiMemory
+    #TODO: Window size/fullscreen
+
+    next_dimensionality::Int
+    next_resolution::Vector{Int32}
+
+    current_scene_file_name::String
+    current_scene_src::String
+    current_seed_src::String
+
+    is_playing::Bool
+    ticks_per_second::Float32
+    ticks_per_jump::Int32
+    ticks_for_profile::Int32
+    max_seconds_for_run_to_end::Float32
+end
+GuiMemory() = GuiMemory(
+    2, [ 64, 64 ],
+    FALLBACK_SCENE, read(scenes_path(FALLBACK_SCENE), String),
+    "0x1234567890abcdef",
+    false, 150, 10, 1000, 10
+)
+StructTypes.StructType(::Type{GuiMemory}) = StructTypes.Mutable()
+
+# Equality and copying is important, to see if the memory needs updating on-disk.
+Base.:(==)(a::GuiMemory, b::GuiMemory) = all(
+    (getfield(a, f) == getfield(b, f))
+      for f in fieldnames(GuiMemory)
+)
+Base.copy(m::GuiMemory) = GuiMemory((
+    Iterators.map(getfield(m, f) for f in fieldnames(GuiMemory)) do f
+        if f isa Vector
+            copy(f)
+        else
+            f
+        end
+    end
+)...)
+
 
 "The state of the GUI for our MarkovJunior tool"
 mutable struct GuiRunner
     draw_monochrome::Bool
 
-    next_dimensionality::Int
-    next_resolution::Vector{Int32}
+    memory::GuiMemory
 
     state_grid::CellGrid
     state_grid_tex2D_slice::CellGrid{2}
@@ -38,56 +77,62 @@ mutable struct GuiRunner
     algorithm_error_msg::String
 
     available_scenes::Vector{String}
-    current_scene::String
     current_scene_idx::Int
     current_scene_has_changes::Bool
 
-    is_playing::Bool
-    ticks_per_second::Float32
     time_till_next_tick::Float32
-
-    ticks_per_jump::Int32
-    ticks_for_profile::Int32
-    max_seconds_for_run_to_end::Float32
 end
 
-function GuiRunner(initial_algorithm_str::String,
-                   algorithm_editor_font::Ptr{CImGui.LibCImGui.ImFont},
-                   seed="0x1234567890abcdef")
-    # Create a half-baked initial instance, then "restart" the algorithm.
-    fake_size = 64
+function GuiRunner(memory::GuiMemory,
+                   algorithm_editor_font::Ptr{CImGui.LibCImGui.ImFont})
+    initial_error_msg::String = ""
+
+    available_scenes = Vector{String}()
+    query_available_scenes!(available_scenes)
+    scene_idx = get_something(findfirst(s -> s == memory.current_scene_file_name, available_scenes), 0)
+
+    parsed_algo::ParsedMarkovAlgorithm = try
+        parse_markovjunior(memory.current_scene_src)
+    catch e
+        initial_error_msg = "Unable to compile initial scene (fallback used instead):\n$(sprint(showerror, e))"
+        parse_markovjunior(read(scenes_path(FALLBACK_SCENE), String))
+    end
+
     runner = GuiRunner(
         false,
 
-        2, [ fake_size, fake_size ],
-        fill(zero(UInt8), fake_size, fake_size),
-        fill(zero(UInt8), fake_size, fake_size),
-        Texture(SpecialFormats.rgb10_a2, v2u(1, 2)), # Size must not match fake_size
-                                                     #   or else it won't be properly reallocated
+        memory,
 
-        @markovjunior(begin end), nothing, PRNG(1),
+        fill(zero(UInt8), memory.next_resolution...),
+        fill(zero(UInt8), memory.next_resolution...),
+        Texture(SpecialFormats.rgb10_a2, 2), # 1D texture so the update logic immediately catches it
+
+        parsed_algo, nothing, PRNG(1),
+
         Render2DData(),
 
-        zero(UInt64), "[NULL]",
-        GuiText(string(seed)),
+        # Current seed will be parsed+stringified next; we just need the textbox to be set up.
+        zero(UInt64), "[UNINITIALIZED]",
+        GuiText(string(memory.current_seed_src)),
 
-        GuiText(initial_algorithm_str,
+        GuiText(memory.current_scene_src,
             is_multiline=true,
             imgui_flags=CImGui.LibCImGui.ImGuiInputTextFlags_AllowTabInput
         ),
         algorithm_editor_font,
-        "Uh-OH: UNINITIALIZED!!!!",
 
-        String[ ], "", 1, false,
+        initial_error_msg,
 
-        false, 150.0f0, -1.0f0,
+        available_scenes, scene_idx,
+        # 'current_scene_has_changes' will be computed next.
+        false,
 
-        10, 1000, 10.0f0
+        -1.0f0
     )
 
-    reset_gui_runner_algo(runner, true, true, true)
+    reset_gui_runner_algo(runner, true, false, true)
     update_gui_runner_texture_2D(runner)
-    update_gui_runner_scenes(runner)
+    update_gui_runner_scenes!(runner)
 
     return runner
 end
@@ -96,30 +141,36 @@ function Base.close(runner::GuiRunner)
     isassigned(runner.render2D.output) && close(runner.render2D.output[])
 end
 
-function update_gui_runner_scenes(runner::GuiRunner)
-    empty!(runner.available_scenes)
-    append!(runner.available_scenes,
-        (name for name in readdir(scenes_path())
-          if endswith(name, ".jl"))
-    )
-    next_scene_idx = findfirst(s -> s == runner.current_scene, runner.available_scenes)
+function query_available_scenes!(output::Vector{String}, empty_output_first::Bool=true)
+    empty_output_first && empty!(output)
+    append!(output, (
+        name for name in readdir(scenes_path())
+          if endswith(name, ".jl")
+    ))
+    return nothing
+end
+function update_gui_runner_scenes!(runner::GuiRunner)
+    query_available_scenes!(runner.available_scenes)
+    next_scene_idx = findfirst(s -> s == runner.memory.current_scene_file_name, runner.available_scenes)
 
     if isnothing(next_scene_idx)
-        # On initial construction, the "current scene" is left empty.
-        if isempty(runner.current_scene)
-            next_scene_idx = 1
-            runner.current_scene = runner.available_scenes[1]
-            runner.current_scene_has_changes = false
-        else
-            push!(runner.available_scenes, runner.current_scene)
-            sort!(runner.available_scenes)
-            next_scene_idx = findfirst(s -> s == runner.current_scene, runner.available_scenes)
+        push!(runner.available_scenes, runner.memory.current_scene_file_name)
+        sort!(runner.available_scenes)
+        next_scene_idx = findfirst(s -> s == runner.memory.current_scene_file_name, runner.available_scenes)
 
-            open(io -> write(io, string(runner.next_algorithm)),
-                joinpath(scenes_path(), runner.current_scene),
-                "w")
-            runner.current_scene_has_changes = false
-        end
+        open(io -> write(io, string(runner.next_algorithm)),
+             scenes_path(runner.memory.current_scene_file_name),
+             "w")
+        runner.current_scene_has_changes = false
+
+        runner.initial_error_msg = string(
+            "Scene '", runner.memory.current_scene_file_name, "' wasn't found, ",
+              "so it was recreated on-disk from this editor"
+        )
+    else
+        runner.current_scene_has_changes = (runner.memory.current_scene_src !=
+            read(scenes_path(runner.memory.current_scene_file_name), String)
+        )
     end
 
     runner.current_scene_idx = next_scene_idx
@@ -128,6 +179,7 @@ end
 
 function update_gui_runner_texture_2D(runner::GuiRunner)
     if (runner.state_texture.type != TexTypes.twoD) || (runner.state_texture.size.xy != vsize(runner.state_grid).xy)
+        close(runner.state_texture)
         runner.state_texture = Texture(
             SimpleFormat(
                 FormatTypes.uint,
@@ -158,52 +210,47 @@ end
 
 function reset_gui_runner_algo(runner::GuiRunner,
                                parse_new_seed::Bool, parse_new_algorithm::Bool, update_resolution::Bool)
-    # Re-parse the algorithm textbox, if requested.
+    # Re-parse the algorithm if requested.
     if parse_new_algorithm
         runner.algorithm_error_msg = ""
-        try
-            algorithm_ast = Meta.parse(string(runner.next_algorithm), filename=runner.current_scene[1:end-3])
-            if !Base.isexpr(algorithm_ast, :macrocall) || algorithm_ast.args[1] != Symbol("@markovjunior")
-                runner.algorithm_error_msg = string(
-                    "Invalid header: Expected `@markovjunior ... begin ... end`",
-                    "\n\nFalling back to previous successfully-parsed algorithm"
-                )
-            else
-                runner.algorithm = eval(algorithm_ast)
-            end
+
+        @markovjunior_assert(runner.memory.current_scene_src == string(runner.next_algorithm))
+        runner.algorithm = try
+            parse_markovjunior(runner.memory.current_scene_src)
         catch e
             runner.algorithm_error_msg = string(
-                "Failed to parse: ", sprint(io -> showerror(io, e)),
-                "\n\nFalling back to previous successfully-parsed algorithm"
+                "Failed to parse: ", sprint(showerror, e),
+                "\n\nFalling back to previous successful algorithm"
             )
+            runner.algorithm
         end
 
         # If the algorithm has a fixed dimensionality, trim 'next_resolution' to fit.
         n_dims = markov_fixed_dimension(runner.algorithm)
         if exists(n_dims)
-            while length(runner.next_resolution) < n_dims
-                push!(runner.next_resolution, one(Int32))
+            while length(runner.memory.next_resolution) < n_dims
+                push!(runner.memory.next_resolution, one(Int32))
             end
-            while length(runner.next_resolution) > n_dims
-                deleteat!(runner.next_resolution, convert(Int32, length(runner.next_resolution)))
+            while length(runner.memory.next_resolution) > n_dims
+                deleteat!(runner.memory.next_resolution, length(runner.memory.next_resolution))
             end
         end
     end
 
-    # Initialize the grid.
+    # Initialize the grid, updating resolution if requested.
     if update_resolution
         dimensions = let d = markov_fixed_dimension(runner.algorithm)
             if exists(d)
                 d
             else
-                runner.next_dimensionality
+                runner.memory.next_dimensionality
             end
         end
         resolution = let r = markov_fixed_resolution(runner.algorithm)
             if exists(r)
                 r
             else
-                Tuple(runner.next_resolution)
+                Tuple(runner.memory.next_resolution)
             end
         end
         runner.state_grid = fill(runner.algorithm.initial_fill, resolution)
@@ -211,9 +258,11 @@ function reset_gui_runner_algo(runner::GuiRunner,
         fill!(runner.state_grid, runner.algorithm.initial_fill)
     end
 
-    # Initialize the RNG.
+    # Initialize the RNG, updating seed if requested.
     if parse_new_seed
-        as_int = tryparse(UInt64, string(runner.next_seed))
+        @markovjunior_assert(runner.memory.current_seed_src == string(runner.next_seed))
+
+        as_int = tryparse(UInt64, runner.memory.current_seed_src)
         runner.current_seed = if exists(as_int)
             as_int
         else
@@ -304,12 +353,12 @@ function gui_main(runner::GuiRunner, delta_seconds::Float32)
         CImGui.Separator()
 
         # Execute Play logic.
-        if runner.is_playing && !gui_runner_is_finished(runner)
+        if runner.memory.is_playing && !gui_runner_is_finished(runner)
             runner.time_till_next_tick -= delta_seconds
             while runner.time_till_next_tick <= 0
                 step_gui_runner_algo(runner)
                 should_update_texture[] = true
-                runner.time_till_next_tick += 1.0f0 / runner.ticks_per_second
+                runner.time_till_next_tick += 1.0f0 / runner.memory.ticks_per_second
             end
         end
 
@@ -368,7 +417,7 @@ function gui_main(runner::GuiRunner, delta_seconds::Float32)
             CImGui.Dummy(0, BUTTON_VPAD_RUN_PLAIN)
             CImGui.SetNextItemWidth(-1)
             if CImGui.Button("Jump", BUTTON_SIZE_RUN_PLAIN)
-                for i in 1:runner.ticks_per_jump
+                for i in 1:runner.memory.ticks_per_jump
                     step_gui_runner_algo(runner)
                     should_update_texture[] = true
                 end
@@ -376,7 +425,7 @@ function gui_main(runner::GuiRunner, delta_seconds::Float32)
         CImGui.TableNextColumn()
             CImGui.Dummy(0, UNITS_VPAD)
             CImGui.SetNextItemWidth(-1)
-            @c CImGui.DragInt("##TicksPerJump", &runner.ticks_per_jump, 1.0, 1, 0, "%d")
+            @c CImGui.DragInt("##TicksPerJump", &runner.memory.ticks_per_jump, 1.0, 1, 999999999, "%d")
         CImGui.TableNextColumn()
             CImGui.Dummy(0, UNITS_VPAD)
             CImGui.Text("Ticks")
@@ -386,7 +435,7 @@ function gui_main(runner::GuiRunner, delta_seconds::Float32)
                               CImGui.LibCImGui.ImGuiCol_Button, BUTTON_COLOR_RUN_SPECIAL)
             #begin
                 Profile.start_timer()
-                for i in 1:runner.ticks_for_profile
+                for i in 1:runner.memory.ticks_for_profile
                     step_gui_runner_algo(runner)
                     if gui_runner_is_finished(runner)
                         break
@@ -394,7 +443,7 @@ function gui_main(runner::GuiRunner, delta_seconds::Float32)
                 end
                 Profile.stop_timer()
 
-                prof_text_path = joinpath(@__DIR__, "..", "ProfileResult.txt")
+                prof_text_path = locals_path("ProfileResult.txt")
                 open(prof_text_path, "w") do io::IO
                     ctx = IOContext(io, :displaysize=>(5000, 999999))
 
@@ -417,7 +466,7 @@ function gui_main(runner::GuiRunner, delta_seconds::Float32)
         CImGui.TableNextColumn()
             CImGui.Dummy(0, UNITS_VPAD)
             CImGui.SetNextItemWidth(-1)
-            @c CImGui.DragInt("##TicksForProfile", &runner.ticks_for_profile, 1.0, 1, 0, "%d")
+            @c CImGui.DragInt("##TicksForProfile", &runner.memory.ticks_for_profile, 1.0, 1, 999999999, "%d")
         CImGui.TableNextColumn()
             CImGui.Dummy(0, UNITS_VPAD)
             CImGui.Text("ticks")
@@ -425,21 +474,23 @@ function gui_main(runner::GuiRunner, delta_seconds::Float32)
         CImGui.TableNextColumn()
             CImGui.Dummy(0, BUTTON_VPAD_RUN_PLAIN)
             CImGui.SetNextItemWidth(-1)
-            new_is_playing = Ref(runner.is_playing)
+            new_is_playing = Ref(runner.memory.is_playing)
             gui_with_style(LCIG.ImGuiCol_Button, new_is_playing[] ? v3f(0.3, 0.8, 0.5) : v3f(0.8, 0.2, 0.05)) do
                 if CImGui.Button(new_is_playing[] ? "Pause" : "Play", BUTTON_SIZE_RUN_PLAIN)
                     new_is_playing[] = !new_is_playing[]
                 end
             end
-            if new_is_playing[] && !runner.is_playing
-                runner.time_till_next_tick = 1.0f0 / runner.ticks_per_second
+            if new_is_playing[] && !runner.memory.is_playing
+                runner.time_till_next_tick = 1.0f0 / runner.memory.ticks_per_second
             end
-            runner.is_playing = new_is_playing[]
+            runner.memory.is_playing = new_is_playing[]
         CImGui.TableNextColumn()
             CImGui.Dummy(0, UNITS_VPAD)
             CImGui.SetNextItemWidth(-1)
-            @c CImGui.DragFloat("##TicksPerSecond", &runner.ticks_per_second,
-                                0.1, 0.00001, 0, "%.0f", 1.0)
+            @c CImGui.DragFloat("##TicksPerSecond", &runner.memory.ticks_per_second,
+                                0.1, 0.00001, 999999999.0, "%.0f", 1.0)
+            runner.time_till_next_tick = min(runner.time_till_next_tick,
+                                             1.0f0 / runner.memory.ticks_per_second)
         CImGui.TableNextColumn()
             CImGui.Dummy(0, UNITS_VPAD)
             CImGui.Text("ticks/s")
@@ -452,10 +503,10 @@ function gui_main(runner::GuiRunner, delta_seconds::Float32)
                 while !gui_runner_is_finished(runner)
                     step_gui_runner_algo(runner)
                     should_update_texture[] = true
-                    if (time() - start_t) > runner.max_seconds_for_run_to_end
+                    if (time() - start_t) > runner.memory.max_seconds_for_run_to_end
                         runner.algorithm_error_msg = string(
                             "ENDLESS RUN DETECTED: took longer than ",
-                            runner.max_seconds_for_run_to_end,
+                            runner.memory.max_seconds_for_run_to_end,
                             " seconds to complete the grid!"
                         )
                         break
@@ -467,9 +518,9 @@ function gui_main(runner::GuiRunner, delta_seconds::Float32)
             CImGui.SetNextItemWidth(-1)
             @c CImGui.DragFloat(
                 "##MaxSecondsRunningToEnd",
-                &runner.max_seconds_for_run_to_end,
+                &runner.memory.max_seconds_for_run_to_end,
                 0.1,
-                0.0, 0.0,
+                0.1, 999999.9,
                 "%.1f", 1.0
             )
         CImGui.TableNextColumn()
@@ -492,6 +543,7 @@ function gui_main(runner::GuiRunner, delta_seconds::Float32)
             CImGui.Dummy(10, 0); CImGui.SameLine()
             gui_with_item_width(150) do
                 gui_text!(runner.next_seed)
+                runner.memory.current_seed_src = string(runner.next_seed)
             end
             CImGui.SameLine(0, 5)
             CImGui.Text(new_seed_is_int ? "(is number)" : "(is string)")
@@ -511,27 +563,27 @@ function gui_main(runner::GuiRunner, delta_seconds::Float32)
         # Resolution data:
         fixed_dims = markov_fixed_dimension(runner.algorithm)
         fixed_resolution::Optional{Tuple} = markov_fixed_resolution(runner.algorithm)
-        dims = convert(Int32, get_something(fixed_dims, runner.next_dimensionality))
+        dims = convert(Int32, get_something(fixed_dims, runner.memory.next_dimensionality))
         resolution::Vector = if exists(fixed_resolution)
             collect(fixed_resolution)
         else
-            runner.next_resolution
+            runner.memory.next_resolution
         end
         gui_with_item_width(60) do
             if exists(fixed_dims)
                 CImGui.LabelText("Dimension", string(dims))
             else
                 @c CImGui.InputInt("Dimension", &dims)
-                runner.next_dimensionality = clamp(dims, 2, 3)
-                dims = runner.next_dimensionality
+                runner.memory.next_dimensionality = clamp(dims, 2, 3)
+                dims = runner.memory.next_dimensionality
             end
             CImGui.SameLine(0, 30)
             # Update the resolution to match the dimensions.
-            while length(runner.next_resolution) < dims
-                push!(runner.next_resolution, 1)
+            while length(runner.memory.next_resolution) < dims
+                push!(runner.memory.next_resolution, 1)
             end
-            while length(runner.next_resolution) > dims
-                deleteat!(runner.next_resolution, length(runner.next_resolution))
+            while length(runner.memory.next_resolution) > dims
+                deleteat!(runner.memory.next_resolution, length(runner.memory.next_resolution))
             end
             if exists(fixed_resolution)
                 CImGui.LabelText("Resolution", string(fixed_resolution))
@@ -598,7 +650,7 @@ function gui_main(runner::GuiRunner, delta_seconds::Float32)
         BUTTON_SIZE = v2f(100, 35)
         CImGui.Separator(); CImGui.SameLine(30); CImGui.Text("Files")
         if CImGui.Button("Refresh", BUTTON_SIZE)
-            update_gui_runner_scenes(runner)
+            update_gui_runner_scenes!(runner)
         end
         CImGui.SameLine(0, 20)
         gui_with_style(CImGui.LibCImGui.ImGuiCol_Button, v3f(0.2, 0.1, 0.1), unchanged=runner.current_scene_has_changes) do
@@ -606,14 +658,15 @@ function gui_main(runner::GuiRunner, delta_seconds::Float32)
           gui_with_style(CImGui.LibCImGui.ImGuiCol_ButtonActive, v3f(0.2, 0.1, 0.1), unchanged=runner.current_scene_has_changes) do
             if CImGui.Button("Reset changes", BUTTON_SIZE) && runner.current_scene_has_changes
                 update!(runner.next_algorithm,
-                        read(joinpath(scenes_path(), runner.current_scene), String))
+                        read(scenes_path(runner.memory.current_scene_file_name), String))
+                runner.memory.current_scene_src = string(runner.next_algorithm)
                 runner.current_scene_has_changes = false
             end
             CImGui.SameLine(0, 20)
             if CImGui.Button("Save changes", BUTTON_SIZE) && runner.current_scene_has_changes
                 open(io -> print(io, string(runner.next_algorithm)),
-                      joinpath(scenes_path(), runner.current_scene),
-                      "w")
+                     scenes_path(runner.memory.current_scene_file_name),
+                     "w")
                 runner.current_scene_has_changes = false
             end
         end end end
@@ -623,8 +676,8 @@ function gui_main(runner::GuiRunner, delta_seconds::Float32)
                           runner.available_scenes, length(runner.available_scenes))
         if (next_scene_idx_c+1 != runner.current_scene_idx) && !runner.current_scene_has_changes
             runner.current_scene_idx = next_scene_idx_c+1
-            runner.current_scene = runner.available_scenes[runner.current_scene_idx]
-            update!(runner.next_algorithm, read(joinpath(scenes_path(), runner.current_scene), String))
+            runner.memory.current_scene_file_name = runner.available_scenes[runner.current_scene_idx]
+            update!(runner.next_algorithm, read(scenes_path(runner.memory.current_scene_file_name), String))
         end
     end
 
@@ -641,6 +694,7 @@ function gui_main(runner::GuiRunner, delta_seconds::Float32)
         )
         gui_with_font(runner.next_algorithm_font) do
             runner.current_scene_has_changes |= gui_text!(runner.next_algorithm)
+            runner.memory.current_scene_src = string(runner.next_algorithm)
         end
 
         if CImGui.Button("Restart##WithNewAlgorithm")

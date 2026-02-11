@@ -23,8 +23,8 @@ docs/site/
 # environment.
 Manifest.toml
 
-# Dear ImGUI config
-imgui.ini
+# Program
+locals
 
 # VSCode stuff
 .vscode/

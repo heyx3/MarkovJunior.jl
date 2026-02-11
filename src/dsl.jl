@@ -205,6 +205,16 @@ function parse_markovjunior(_macro_args::Tuple)::ParsedMarkovAlgorithm
     @bp_check isempty(macro_args) "Unexpected arguments: $macro_args"
     return ParsedMarkovAlgorithm(initial_fill, Sequence_Ordered(main_sequence), final_dimension)
 end
+"Tries to evaluate a `@markovjunior` macro, throwing an error if that's not what was parsed"
+function parse_markovjunior(syntax::Union{String, Expr})::ParsedMarkovAlgorithm
+    if syntax isa String
+        return parse_markovjunior(Meta.parse(syntax))
+    elseif !Base.isexpr(syntax, :macrocall) || (syntax.args[1] != Symbol("@markovjunior"))
+        error("Expression wasn't a `@markovjunior` macro")
+    else
+        return parse_markovjunior(Tuple(syntax.args[3:end]))
+    end
+end
 
 export ParsedMarkovAlgorithm, @markovjunior, parse_markovjunior,
        markov_initial_fill, markov_main_sequence,

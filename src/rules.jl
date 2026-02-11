@@ -32,8 +32,8 @@ struct CellRule
                     elseif c == CELL_CHAR_INVALID
                         nothing
                     else
-                        @warn "Unsupported rule char '$c', expected one of $(collect(keys(CELL_CODE_BY_CHAR)))! Falling back to magenta ('M')"
-                        CELL_CODE_BY_CHAR['M']
+                        error("Unsupported rule char '$c', expected one of ",
+                              collect(keys(CELL_CODE_BY_CHAR)))
                     end
                 elseif i isa Integer
                     convert(UInt8, i)
