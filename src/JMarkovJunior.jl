@@ -64,13 +64,13 @@ include("sequences.jl")
 include("dsl.jl")
 
 "Scenes are julia files containing a single `@markovjunior` statement"
-scenes_path() = joinpath(pwd(), "scenes")
+scenes_path() = joinpath(@__DIR__, "..", "scenes")
 scenes_path(name) = joinpath(scenes_path(), name)
 "Assets are various internal files"
-assets_path() = joinpath(pwd(), "assets")
+assets_path() = joinpath(@__DIR__, "..", "assets")
 assets_path(name) = joinpath(assets_path(), name)
 "Locals are temp/user files, excluded from version control"
-locals_path() = joinpath(pwd(), "locals")
+locals_path() = joinpath(@__DIR__, "..", "locals")
 locals_path(name) = joinpath(locals_path(), name)
 
 # High-level:
