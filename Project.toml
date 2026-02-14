@@ -1,4 +1,4 @@
-name = "JMarkovJunior"
+name = "MarkovJunior"
 uuid = "1327bbcd-95f5-4c5d-be2a-0189b406575c"
 authors = ["William Mishra-Manning <manning.w27@gmail.com>"]
 version = "0.1.0"

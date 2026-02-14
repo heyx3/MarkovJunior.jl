@@ -1,4 +1,4 @@
-# Julia MarkovJunior
+# MarkovJunior.jl
 
 A Julia reimagining of [this awesome procedural generation algorithm](https://github.com/mxgmn/MarkovJunior/).
 
