@@ -183,17 +183,17 @@ struct GridDir
     # 1 - N
     axis::Int32
     # -1 or +1
-    dir::Int32
+    sign::Int32
 
-    GridDir(axis, dir) = if (axis < 1) || !in(dir, (-1, +1))
-        error("Axis must be >0 and dir must be -1 or +1! Got ", axis, " and ", dir)
+    GridDir(axis, sign) = if (axis < 1) || !in(sign, (-1, +1))
+        error("Axis must be >0 and sign must be -1 or +1! Got ", axis, " and ", sign)
     else
-        new(convert(Int32, axis), convert(Int32, dir))
+        new(convert(Int32, axis), convert(Int32, sign))
     end
 end
 
 "Gets the index of the given grid direction"
-grid_dir_index(d::GridDir)::Int32 = (d.axis * Int32(2)) + ((d.dir + 1) ÷ 2)
+grid_dir_index(d::GridDir)::Int32 = (d.axis * Int32(2)) + ((d.sign + 1) ÷ 2)
 "Gets the grid direction at the given index"
 grid_dir_index(_i) = let i = convert(Int32, _i)
     GridDir((i + 1) ÷ 2, (2 * ((i - 1) % 2)) - 1)
@@ -213,7 +213,7 @@ end
 function Base.print(io::IO, l::CellLine)
     p_start = l.start_cell
     p_end = p_start
-    @set! p_end[l.movement.axis] += l.movement.dir * (l.length - 1)
+    @set! p_end[l.movement.axis] += l.movement.sign * (l.length - 1)
     print(io, "<", p_start, " to ", p_end, ">")
 end
 
@@ -227,7 +227,7 @@ function for_each_cell_in_line(toDo, line::CellLine{N},
                               )::(Breakable ? Bool : Nothing) where {N, Breakable}
     for iz in zero(Int32):(line.length - one(Int32))
         cell = line.start_cell
-        @set! cell[line.movement.axis] += (iz * line.movement.dir)
+        @set! cell[line.movement.axis] += (iz * line.movement.sign)
         result = toDo(iz + one(Int32), cell)
         if Breakable && convert(Bool, result)
             return true

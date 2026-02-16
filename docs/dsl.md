@@ -22,7 +22,7 @@ Keep in mind for convenience, Julia macros (code statements with the `@` symbol)
 If using the former, there are a few expressions you must keep in parentheses
   which will be mentioned as they come up.
 
-> ***Important note**: Julia uses 1-based indices! Our syntax uses 1-based indices too.*
+> ***Important note**: Julia uses 1-based indices! Our syntax uses 1-based indices too; for example the first axis is 1.*
 
 ## Parameters
 
@@ -75,7 +75,7 @@ The official syntax for this operation is `@rewrite [threshold] rules [bias]`;
 We'll go into detail on everything, but here is a quick cheat sheet of **all** the features:
 
 ````julia
-@rewrite  (area/50) #= <-- a Threshold for how many times to run =#     begin
+@rewrite  (length/2 : area/50) #= <-- a Threshold range for how many times to run =#     begin
     # Rules go here.
     # If you only have one, you don't need to wrap it in this `begin end` block!
 
@@ -107,31 +107,32 @@ We'll go into detail on everything, but here is a quick cheat sheet of **all** t
     # Get ready: here's a wacky rule that uses all the features at once.
     R_[Bb]w => [2]_[bB]{wbR}  ~(0.4:0.6)  *4   |[X]
 
-    # One last thing: multidimensional rewrite rules with multidimensional symmetries!
-    # They can do everything the above rules can do, but I'm keeping it simple here.
+    # One last thing: multidimensional rewrite rules (with multidimensional symmetries)!
+    # They can do everything the above rules can do, but I'm keeping it simple in this example.
     [
         R G B
         w b g ;;;
-        # ^^ One Z-slice, 'RGB' is the first axis and 'Rw' is the second
-        # vv Another Z-slice, 'RS' is the third axis
+        # ^^ One Z-slice, 'RGB' is along the first axis and 'Rw' the second
+        # vv Another Z-slice, 'RS' is along the third axis
         S T U
         O w w ;;;;
         # Now start a new 3D slice along the fourth dimension!
+        # 'RR' is along the fourth axis.
         R R R
         R R R ;;;
         R R R
         R R R
-    ] => [ # Above was the source, below is the destination
+    ] => [ # Above was the source, below is the destination:
         R R R
-        R R R ;;;
+        R R R ;;; # New Z-slice
         G G G
-        G G G ;;;;
+        G G G ;;;; # New 3D slice
         B B B
         B B B ;;;
         b b b
         b b b
     ] \[ # Now the symmetry modifier: Allow the block to only flip along the Z axis and swap the X/Y axes.
-        (x, y)[ (+x, +y), (+y, +x) ],
+        (x, y)[ (+x, +y), (+y, +x) ]
         # Z is the only choice left for the block's Z,
         #   and not specifing anything means it can flip either way along that Z axis.
     ]
@@ -210,6 +211,8 @@ However you can provide a *threshold* as the first argument, to limit this.
 * If you want to make it relative to the average length of the grid along each axis,
   pass a simple multiplication or division statement (**in parentheses** if using the simpler macro syntax):
   `@rewrite (0.5*length) R=>G`. It's automatically rounded and clamped >=1.
+* If you want a randomized threshold value, pass a range between two of the above terms.
+  `@rewrite (area/)
 
 ### Symmetry
 

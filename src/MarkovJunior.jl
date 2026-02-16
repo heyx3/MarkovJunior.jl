@@ -1,16 +1,18 @@
 "A reimplementation of [https://github.com/mxgmn/MarkovJunior](mxgmn/MarkovJunior)"
 module MarkovJunior
 
-using Random, Setfield, Profile, Printf, DataStructures, MacroTools
+using Random, Setfield, Profile, Printf
 const System = Base.Sys
 
-using OrderedCollections, GLFW, CImGui
-using CSyntax # Simplifies CImGui calls
+using OrderedCollections, StaticArrays, MacroTools, DataStructures
 using StructTypes, JSON3
+using GLFW, CImGui, CSyntax
+
 using Bplus; @using_bplus
 
 # B+ and DataStructures both define `update! :(
 const update! = Bplus.update!
+
 
 "
 Retrieves the key from an ordered dictionary (or element from an ordered set),

@@ -1,17 +1,21 @@
-"Some kind of memory allocator, mainly for the grids"
+"
+Some kind of memory allocator, mainly used for the grids.
+Default behavior of its interface is to allocate things from the heap
+   and let the GC handle them on release.
+"
 abstract type AbstractMarkovAllocator end
-markov_allocator_acquire(allocator::AbstractMarkovAllocator,
-                         size::Tuple{Vararg{Integer}}, T::Type=UInt8
-                        )::AbstractArray{T, length(size)} where {T} = error("Unhanded: ", allocator)
-markov_allocator_release(allocator::AbstractMarkovAllocator,
-                         data::AbstractArray
-                        )::Nothing = error("Unhandled: ", allocator)
+markov_allocator_acquire_array(allocator::AbstractMarkovAllocator,
+                               size::Tuple{Vararg{Integer}}, T::Type=UInt8
+                              )::AbstractArray{T, length(size)} where {T} = Array{T, length(size)}(undef, size)
+markov_allocator_acquire_ordered_set(allocator::AbstractMarkovAllocator,
+                                     T::Type
+                                    )::OrderedSet{T} = OrderedSet{T}()
+markov_allocator_release_array(allocator::AbstractMarkovAllocator, data::AbstractArray) = nothing
+markov_allocator_release_ordered_set(allocator::AbstractMarkovAllocator, s::OrderedSet) = nothing
 Base.close(::AbstractMarkovAllocator) = nothing
 
 "An allocator for MarkovJunior that just goes through the heap"
 struct MarkovAllocatorHeap <: AbstractMarkovAllocator end
-markov_allocator_acquire(::MarkovAllocatorHeap, size::Tuple{Vararg{Integer}}, T::Type=UInt8) = Array{T, length(size)}(undef, size)
-markov_allocator_release(::MarkovAllocatorHeap, ::Array) = nothing
 
 #############
 
@@ -22,18 +26,38 @@ struct MarkovAlgorithm
     initial_fill::UInt8
     fixed_dimension::Optional{Int}
     sequence::Vector{AbstractMarkovOp}
+    pragmas::Vector{Pair{Symbol, Any}} # Nonstandard commands meant to be parsed by the user of this package
 end
 
-"Information about the algorithm state as an op is running"
+"Information about the algorithm state relevant to a Bias struct"
+struct MarkovBiasContext
+    allocator::AbstractMarkovAllocator
+end
+
+"
+Information about the algorithm state relevant to an Op.
+Inherits properties from `MarkovBiasContext`.
+"
 struct MarkovOpContext
     inherited_biases_type_stable::Tuple{Vararg{<:AbstractMarkovBias}}
-
-    MarkovOpContext(biases::Tuple = ()) = new(biases)
-    MarkovOpContext(algo_state) = new(  #NOTE: algo state can't be typed because it's defined below
-        markov_algo_flatten_biases(algo_state)
-    )
+    bias_context::MarkovBiasContext
+end
+MarkovOpContext(algo_state) = new(  #NOTE: algo state can't be typed because it's defined below
+    markov_algo_flatten_biases(algo_state),
+    algo_state.allocator
+)
+Base.propertynames(::MarkovOpContext) = propertynames(MarkovOpContext)
+Base.propertynames(::Type{MarkovOpContext}) = (
+    propertynames(MarkovBiasContext)...,
+    fieldnames(MarkovOpContext)...
+)
+@inline Base.getproperty(c::MarkovOpContext, n::Symbol) = if n in fieldnames(MarkovOpContext)
+    getfield(c, n)
+else
+    getproperty(getfield(c, :bias_context), n)
 end
 
+"Inherits properties from `MarkovOpContext`, though they aren't directly settable"
 mutable struct MarkovAlgoState{N}
     grid::Ref{CellGridConcrete{N}} # Wrapped in a Ref for implementation reasons
     n_iterations::Int
@@ -47,8 +71,17 @@ mutable struct MarkovAlgoState{N}
 
     rng::PRNG
 
-    allocator::AbstractMarkovAllocator
     buffer_iter_count::Ref{Optional{Int}}
+end
+Base.propertynames(c::MarkovAlgoState) = propertynames(typeof(c))
+Base.propertynames(T::Type{<:MarkovAlgoState}) = (
+    propertynames(MarkovOpContext)...,
+    fieldnames(T)...
+)
+@inline Base.getproperty(s::MarkovAlgoState, n::Symbol) = if n in fieldnames(typeof(s))
+    getfield(s, n)
+else
+    getproperty(getfield(s, :op_context), n)
 end
 
 
@@ -107,12 +140,48 @@ markov_op_iterate(args...) = error("Unhandled: ", typeof.(args))
 
 #############
 
-"Calculates the desirability of this action, at this moment, in this grid"
-function markov_bias_calculate(bias::AbstractMarkovBias, grid::CellGrid{N},
-                               cell_rule, at::CellLine{N}
-                              )::Float32 where {N}
+"Initialize the bias and return some state object for it (by default, `nothing`)"
+markov_bias_initialize(bias::AbstractMarkovBias,
+                       grid::CellGrid, rng::PRNG,
+                       context::MarkovBiasContext) = nothing
+"
+Updates this bias after the given area of the grid has changed.
+Returns the new state object for this bias.
+
+Default: does nothing, returns the same state.
+"
+markov_bias_update(bias::AbstractMarkovBias, bias_state,
+                   grid::CellGrid{N}, subset::BoxI{N},
+                   rng::PRNG
+                  ) where {N} = bias_state
+"
+Cleans up this bias after it's done being used.
+Default: does nothing.
+"
+markov_bias_cleanup(bias::AbstractMarkovBias, bias_state) = nothing
+
+"Adds type-stability to the bias's state object (by default, returns `Nothing`)"
+markov_bias_state_type(::Type{<:AbstractMarkovBias})::Type = Nothing
+
+"
+Calculates the desirability of this action, at this moment, in this grid.
+Returns `nothing` if the action must not happen.
+"
+function markov_bias_calculate(bias::AbstractMarkovBias, bias_state,
+                               grid::CellGrid{N}, at::CellLine{N},
+                               rng::PRNG
+                              )::Optional{Float32} where {N}
     error("Unhandled: ", typeof(bias))
 end
+
+
+struct MarkovBiasTemperature <: AbstractMarkovBias
+    amount::Float32
+end
+markov_bias_calculate(t::MarkovBiasTemperature, ::Nothing,
+                      ::CellGrid{N}, ::Any, ::CellLine{N},
+                      rng::PRNG) = rand(rng, Float32) * t.amount
+
 
 #############
 
@@ -193,14 +262,325 @@ markov_op_iterate(noop::MarkovOp_Noop, ::Missing, grid::CellGrid, rng::PRNG,  co
         nothing
 )
 
+#############
+#  Thresholds
+
+struct ThresholdByArea
+    scale::Float32
+end
+struct ThresholdByLength
+    scale::Float32
+end
+const ThresholdScalar = Union{Int, ThresholdByArea, ThresholdByLength}
+
+"A randomly chosen threshold between two (unordered) values"
+struct ThresholdRange
+    a::ThresholdScalar
+    b::ThresholdScalar
+end
+
+const Threshold = Union{ThresholdScalar, ThresholdRange}
+
+
+struct ThresholdInputs
+    area::Float32
+    length::Float32
+    rng::PRNG
+end
+
+get_threshold(th::Threshold, in::ThresholdInputs) = max(1, round(Int, get_raw_threshold(th, in)))
+
+get_raw_threshold(th::Int, in::ThresholdInputs) = convert(Float32, th)
+get_raw_threshold(th::ThresholdByArea, in::ThresholdInputs) = convert(Float32, in.area) * th.scale
+get_raw_threshold(th::ThresholdByLength, in::ThresholdInputs) = convert(Float32, in.length) * th.scale
+function get_raw_threshold(th::ThresholdRange, in::ThresholdInputs)
+    a::Float32 = get_raw_threshold(th.a, in)
+    b::Float32 = get_raw_threshold(th.b, in)
+    return lerp(a, b, rand(rng, Float32))
+end
+
+###############
+#  Rewrite rules
+
+const RewriteRuleCell_Set = CellTypeSet
+const RewriteRuleCell_List = UpTo{N_CELL_TYPES, UInt8}
+struct RewriteRuleCell_Wildcard end
+
+"The source entries for a rewrite rule can be a single value, ordered set, or a wildcard"
+const RewriteRuleCellSource = Union{UInt8, RewriteRuleCell_Set, RewriteRuleCell_Wildcard}
+"The destination entries for a rewrite rule can be a single value, unordered set, list (matching source set size), or a wildcard"
+const RewriteRuleCellDest = Union{UInt8, RewriteRuleCell_Set, RewriteRuleCell_List, RewriteRuleCell_Wildcard}
+
+const RewriteCell = Tuple{RewriteRuleCellSource, RewriteRuleCellDest}
+
+match_rewrite_source(rule::UInt8, value::UInt8) = (rule == value)
+match_rewrite_source(rule::RewriteRuleCell_Set, value::UInt8) = (value in rule)
+match_rewrite_source(::RewriteRuleCell_Wildcard, ::UInt8) = true
+
+pick_rewrite_value(dest::UInt8, src::RewriteRuleCellSource,               src_value::UInt8, rng::PRNG) = dest
+pick_rewrite_value(dest::RewriteRuleCell_Set, src::RewriteRuleCellSource, src_value::UInt8, rng::PRNG) = rand(rng, dest)
+
+
+struct RewriteRule{NCells, TCells<:NTuple{NCells, RewriteCell}}
+    cells::TCells
+    mask::Union{Nothing, Float32, NTuple{2, Float32}} # Disabled, constant, or random range
+    weight::Float32
+    allowed_symmetries::Vector{GridDir}
+end
+
+const MaskGrid{N} = Array{Float32, N}
+
+pick_mask(r::RewriteRule, rng::PRNG)::Float32 = pick_mask_impl(r.mask, rng)
+pick_mask_impl(::Nothing, ::PRNG) = 1.0f0
+pick_mask_impl(f::Float32, ::PRNG) = f
+pick_mask_impl((a, b)::NTuple{2, Float32}, rng::PRNG) = lerp(a, b, rand(rng, Float32))
+
+"
+Checks for a rule matching against the given grid when applied to the given cell.
+Assumes for performance that the rule does fit into the grid.
+"
+function rule_matches(r::RewriteRule{NCells, TCells}, grid::CellGrid{NDims},
+                      c_start::CellIdx{NDims}, dir::GridDir
+                     )::Bool where {NCells, TCells, NDims}
+    @markovjunior_assert begin
+        c_end = @set c_start[dir.axis] += (dir.sign * convert(Int32, NCells - 1))
+        c_end in one(VecI{NDims}):vsize(grid)
+    end "Rule is outside grid bounds! $c_start along $dir by $(NCells-1) vs $(vsize(grid))"
+
+    return all(ntuple(Val(NCells)) do i
+        c_next = @set c_start[dir.axis] += (dir.sign * convert(Int32, i-1))
+        return match_rewrite_source(r.cells[i], grid[c_next])
+    end...)
+end
+
+"
+Finds every match for a given rule that touches a given subset of the grid,
+  excluding rule placements that start at cells which fail the given mask.
+
+For each potential match your lambda receives `(start_cell, grid_dir, match_succeeded)`.
+Note this does not include cells which are outside the mask.
+
+If your lambda returns anything other than `nothing`,
+  the function immediately stops checking for matches and returns that value;
+  otherwise we return `nothing` at the end of the search.
+"
+function visit_rule_match_data(process_candidate::TLambda,
+                               r::RewriteRule{NCells, TCells}, grid::CellGrid{NDims},
+                               grid_mask::MaskGrid{NDims}, rule_chosen_mask::Float32,
+                               inner_subset::Bplus.Math.BoxI{NDims}
+                              )::Optional where {NCells, TCells, NDims, TLambda}
+    for dir in r.allowed_symmetries
+        first_pos = min_inclusive(inner_subset)
+        if dir.sign > 0
+            @set! first_pos[dir.axis] -= dir.sign * convert(Int32, NCells-1)
+        end
+
+        last_pos = max_inclusive(inner_subset)
+        if dir.sign < 0
+            @set! last_pos[dir.axis] -= dir.sign * convert(Int32, NCells-1)
+        end
+
+        for rule_start_pos::CellIdx{NDims} in first_pos:last_pos
+            if grid_mask[rule_start_pos] >= rule_chosen_mask
+                user_out = process_candidate(rule_start_pos, dir,
+                                             rule_matches(r, grid, rule_start_pos, dir))
+                exists(user_out) && return user_out
+            end
+        end
+    end
+    return nothing
+end
+
+"Efficiently tracks all possible applications of rewrite rules to a grid"
+struct RewriteCache{NDims, NRules, TGrid<:CellGrid{NDims}, TRules<:NTuple{NRules, RewriteRule}}
+    grid::TGrid
+    rules::TRules
+
+    mask_grid::MaskGrid{NDims}
+    rule_masks::NTuple{NRules, Float32}
+
+    applications::Vector{OrderedSet{Tuple{CellIdx{NDims}, GridDir}}}
+end
+
+function RewriteCache(grid::CellGrid{NDims}, mask_grid::MaskGrid{NDims},
+                      rules::NTuple{NRules, RewriteRules},
+                      mask_for_each_rule::NTuple{NRules, Float32},
+                      context::MarkovOpContext
+                     ) where {NDims, NRules}
+    whole_grid_range = Box(min=one(CellIdx{N}), max=vsize(grid))
+    applications = map(rules, mask_for_each_rule) do rule, mask
+        set = markov_allocator_acquire_ordered_set(context.allocator, Tuple{CellIdx{NDims}, GridDir})
+        visit_rule_match_data(grid, mask_grid, mask, whole_grid_range) do cell, dir, is_matching
+            is_matching && push!(set, (cell, dir))
+            return nothing
+        end
+        return set
+    end
+
+    return RewriteCache{NDims, NRules, typeof(grid), typeof(rules)}(
+        grid, rules,
+        mask_grid, rule_masks,
+        applications
+    )
+end
+
+"Updates a rewrite cache, given an area of the grid that potentially changed"
+function update_rewrite_cache!(cache::RewriteCache{NDims, NRules, TGrid, TRules},
+                               range_to_invalidate::BoxI{NDims}
+                              )::Nothing where {NDims, NRules, TGrid, TRules}
+    foreach(cache.rules, cache.rule_masks, cache.applications) do rule, mask, set
+        visit_rule_match_data(cache.grid, cache.mask_grid, mask,
+                              range_to_invalidate) do cell, dir, is_matching
+            used_to_match = ((cell, dir) in set)
+            if is_matching && !used_to_match
+                push!(set, (cell, dir))
+            elseif !is_matching && used_to_match
+                delete!(set, (cell, dir))
+            end
+        end
+    end
+end
+
+function close_rewrite_cache(cache::RewriteCache, context::MarkovOpContext)
+    foreach(app -> markov_allocator_release_ordered_set(context.allocator, app), cache.applications)
+    return nothing
+end
+
+###############
+#  Rewrite Op
+
+"A simple MarkovJunior rewrite op, affecting a 1D strip of pixels"
+struct MarkovOpRewrite1D{TRules <: Tuple{Vararg{RewriteRule}},
+                         TBias <: Tuple{Varag{AbstractMarkovBias}}}
+    rules::TRules
+    threshold::Threshold
+    biases::TBias
+end
+
+struct MarkovOpRewrite1D_State{NDims, NRules, TGrid, TRules<:NTuple{NRules, RewriteRule},
+                               NBiases, TFullBias<:NTuple{NBiases, AbstractMarkovBias},
+                                        TBiasStates<:NTuple{NBiases, Any}}
+    n_so_far::Int
+    rewrite_cache::RewriteCache{NDims, NRules, TGrid, TRules}
+    biases::TFullBias
+    bias_states::TBiasStates
+    weighted_options_buffer::Vector{Tuple{Int, Float32, CellIdx{NDims}, GridDir}}
+    weight_data_buffer::Ref{NTuple{3, Float32}} # Min, Max, Sum
+end
+
+function markov_op_initialize(r::MarkovOpRewrite1D{<:NTuple{NRules, RewriteRule}, TBias},
+                              grid::CellGrid{NDims}, rng::PRNG,
+                              context::MarkovOpContext
+                             ) where {NDims, NRules, TBias}
+    mask_grid = markov_allocator_acquire_array(context.allocator, size(grid), Float32)
+    cache = RewriteCache(grid, mask_grid, r.rules,
+                         map(ru -> pick_mask(ru, rng), r.rules))
+    biases = (
+        context.inherited_biases_type_stable...,
+        r.biases...
+    )
+    TBiasStates = map(markov_bias_state_type, typeof.(biases))
+    bias_states::TBiasStates = map(b -> markov_bias_initialize(b, grid, rng, context.bias_context), biases)
+
+    out_state = MarkovOpRewrite1D_State{NDims, NRules, typeof(grid), typeof(r.rules),
+                                        length(biases), typeof(biases), TBiasStates}(
+        0, cache,
+        biases, bias_states,
+        markov_allocator_acquire_array(context.allocator,
+                                       Tuple{Int, Float32, CellIdx{NDims}, GridDir}),
+        Ref{NTuple{3, Float32}}()
+    )
+    if all(isempty, cache.applications)
+        close_rewrite_op(out_state, context)
+        return nothing
+    else
+        return state
+    end
+end
+function markov_op_iterate(r::MarkovOpRewrite1D{TRules, TSelfBiases},
+                           state::MarkovOpRewrite1D_State{NDims, NRules, TGrid, TRules, NBiases, TFullBias, TBiasStates},
+                           grid::CellGrid{NDims}, rng::PRNG,
+                           context::MarkovOpContext,
+                           ticks_left::Ref{Optional{Int}}
+                          ) where {NDims, NRules, TGrid, TRules,
+                                   NBiases, TFullBias, TBiasStates, TSelfBiases}
+    while isnothing(ticks_left[]) || (ticks_left[] > 0)
+        # Get all the options and their weights.
+        empty!(state.weighted_options_buffer)
+        state.weight_data_buffer[] = (Inf32, -Inf32, 0.0f0)
+        foreach(r.rules, 1:NRules) do rule, rule_i
+            for (start_cell, dir) in state.rewrite_cache.applications[rule_i]
+                cell_line = CellLine(start_cell, dir, length(rule.cells))
+                bias = sum(markov_bias_calculate.(
+                    state.biases, state.bias_states,
+                    Ref(grid), Ref(cell_line), Ref(rng)
+                ), init=zero(Float32))
+                push!(state.weighted_options_buffer, (
+                    rule_i, bias,
+                    start_cell, dir
+                ))
+
+                state.weight_data_buffer[] = let d = weight_data_buffer[]
+                    (
+                        min(d[1], bias),
+                        max(d[2], bias),
+                        d[3] + bias
+                    )
+                end
+            end
+        end
+
+        # If no options are left, we're done.
+
+        # Normalize the bias weights by subtracting the min then dividing by their sum.
+        # Adding the min to N weights means increasing the sum by min*N.
+        weight_norm_offset = -state.weight_data_buffer[][1]
+        weight_norm_scale = 1.0f0 / (state.weight_data_buffer[][3] *
+                                     length(state.weighted_options_buffer))
+
+        # Pick an option using weighted randomness.
+        pick_t = rand(rng, Float32)
+        (pick_rule_i, pick_start_cell, pick_dir) = (() -> begin
+            picked_f = 0.0f0
+            for (rule_i, raw_bias, start_cell, dir) in state.weighted_options_buffer
+                bias = (raw_bias + weight_norm_offset) * weight_norm_scale
+                if bias <= picked_f
+                    return (rule_i, start_cell, dir)
+                else
+                    picked_f += bias
+                end
+            end
+            # If we get here, then probably we picked a value near 1.0
+            #    and floating-point error kept us from choosing the last element.
+            return let answer = state.weighted_options_buffer[end]
+                (answer[1], answer[3], answer[4])
+            end
+        end)()
+
+        #TODO: Apply the rule.
+
+        if exists(ticks_left[])
+            ticks_left[] -= 1
+        end
+    end
+end
+
+function close_rewrite_op(s::MarkovOpRewrite1D_State, context::MarkovOpContext)
+    markov_allocator_release_array(context.allocator, s.cache.mask_grid)
+    markov_allocator_release_array(context.allocator, s.weighted_options_buffer)
+    foreach((b, s) -> markov_bias_cleanup(b, s), s.biases, s.bias_states)
+    close_rewrite_cache(s.cache, context)
+end
 
 #############
 
 export AbstractMarkovAllocator, AbstractMarkovBias, AbstractMarkovOp,
        MarkovAlgorithm, MarkovAlgoState, MarkovOpContext,
-       markov_allocator_acquire, markov_allocator_release,
        markov_op_min_dimension, markov_algo_grid, markov_algo_n_iterations,
        markov_algo_start, markov_algo_step, markov_algo_is_finished
+
+#############
+
 
 
 #############
