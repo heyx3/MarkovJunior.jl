@@ -81,8 +81,8 @@ We'll go into detail on everything, but here is a quick cheat sheet of **all** t
 
     R => b        # Basic rule
     R => G   * 2  # Twice as likely as other rules
-    R => G  ~0.75 # Forbidden in exactly 25% of grid pixels, randomly chosen when the @rewrite starts.
-    R => G  ~(0.5:0.9) # Forbidden in anywhere from 10% to 50% of grid pixels, randomly chosen when the @rewrite starts.
+    R => G  %0.75 # Forbidden in exactly 25% of grid pixels, randomly chosen when the @rewrite starts.
+    R => G  %(0.5:0.9) # Forbidden in anywhere from 10% to 50% of grid pixels, randomly chosen when the @rewrite starts.
 
     # Underscore means "wildcard" on source pixels and "don't change" on destination pixels.
     R_B => __G
@@ -105,7 +105,7 @@ We'll go into detail on everything, but here is a quick cheat sheet of **all** t
     RGB => YMb  /2  |[+x]
 
     # Get ready: here's a wacky rule that uses all the features at once.
-    R_[Bb]w => [2]_[bB]{wbR}  ~(0.4:0.6)  *4   |[X]
+    R_[Bb]w => [2]_[bB]{wbR}  %(0.4:0.6)  *4   |[X]
 
     # One last thing: multidimensional rewrite rules (with multidimensional symmetries)!
     # They can do everything the above rules can do, but I'm keeping it simple in this example.
@@ -135,6 +135,9 @@ We'll go into detail on everything, but here is a quick cheat sheet of **all** t
         (x, y)[ (+x, +y), (+y, +x) ]
         # Z is the only choice left for the block's Z,
         #   and not specifing anything means it can flip either way along that Z axis.
+        # However we can add a second kind of constraint to tie it to the Y axis,
+        #   so that their handedness is preserved.
+        {y, z}
     ]
 end begin
     # Biases go here (see below).
@@ -151,11 +154,10 @@ The format of a single rewrite rule is `source => dest [modifiers]`,
 These lists represent a strip of pixels on the grid;
   the algorithm finds instances of `source` and potentially replaces them with `dest`.
 
-The different modifiers are explained in detail below, but here is a quick reference
-  (and this is the order they must appear in):
-  * `~X` randomly forbids a specific amount of the grid to ignore this rule,
-for example `~0.75` will randomly pick one fourth of the grid's pixels to not have the rule start there.
-You can also provide a range in parentheses, for example `~(0.5:0.9)
+The different modifiers are explained in detail below, but here is a quick reference in the same order they must appear in:
+  * `%X` randomly forbids a specific amount of the grid from matching the first pixel of this rule,
+for example `%0.75` will randomly pick one fourth of the grid's pixels to not have the rule start there.
+You can also provide a range in parentheses, for example `%(0.5:0.9)
   * `*X` and `/X` change the chance of this rule being applied, relative to the others.
 For example `*2` makes the rule twice as likely to be chosen.
   * `|[ ... ]` lists the axes and directions this strip can run along:
@@ -284,7 +286,7 @@ Weights are stated as a multiplication or division right after the rule,
 end
 ````
 
-Weight modifiers must be specified after the filter modifier (e.g. `~0.5 *3`) and before the [symmetry modifier](#symmetry)
+Weight modifiers must be specified after the mask (e.g. `%0.5 *3`) and before the [symmetry modifier](#symmetry) (e.g. `*3   | [ -x ]`).
 
 #### Field bias
 
@@ -368,10 +370,10 @@ Instead of a flat string of characters like `a[bc]d_e[fgh]`, use Julia's multidi
 
     #   Horizontal (X and Y) axes of the block must stay horizontal,
     #     but can rotate and flip amongst each other:
-    [ x, y ],
-    [ x, y ],
+    x[ x, y ],
+    y[ x, y ],
     #   Z axis of the block must stay pointed upwards:
-    [ +Z ]
+    z[ +Z ]
     #   Fourth axis of the block must stay along the fourth axis of the grid,
     #      but may flip backwards along it.
     # This can be specified with '[ W ]', however it's implicit given the other axes.
@@ -408,7 +410,7 @@ Here is an example of a full block symmetry modifier:
 
 ````julia
 # For a 2D block that only allows flipping of the X axis:
-| [   x[ x ], (y)[ +y ]   ]
+| [   x[ x ], y[ +y ]   ]
 # If we assume the grid is always 2D, it can be simplified:
 | [   y[ +y ]   ]   # (Y is fixed at +y, then X picks whatever's left)
 
@@ -483,7 +485,7 @@ You can limit the block axes `y`, `z`, and `w` to only rotate between three grid
 ## `@draw_box`
 
 To make a deterministic modification to a grid, you can use
-  `@draw_box 'C' S(A=N, B=M) [rule]`.
+  `@draw_box 'C' S(A=N, B=M) [rule] [mask]`.
 
 This operation will fill a single color in every pixel of a box described by the given space.
 A rule can optionally filter which color pixels are affected.
@@ -510,6 +512,7 @@ You can still provide fractional values, in which case coordinates will be round
 * `[rule]` is an optional condition for which pixels are affected, using `+` to whitelist and `-` to blacklist.
 For example `-RGB` means to affect every pixel in the box except Red Green and Blue;
 `+RGB` means to affect *no* pixels in the box except Red Green and Blue.
+* `[mask]` is an optional mask statement which randomly forbids some of the pixels in the same way as for [rewrite rules](#), for example `%0.75` forbids 25% of all pixels.
 
 ## `@sequence`
 
