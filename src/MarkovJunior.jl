@@ -58,18 +58,30 @@ const FALLBACK_SCENE = "MazeRandomWalk.jl"
 "Converts various pieces of MarkovJunior algorithm definitions into their DSL representation"
 function dsl_string end
 
-# Basics:
+# Core library:
 include("cells.jl")
-
+include("algo.jl")
+include("dsl.jl")
+include("interface.jl")
+include("op_rewrite.jl")
+include("bias_temperatue.jl")
 include("new_runner.jl")
+export AbstractMarkovAllocator, AbstractMarkovBias, AbstractMarkovOp,
+       MarkovAlgorithm, MarkovAlgoState, MarkovOpContext,
+       markov_op_min_dimension, markov_algo_grid, markov_algo_n_iterations,
+       markov_algo_start, markov_algo_step, markov_algo_is_finished
+
+
+# Tooling:
+
+
 
 if false
 
 include("rules.jl")
 include("inference.jl")
 include("sequences.jl")
-include("dsl.jl")
-
+    
 "Scenes are julia files containing a single `@markovjunior` statement"
 scenes_path() = joinpath(@__DIR__, "..", "scenes")
 scenes_path(name) = joinpath(scenes_path(), name)
