@@ -20,3 +20,17 @@ function weighted_random_array_element(weights_iter, total_sum_weight, uniform_r
     #    and floating-point error kept us from choosing the last element.
     return max_i
 end
+
+
+"
+A purely-cosmetic type annotation for readability; actually turns into `Any`.
+Example usage:
+
+````
+columns::@IterOf{AbstractVector{Int}} = (@view m[:, i] for i in 2:6)
+````
+"
+macro IterOf(expr_brace)
+    @bp_check(Base.isexpr(expr_brace, :braces))
+    return Any
+end

@@ -4,28 +4,37 @@
 const RewriteRuleCell_Set = CellTypeSet
 const RewriteRuleCell_List = UpTo{N_CELL_TYPES, UInt8}
 struct RewriteRuleCell_Wildcard end
-struct RewriteRuleCell_Lookup
-    source_idx::Int
+struct RewriteRuleCell_Lookup{TIndex}
+    source_idx::TIndex
 end
 
 "The source entries for a rewrite rule can be a single value, ordered set, or a wildcard"
 const RewriteRuleCellSource = Union{UInt8, RewriteRuleCell_Set, RewriteRuleCell_Wildcard}
 "The destination entries for a rewrite rule can be a single value, unordered set, list (matching source set size), or a wildcard"
-const RewriteRuleCellDest = Union{UInt8, RewriteRuleCell_Set,
-                                  RewriteRuleCell_List, RewriteRuleCell_Wildcard,
-                                  RewriteRuleCell_Lookup}
+const RewriteRuleCellDest{TIndex} = Union{UInt8, RewriteRuleCell_Set,
+                                          RewriteRuleCell_List, RewriteRuleCell_Wildcard,
+                                          RewriteRuleCell_Lookup{TIndex}}
 
-const RewriteCell = Tuple{RewriteRuleCellSource, RewriteRuleCellDest}
+const RewriteCell{TIndex} = Tuple{RewriteRuleCellSource, RewriteRuleCellDest{TIndex}}
 
 match_rewrite_source(rule::UInt8, value::UInt8) = (rule == value)
 match_rewrite_source(rule::RewriteRuleCell_Set, value::UInt8) = (value in rule)
 match_rewrite_source(::RewriteRuleCell_Wildcard, ::UInt8) = true
 
-pick_rewrite_value(dest::UInt8,                    src::RewriteRuleCellSource, src_values::Tuple{Vararg{UInt8}}, self_idx::Int, rng::PRNG) = dest
-pick_rewrite_value(dest::RewriteRuleCell_Set,      src::RewriteRuleCellSource, src_values::Tuple{Vararg{UInt8}}, self_idx::Int, rng::PRNG) = rand(rng, dest)
-pick_rewrite_value(dest::RewriteRuleCell_List,     src::RewriteRuleCell_Set,   src_values::Tuple{Vararg{UInt8}}, self_idx::Int, rng::PRNG) = dest[cell_set_index_of(src, src_values[self_idx])]
-pick_rewrite_value(dest::RewriteRuleCell_Lookup,        src::RewriteRuleCellSource, src_values::Tuple{Vararg{UInt8}}, self_idx::Int, rng::PRNG) = src_values[dest.source_idx]
-pick_rewrite_value(dest::RewriteRuleCell_Wildcard, src::RewriteRuleCellSource, src_values::Tuple{Vararg{UInt8}}, self_idx::Int, rng::PRNG) = src_values[self_idx]
+# 1D lookups provide the source values as a Tuple.
+pick_rewrite_value(dest::UInt8,                       src::RewriteRuleCellSource, src_values::Tuple{Vararg{UInt8}}, self_idx::Int, rng::PRNG) = dest
+pick_rewrite_value(dest::RewriteRuleCell_Set,         src::RewriteRuleCellSource, src_values::Tuple{Vararg{UInt8}}, self_idx::Int, rng::PRNG) = rand(rng, dest)
+pick_rewrite_value(dest::RewriteRuleCell_List,        src::RewriteRuleCell_Set,   src_values::Tuple{Vararg{UInt8}}, self_idx::Int, rng::PRNG) = dest[cell_set_index_of(src, src_values[self_idx])]
+pick_rewrite_value(dest::RewriteRuleCell_Lookup{Int}, src::RewriteRuleCellSource, src_values::Tuple{Vararg{UInt8}}, self_idx::Int, rng::PRNG) = src_values[dest.source_idx]
+pick_rewrite_value(dest::RewriteRuleCell_Wildcard,    src::RewriteRuleCellSource, src_values::Tuple{Vararg{UInt8}}, self_idx::Int, rng::PRNG) = src_values[self_idx]
+
+# Multi-dimensional lookups provide the source values as some array-view
+#    (correcting for symmetry, meaning the first array axis is the first rule axis and so on).
+pick_rewrite_value(dest::UInt8,                                  src::RewriteRuleCellSource, src_values::AbstractArray{UInt8, N}, self_idx::NTuple{N, Int}, rng::PRNG) where {N} = dest
+pick_rewrite_value(dest::RewriteRuleCell_Set,                    src::RewriteRuleCellSource, src_values::AbstractArray{UInt8, N}, self_idx::NTuple{N, Int}, rng::PRNG) where {N} = rand(rng, dest)
+pick_rewrite_value(dest::RewriteRuleCell_List,                   src::RewriteRuleCell_Set,   src_values::AbstractArray{UInt8, N}, self_idx::NTuple{N, Int}, rng::PRNG) where {N} = dest[cell_set_index_of(src, src_values[self_idx...])]
+pick_rewrite_value(dest::RewriteRuleCell_Lookup{NTuple{N, Int}}, src::RewriteRuleCellSource, src_values::AbstractArray{UInt8, N}, self_idx::NTuple{N, Int}, rng::PRNG) where {N} = src_values[dest.source_idx...]
+pick_rewrite_value(dest::RewriteRuleCell_Wildcard,               src::RewriteRuleCellSource, src_values::AbstractArray{UInt8, N}, self_idx::NTuple{N, Int}, rng::PRNG) where {N} = src_values[self_idx...]
 
 
 ###########################
@@ -34,7 +43,7 @@ pick_rewrite_value(dest::RewriteRuleCell_Wildcard, src::RewriteRuleCellSource, s
 "A description of extra allowed symmetries starting at a specific axis, optionally different starting axes per-direction"
 const RewriteRule_TailSymmetry = Union{Optional{Int}, NTuple{2, Optional{Int}}}
 
-struct RewriteRule_Strip{NCells, TCells<:NTuple{NCells, RewriteCell}}
+struct RewriteRule_Strip{NCells, TCells<:NTuple{NCells, RewriteCell{Int}}}
     cells::TCells
     mask::Union{Nothing, Float32, NTuple{2, Float32}} # Disabled, constant, or random range
     weight::Float32
@@ -154,6 +163,222 @@ function visit_rule_match_data(process_candidate::TLambda,
 
     return nothing
 end
+
+####################################
+#  Rewrite rule: multidimensional
+
+"
+Data used to generate the symmetries of a multi-dimensional rewrite rule.
+Multi-dimensional rule orientation is conceived as a list of choices --
+  for each rule axis, pick a corresponding grid axis (positive and/or negative).
+"
+struct RewriteRule_MD_Symmetry_Definition
+    # Each entry is a pair:
+    #   1. Possibile orientations for a small group of rule axes, as a Matrix
+    #   2. If only one rule axis is involved, this is its tail symmetry. Otherwise this is `nothing`.
+    # The first matrix column tells you the rule axes involved -- each row corresponds to that axis.
+    # Subsequent columns represent allowed orientations of rule axes along the grid.
+    # Each axis orientation is a signed integer --
+    #    +a means "along positive axis a"; -a means "along negative axis a".
+    # The tail symmetry for each axis tells you whether arbitrary extra dimensions are allowed to be chosen.
+    grid_axis_choices::Vector{Pair{Matrix{Int}, RewriteRule_TailSymmetry}}
+    # Each set of rule axes listed here may not flip relative to each other,
+    #   i.e. they may only be rotated into their grid orientation.
+    chiral_groups::Vector{Set{Int}}
+end
+
+"
+Generates all legal orientations of the given rule block in the given grid.
+Returns a matrix where each column is an orientation -- mapping each rule axis (row) to a grid axis (element).
+"
+function find_all_md_symmetries(def::RewriteRule_MD_Symmetry_Definition,
+                                n_rule_dims::Int, n_grid_dims::Int
+                               )::AbstractMatrix{GridDir}
+    options = Vector{Vector{GridDir}}() #TODO: Use an ElasticArrays.jl matrix instead
+    UNCHOSEN_GRID_DIR = GridDir(-1, -1)
+    FRESH_OPTION = map(i->UNCHOSEN_GRID_DIR, n_rule_dims)
+
+    # Occasionally we track invalid options and then remove them in a second pass.
+    options_to_remove = Vector{Int}()
+    function execute_removals()
+        # Iterate from end to start, for performance AND simplicity.
+        for bad_i in Iterators.reverse(options_to_remove)
+            deleteat!(options, bad_i)
+        end
+        empty!(options_to_remove)
+    end
+
+    set_rule_axes = Vector{Bool}(false, n_rule_dims)
+    unused_grid_axes = Vector{Bool}(undef, n_grid_dims) # Buffer used below
+
+
+    # For each new choice to make, try pairing it against every existing choice.
+    first_run::Bool = true
+    for (raw_new_orientations, tail_symmetry) in def.grid_axis_choices
+        orientation_rule_axes::AbstractVector{Int} = @view raw_new_orientations[:, 1]
+        n_orientation_axes::Int = length(rule_axes)
+        @markovjunior_assert(none(a -> set_rule_axes[a], orientation_rule_axes),
+                             "Some rule axes assigned to grid axis in more than one way! At least one of ",
+                               orientation_rule_axes)
+        for a in orientation_rule_axes
+            set_rule_axes[a] = true
+        end
+
+        new_orientations::AbstractMatrix{Int} = @view raw_new_orientations[:, 2:end]
+        n_new_orientations::Int = size(new_orientations, 2)
+        new_orientation_columns::@IterOf{AbstractVector{Int}} = Iterators.map(
+            i -> @view(new_orientations[:, i]),
+            1:n_new_orientations
+        )
+        # Incorporate tail symmetry.
+        tail_symmetry_columns = Vector{Vector{Int}}() #TODO: Each column is 1-long, so we should use a Vector{Int} and then reshape to matrix
+        if exists(tail_symmetry)
+            @bp_check(n_orientation_axes == 1,
+                      "Can't apply tail symmetry to an axis group! Only to an individual axis")
+
+            if tail_symmetry isa Int
+                for tail_grid_axis in tail_symmetry:n_grid_dims
+                    for tail_sign in (-1, 1)
+                        push!(tail_symmetry_columns, [ tail_grid_axis * tail_sign ])
+                    end
+                end
+            elseif tail_symmetry isa NTuple{2, Optional{Int}}
+                exists(tail_symmetry[1]) && for tail_grid_axis in tail_symmetry[1]:n_grid_dims
+                    push!(tail_symmetry_columns, [ -tail_grid_axis ])
+                end
+                exists(tail_symmetry[2]) && for tail_grid_axis in tail_symmetry[2]:n_grid_dims
+                    push!(tail_symmetry_columns, [ tail_grid_axis ])
+                end
+            else
+                error("Unhandled: ", typeof(tail_symmetry))
+            end
+        end
+        n_new_orientations += length(tail_symmetry_columns)
+        new_orientation_columns = Iterators.flatten((
+            new_orientation_columns,
+            tail_symmetry_columns
+        ))
+
+        # If no options are available, then it's either the first iteration or there are no valid symmetries.
+        if isempty(options)
+            if first_run
+                first_run = false
+                for new_orientation in new_orientation_columns
+                    push!(options, copy(FRESH_OPTION))
+                    new_option = options[end]
+
+                    for (a_rule::Int, a_orientation::GridDir) in zip(orientation_rule_axes, new_orientation)
+                        @markovjunior_assert(new_option[a_rule].axis == -1,
+                                             "Rule axis set more than once: ", a_rule)
+                        options[end][a_rule] = a_orientation
+                    end
+                end
+            else
+                break
+            end
+        # Otherwise, try pairing every existing option with each of these new choices.
+        else
+            # Copy the original options once for each new choice.
+            n_original_options = length(options)
+            resize!(options, n_original_options * n_new_orientations)
+            for src_option_i in 1:n_original_options
+                for permutation_i in 2:n_new_orientations # Start at 2 to leave the original options alone
+                    dest_option_i = src_option_i + (n_original_options * (permutation_i - 1))
+                    options[dest_option_i] = copy(options[src_option_i])
+                end
+            end
+
+            # Now apply each permutation to all its original options.
+            for (permutation_i, new_orientation) in enumerate(new_orientation_columns)
+                for src_option_i in 1:n_original_options
+                    dest_option_i = src_option_i + (n_original_options * (permutation_i - 1))
+                    option = options[dest_option_i]
+
+                    # Apply this permutation of choices to the rule axes.
+                    for (a_rule::Int, a_orientation::GridDir) in zip(orientation_rule_axes, new_orientation)
+                        @markovjunior_assert(option[a_rule].axis == -1,
+                                             "More than one symmetry statement is writing to rule axis ", a_rule)
+                        # If any other rule axes aleady map to this same grid axis, this option is not viable.
+                        if any(a -> option[a].axis == a_orientation.axis, 1:n_rule_dims)
+                            push!(options_to_remove, dest_option_i)
+                            break
+                        end
+
+                        option[a_rule] = a_orientation
+                    end
+                    if !isempty(options_to_remove) && (options_to_remove[end] == dest_option_i)
+                        continue
+                    end
+
+                    #TODO: Check chirality
+                end
+            end
+
+            execute_removals()
+        end
+    end
+
+    # Any unmentioned rule axes are implicitly unconstrained -- they can orient along any world axis.
+    for a_rule in 1:n_rule_dims if !set_rule_axes[a_rule]
+        # The specific grid axes available will be different for each option,
+        #    but the number of choices should be constant.
+        n_set_rule_axes = count(set_rule_axes)
+        n_original_options = length(options)
+        n_grid_axis_choices = n_grid_dims - n_set_rule_axes
+        for src_option_i in 1:n_original_options
+            src_option = options[src_option_i]
+            @markovjunior_assert(src_option[a_rule].axis == -1,
+                                 "Rule-axis ", a_rule, " actually was set??")
+            # Gather the candidate grid axes.
+            fill!(true, unused_grid_axes)
+            for dir in src_option
+                unused_grid_axes[dir.axis] = false
+            end
+            @markovjunior_assert(count(unused_grid_axes) == n_grid_axis_choices,
+                                 "Expected ", n_grid_axis_choices,
+                                   " unused grid axes for each option at this point, but found ",
+                                   unused_grid_axes, " in option ", src_option_i)
+            # Try using each one.
+            for a_grid in 1:n_grid_dims if unused_grid_axes[a_grid]
+                for a_grid_sign in (-1, 1)
+                    a_grid_dir = GridDir(a_grid, a_grid_sign)
+                    #TODO: Check chirality gainst this choice
+
+                    push!(options, copy(src_option))
+                    option = options[end]
+                    option[a_rule] = a_grid_dir
+                end
+            end end
+        end
+
+        # Finish up.
+        execute_removals()
+        set_rule_axes[a_rule] = true
+    end end
+
+    return nothing
+end
+
+struct RewriteRule_MD_Symmetry
+    # For each symmetry (Y), for each rule axis (X), pick a grid axis and dir.
+    rules::Array{GridDir, 2}
+    unlimited_symmetries_after_axis::Int
+end
+
+"NOTE: not a compile-time constant!"
+rewrite_md_n_dims(r::RewriteRule_MD_Symmetry) = size(r.rules, 1)
+rewrite_md_n_symmetries(r::RewriteRule_MD_Symmetry) = size(r.rules, 2)
+
+"
+Executes your lambda on each potential choice of orientation,
+  as a `AbstractVector{GridDir}` of the grid direction chosen for each rule axis.
+"
+function rewrite_md_for_each_symmetry(to_do, r::RewriteRule_MD_Symmetry)
+    for symm_i in 1:rewrite_md_n_symmetries(r)
+        to_do(@view r.rules[symm_i, :])
+    end
+end
+
 
 
 ##################################
@@ -563,7 +788,8 @@ dsl_string_rewrite_dest(rule::UInt8) = dsl_string(rule)
 dsl_string_rewrite_dest(rule::RewriteRuleCell_Set) = "{$(dsl_string(rule))}"
 dsl_string_rewrite_dest(rule::RewriteRuleCell_List) = "[$(string(dsl_string.(rule)...))]"
 dsl_string_rewrite_dest(rule::RewriteRuleCell_Wildcard) = "_"
-dsl_string_rewrite_dest(rule::RewriteRuleCell_Lookup) = "[$(rule.source_idx)]"
+dsl_string_rewrite_dest(rule::RewriteRuleCell_Lookup{Int}) = "[$(rule.source_idx)]"
+dsl_string_rewrite_dest(rule::RewriteRuleCell_Lookup{<:NTuple}) = "[$(iter_join(rule.source_idx, ", ")...)]"
 
 dsl_string_rewrite_mask(mask::Nothing) = ""
 dsl_string_rewrite_mask(mask::Float32) = "%$mask"
@@ -645,11 +871,11 @@ dsl_string(@nospecialize op::MarkovOpRewrite) = string(
 
 
 "Note that Source (lhs) patterns will return a Set as a List, for later processing"
-function parse_markovjunior_rewrite_rule_side(inputs::MacroParserInputs, loc, expr,
-                                              isSource::Bool)::Vector
+function parse_markovjunior_rewrite_rule_strip_side(inputs::MacroParserInputs, loc, expr,
+                                                    isSource::Bool)::Vector
     push!(inputs.op_stack_trace, isSource ? "Left-hand side" : "Right-hand side")
     try
-        try_lookup_char(c::Char)::Union{RewriteRuleCellSource, RewriteRuleCellDest} = if haskey(CELL_CODE_BY_CHAR, c)
+        try_lookup_char(c::Char)::Union{RewriteRuleCellSource, RewriteRuleCellDest{Int}} = if haskey(CELL_CODE_BY_CHAR, c)
             CELL_CODE_BY_CHAR[c]
         elseif c == '_'
             RewriteRuleCell_Wildcard()
@@ -696,7 +922,7 @@ function parse_markovjunior_rewrite_rule_side(inputs::MacroParserInputs, loc, ex
         flattened = flatten_rule_expr(expr)
 
         # Now turn each element into a proper data representation.
-        return collect(Union{RewriteRuleCellSource, RewriteRuleCellDest},
+        return collect(Union{RewriteRuleCellSource, RewriteRuleCellDest{Int}},
                        Iterators.map(flattened) do simple_repr
             if simple_repr isa Char
                 return try_lookup_char(simple_repr)
@@ -725,7 +951,12 @@ function parse_markovjunior_rewrite_rule_side(inputs::MacroParserInputs, loc, ex
                                      " part of rule!")
                 end
             elseif (simple_repr isa Pair) && (simple_repr[1] == :ref)
-                return RewriteRuleCell_Lookup(simple_repr[2])
+                if !isa(simple_repr[2], Integer)
+                    raise_parse_error(loc, inputs,
+                                      "Expected source-ref to look like `[5]`, got `[", simple_repr[2], "]`")
+                else
+                    return RewriteRuleCell_Lookup(convert(Int, simple_repr[2]))
+                end
             else
                 @bp_check(false, "Unexpected: ", simple_repr)
             end
@@ -920,8 +1151,8 @@ function parse_markovjunior_rewrite_rule_strip(inputs::MacroParserInputs, loc, e
         (symmetries_explicit, symmetries_tail) = parse_markovjunior_rewrite_rule_strip_symmetry(inputs, loc, symmetryExprs)
 
         # Parse the rule.
-        lhs = parse_markovjunior_rewrite_rule_side(inputs, loc, lhsExpr, true)
-        rhs = parse_markovjunior_rewrite_rule_side(inputs, loc, rhsExpr, false)
+        lhs = parse_markovjunior_rewrite_rule_strip_side(inputs, loc, lhsExpr, true)
+        rhs = parse_markovjunior_rewrite_rule_strip_side(inputs, loc, rhsExpr, false)
 
         # Post-process and validate the rule.
         if length(lhs) != length(rhs)
@@ -956,7 +1187,7 @@ function parse_markovjunior_rewrite_rule_strip(inputs::MacroParserInputs, loc, e
             end
 
             # If dest cell references a source cell, that reference must be valid.
-            if (rhs[i] isa RewriteRuleCell_Lookup) && !in(rhs[i].source_idx, 1:length(lhs))
+            if (rhs[i] isa RewriteRuleCell_Lookup{Int}) && !in(rhs[i].source_idx, 1:length(lhs))
                 raise_parse_error(loc, inputs,
                                "Destination Cell ", i, " references nonexistent source cell ",
                                  rhs[i].source_idx)

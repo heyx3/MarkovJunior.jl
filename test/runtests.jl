@@ -154,9 +154,9 @@ const BIG_TEST_ANSWER = MJ.MarkovAlgorithm(
             tuple(
                 MJ.RewriteRule_Strip(
                     tuple(
-                        (MJ.CELL_CODE_BY_CHAR['R'], MJ.RewriteRuleCell_Lookup(2)),
+                        (MJ.CELL_CODE_BY_CHAR['R'], MJ.RewriteRuleCell_Lookup{Int}(2)),
                         (MJ.CELL_CODE_BY_CHAR['G'], MJ.RewriteRuleCell_Wildcard()),
-                        (MJ.CELL_CODE_BY_CHAR['B'], MJ.RewriteRuleCell_Lookup(1))
+                        (MJ.CELL_CODE_BY_CHAR['B'], MJ.RewriteRuleCell_Lookup{Int}(1))
                     ),
                     nothing, 1.0f0,
                     MJ.GridDir[ ], 1
@@ -197,9 +197,9 @@ const BIG_TEST_ANSWER = MJ.MarkovAlgorithm(
             tuple(
                 MJ.RewriteRule_Strip(
                     tuple(
-                        (MJ.RewriteRuleCell_Wildcard(), MJ.RewriteRuleCell_Lookup(1)),
-                        (MJ.RewriteRuleCell_Wildcard(), MJ.RewriteRuleCell_Lookup(3)),
-                        (MJ.RewriteRuleCell_Wildcard(), MJ.RewriteRuleCell_Lookup(2))
+                        (MJ.RewriteRuleCell_Wildcard(), MJ.RewriteRuleCell_Lookup{Int}(1)),
+                        (MJ.RewriteRuleCell_Wildcard(), MJ.RewriteRuleCell_Lookup{Int}(3)),
+                        (MJ.RewriteRuleCell_Wildcard(), MJ.RewriteRuleCell_Lookup{Int}(2))
                     ),
                     nothing, 2.0f0,
                     MJ.GridDir[ ], 1
@@ -361,7 +361,7 @@ const BIG_TEST_ANSWER = MJ.MarkovAlgorithm(
                 ),
                 MJ.RewriteRule_Strip(
                     tuple(
-                        (MJ.CELL_CODE_BY_CHAR['R'], MJ.RewriteRuleCell_Lookup(2)),
+                        (MJ.CELL_CODE_BY_CHAR['R'], MJ.RewriteRuleCell_Lookup{Int}(2)),
                         (MJ.RewriteRuleCell_Wildcard(), MJ.RewriteRuleCell_Wildcard()),
                         (
                             MJ.RewriteRuleCell_Set('b', 'B'),

@@ -1,6 +1,8 @@
 # v0.3
 
 * Add 3D view to the scene renderer
+* Improve rewrite rule syntax
+* Various GUI improvements
 
 # v0.2
 
