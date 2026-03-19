@@ -30,7 +30,8 @@ Next on the docket is 3D rendering and many more Operations and Biases.
 Math and rendering is all built on top of my [B+ game framework](https://github.com/heyx3/B-plus).
 
 The unit tests in *test/runtests.jl* are mostly focused on parsing,
-  while correctness is checked by running sample scenes in the GUI.
+  while correctness is mostly checked by running sample scenes in the GUI,
+  but there are exceptions for important algorithm-heavy internal functions.
 
 ## Development
 

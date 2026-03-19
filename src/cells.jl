@@ -189,6 +189,11 @@ struct GridDir
     else
         new(convert(Int32, axis), convert(Int32, sign))
     end
+    GridDir(axis, sign, skip_check) = if skip_check
+        new(convert(Int32, axis), convert(Int32, sign))
+    else
+        GridDir(axis, sign)
+    end
 end
 
 "Gets the index of the given grid direction"

@@ -187,6 +187,32 @@ struct RewriteRule_MD_Symmetry_Definition
     chiral_groups::Vector{Set{Int}}
 end
 
+log_md_symmetry_logic() = false
+macro md_symm_log(args...)
+    MJ = @__MODULE__
+    return :(
+        if $MJ.log_md_symmetry_logic()
+            print(stderr, $(esc.(args)...))
+        end
+    )
+end
+macro md_symm_logln(args...)
+    MJ = @__MODULE__
+    return :(
+        if $MJ.log_md_symmetry_logic()
+            println(stderr, $(esc.(args)...))
+        end
+    )
+end
+macro md_symm_display(args...)
+    MJ = @__MODULE__
+    return :(
+        if $MJ.log_md_symmetry_logic()
+            display($(esc.(args)...))
+        end
+    )
+end
+
 "
 Generates all legal orientations of the given rule block in the given grid.
 Returns a matrix where each column is an orientation -- mapping each rule axis (row) to a grid axis (element).
@@ -194,12 +220,18 @@ Returns a matrix where each column is an orientation -- mapping each rule axis (
 function find_all_md_symmetries(def::RewriteRule_MD_Symmetry_Definition,
                                 n_rule_dims::Int, n_grid_dims::Int
                                )::AbstractMatrix{GridDir}
+    @md_symm_logln("Finding symmetries for definition with ",
+                    n_rule_dims, " Rule dims and ", n_grid_dims, " Grid dims")
+    md_symm_loggable_dirs(dirs) = Iterators.flatten(Iterators.map(dirs) do d::GridDir
+        return (d.axis == -1) ? "__" : d.sign * d.axis
+    end)
+
     options = Vector{Vector{GridDir}}() #TODO: Use an ElasticArrays.jl matrix instead
-    UNCHOSEN_GRID_DIR = GridDir(-1, -1)
-    FRESH_OPTION = map(i->UNCHOSEN_GRID_DIR, n_rule_dims)
+    UNCHOSEN_GRID_DIR = GridDir(-1, -1, true)
+    FRESH_OPTION = map(i->UNCHOSEN_GRID_DIR, 1:n_rule_dims)
 
     # Occasionally we track invalid options and then remove them in a second pass.
-    options_to_remove = Vector{Int}()
+    options_to_remove = Vector{Union{Int, UnitRange{Int}, StepRange{Int, Int}}}()
     function execute_removals()
         # Iterate from end to start, for performance AND simplicity.
         for bad_i in Iterators.reverse(options_to_remove)
@@ -208,15 +240,19 @@ function find_all_md_symmetries(def::RewriteRule_MD_Symmetry_Definition,
         empty!(options_to_remove)
     end
 
-    set_rule_axes = Vector{Bool}(false, n_rule_dims)
+    set_rule_axes = fill(false, n_rule_dims)
     unused_grid_axes = Vector{Bool}(undef, n_grid_dims) # Buffer used below
 
+    #TODO: Track chiral groups and filter out options which violate them.
 
     # For each new choice to make, try pairing it against every existing choice.
     first_run::Bool = true
     for (raw_new_orientations, tail_symmetry) in def.grid_axis_choices
         orientation_rule_axes::AbstractVector{Int} = @view raw_new_orientations[:, 1]
-        n_orientation_axes::Int = length(rule_axes)
+        @markovjunior_assert(all(a -> (a>0) && (a<=n_rule_dims), orientation_rule_axes),
+                             "Some named rule axes are outside the range (1, ", n_rule_dims, "): ",
+                               orientation_rule_axes)
+        n_orientation_axes::Int = length(orientation_rule_axes)
         @markovjunior_assert(none(a -> set_rule_axes[a], orientation_rule_axes),
                              "Some rule axes assigned to grid axis in more than one way! At least one of ",
                                orientation_rule_axes)
@@ -252,26 +288,38 @@ function find_all_md_symmetries(def::RewriteRule_MD_Symmetry_Definition,
             else
                 error("Unhandled: ", typeof(tail_symmetry))
             end
+
         end
+        # *Always* append the tail symmetry, even if it's empty and inapplicable,
+        #    to improve type-stability.
         n_new_orientations += length(tail_symmetry_columns)
         new_orientation_columns = Iterators.flatten((
             new_orientation_columns,
             tail_symmetry_columns
         ))
+        @md_symm_logln("Next Group: [", iter_join(orientation_rule_axes, ",")..., "]")
+        @md_symm_logln("Entries: [")
+        for entry in new_orientation_columns
+            @md_symm_logln("\t[", iter_join(entry, ", ")..., "]")
+        end
+        @md_symm_logln("]")
 
         # If no options are available, then it's either the first iteration or there are no valid symmetries.
         if isempty(options)
             if first_run
                 first_run = false
                 for new_orientation in new_orientation_columns
-                    push!(options, copy(FRESH_OPTION))
+                    push!(options, map(identity, FRESH_OPTION))
                     new_option = options[end]
 
-                    for (a_rule::Int, a_orientation::GridDir) in zip(orientation_rule_axes, new_orientation)
+                    for (a_rule::Int, a_orientation::Int) in zip(orientation_rule_axes, new_orientation)
                         @markovjunior_assert(new_option[a_rule].axis == -1,
                                              "Rule axis set more than once: ", a_rule)
-                        options[end][a_rule] = a_orientation
+                        options[end][a_rule] = GridDir(abs(a_orientation), sign(a_orientation))
                     end
+
+                    #TODO: Check chirality
+                    @md_symm_logln("New option: [ ", iter_join(md_symm_loggable_dirs(new_option), ", ")..., " ]")
                 end
             else
                 break
@@ -293,22 +341,38 @@ function find_all_md_symmetries(def::RewriteRule_MD_Symmetry_Definition,
                 for src_option_i in 1:n_original_options
                     dest_option_i = src_option_i + (n_original_options * (permutation_i - 1))
                     option = options[dest_option_i]
+                    @md_symm_logln(
+                        "Applying permutation [",
+                        iter_join(new_orientation, ",")...,
+                        "] to option [",
+                            iter_join(md_symm_loggable_dirs(option), ",")...,
+                        "]..."
+                    )
 
                     # Apply this permutation of choices to the rule axes.
-                    for (a_rule::Int, a_orientation::GridDir) in zip(orientation_rule_axes, new_orientation)
+                    for (a_rule::Int, a_orientation::Int) in zip(orientation_rule_axes, new_orientation)
                         @markovjunior_assert(option[a_rule].axis == -1,
                                              "More than one symmetry statement is writing to rule axis ", a_rule)
                         # If any other rule axes aleady map to this same grid axis, this option is not viable.
-                        if any(a -> option[a].axis == a_orientation.axis, 1:n_rule_dims)
+                        if any(a -> option[a].axis == abs(a_orientation), 1:n_rule_dims)
+                            @md_symm_logln(
+                                "\tThis option is invalid! Rule axis ", a_rule,
+                                " will map to grid axis ", abs(a_orientation),
+                                ", but it was already being used"
+                            )
                             push!(options_to_remove, dest_option_i)
                             break
                         end
 
-                        option[a_rule] = a_orientation
+                        option[a_rule] = GridDir(abs(a_orientation), sign(a_orientation))
                     end
                     if !isempty(options_to_remove) && (options_to_remove[end] == dest_option_i)
                         continue
                     end
+                    @md_symm_logln(
+                        "\tNow the option is [",
+                        iter_join(md_symm_loggable_dirs(option), ",")..., "]"
+                    )
 
                     #TODO: Check chirality
                 end
@@ -320,19 +384,25 @@ function find_all_md_symmetries(def::RewriteRule_MD_Symmetry_Definition,
 
     # Any unmentioned rule axes are implicitly unconstrained -- they can orient along any world axis.
     for a_rule in 1:n_rule_dims if !set_rule_axes[a_rule]
+        @md_symm_logln(
+            "Rule axis ", a_rule,
+            " was not mentioned anywhere so it has implicit tail symmetry of `1...`."
+        )
+
         # The specific grid axes available will be different for each option,
         #    but the number of choices should be constant.
         n_set_rule_axes = count(set_rule_axes)
         n_original_options = length(options)
         n_grid_axis_choices = n_grid_dims - n_set_rule_axes
+        push!(options_to_remove, 1:n_original_options) # After the loop, the original options are replaced
         for src_option_i in 1:n_original_options
             src_option = options[src_option_i]
             @markovjunior_assert(src_option[a_rule].axis == -1,
                                  "Rule-axis ", a_rule, " actually was set??")
             # Gather the candidate grid axes.
-            fill!(true, unused_grid_axes)
+            fill!(unused_grid_axes, true)
             for dir in src_option
-                unused_grid_axes[dir.axis] = false
+                (dir.axis != -1) && (unused_grid_axes[dir.axis] = false)
             end
             @markovjunior_assert(count(unused_grid_axes) == n_grid_axis_choices,
                                  "Expected ", n_grid_axis_choices,
@@ -342,11 +412,11 @@ function find_all_md_symmetries(def::RewriteRule_MD_Symmetry_Definition,
             for a_grid in 1:n_grid_dims if unused_grid_axes[a_grid]
                 for a_grid_sign in (-1, 1)
                     a_grid_dir = GridDir(a_grid, a_grid_sign)
-                    #TODO: Check chirality gainst this choice
+                    #TODO: Check chirality against this choice
 
-                    push!(options, copy(src_option))
-                    option = options[end]
+                    option = map(identity, src_option)
                     option[a_rule] = a_grid_dir
+                    push!(options, option)
                 end
             end end
         end
@@ -356,7 +426,16 @@ function find_all_md_symmetries(def::RewriteRule_MD_Symmetry_Definition,
         set_rule_axes[a_rule] = true
     end end
 
-    return nothing
+    result = hcat(options...)
+    @md_symm_logln("Final result: [")
+    for i_rule_axis in 1:size(result, 1)
+        for i_entry in 1:size(result, 2)
+            @md_symm_log(md_symm_loggable_dirs((result[i_rule_axis, i_entry], ))..., " ")
+        end
+        @md_symm_logln()
+    end
+    @md_symm_logln("]\n")
+    return result
 end
 
 struct RewriteRule_MD_Symmetry

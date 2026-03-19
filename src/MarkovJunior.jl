@@ -57,7 +57,7 @@ using Random, Setfield, Profile, Printf
 const System = Base.Sys
 
 using MacroTools, NamedTupleTools
-using OrderedCollections, StaticArrays, DataStructures
+using OrderedCollections, StaticArrays, DataStructures, Combinatorics
 using StructTypes, JSON3
 using GLFW, CImGui, CSyntax
 
