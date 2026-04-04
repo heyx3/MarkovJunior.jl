@@ -528,8 +528,8 @@ For example if a 2D block should be able to orient anywhere in a grid but only t
   you can write `\[ {x,y} ]`.
 
 Suppose we're generating a 4D grid where the first axis is meant to be Time.
-The below 3D rewrite rule can be rotated any way in space,
-  but not flipped and none of its axes are allowed to stretch through Time.
+The below 3D rewrite rule can be rotated any way in space --
+  not flipped, and none of its axes are allowed to stretch through Time.
 ````julia
 [ a b c
   d e f ;;;
