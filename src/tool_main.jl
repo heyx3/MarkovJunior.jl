@@ -67,6 +67,7 @@ function markovjunior_run_tool()
     end
 end
 
+"The entry point when building as an app (through *PackageCompiler.jl*)"
 function julia_main()::Cint
     try
         markovjunior_run_tool()

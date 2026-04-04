@@ -48,6 +48,23 @@ Clone BplusCore, BplusApp, BplusTools, and Bplus,
 ] dev ../Bplus.jl
 ````
 
+Due to a [bug with FixedPointNumbers.jl](https://github.com/JuliaMath/FixedPointNumbers.jl/issues/317)
+  -- possibly a [bug with PackageCompiler itself](https://github.com/JuliaLang/PackageCompiler.jl/issues/1092) --
+  the public release can't be used with PackageCompiler.
+Instead, you need to [clone this fork](github.com/Kyjor/FixedPointNumbers.jl/tree/bugfix/remove-asserts-from-precompile),
+  at branch `bugfix/remove-asserts-from-precompile` (e.g. `git checkout bugfix/remove-asserts-from-precompile`),
+  and link it to this project:
+
+````julia
+# Add it to the local Julia environment:
+] activate
+] dev ../FixedPointNumbers.jl
+# Add it to this project:
+] activate .
+] dev ../FixedPointNumbers.jj
+# Not sure why both of the above are needed, but they are.
+````
+
 ## Scenes
 
 Different algorithm setups can be found in the *scenes/* folder.
