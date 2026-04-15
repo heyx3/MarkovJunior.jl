@@ -190,6 +190,7 @@ struct RewriteRule_MD_Symmetry_Definition
     # The tail symmetry for each axis tells you whether arbitrary extra dimensions are allowed to be chosen.
     # Any rule axes not mentioned here are allowed to take on any orientation.
     grid_axis_choices::Vector{Pair{Matrix{Int}, RewriteRule_TailSymmetry}}
+
     # Each set of rule axes listed here may not flip relative to each other,
     #   i.e. they may only be rotated into their grid orientation.
     chiral_groups::Vector{Set{Int}}
@@ -197,6 +198,11 @@ end
 Base.:(==)(a::RewriteRule_MD_Symmetry_Definition, b::RewriteRule_MD_Symmetry_Definition) = (
     a.grid_axis_choices == b.grid_axis_choices &&
     a.chiral_groups == b.chiral_groups
+)
+"The empty-constructor creates the maximum possible symmetry"
+RewriteRule_MD_Symmetry_Definition() = RewriteRule_MD_Symmetry_Definition(
+    Vector{Pair{Matrix{Int}, RewriteRule_TailSymmetry}}(),
+    Vector{Set{Int}}()
 )
 
 log_md_symmetry_logic() = false
@@ -950,7 +956,7 @@ rewrite_rule_option_indices(state::MarkovOpRewrite_State, rule_idx::Integer) = (
      (state.weighted_options_buffer_first_indices[rule_idx+1] - 1)
 )
 
-function markov_op_initialize(r::MarkovOpRewrite{<:Tuple, TBias, TPriority},
+function markov_op_initialize(r::MarkovOpRewrite{NTuple{NRules, Any}, TBias, TPriority},
                               grid::CellGrid{NDims}, rng::PRNG,
                               context::MarkovOpContext
                              ) where {NDims, NRules, TBias, TPriority}
@@ -1143,10 +1149,9 @@ function markov_op_iterate(r::MarkovOpRewrite{TRules, TSelfBiases, TPriority},
             (pick_start_cell, pick_end_cell) = minmax(pick_start_cell, pick_end_cell)
             BoxI{NDims}(pick_start_cell:pick_end_cell)
         else
-            pick_dir_o::RewriteRule_MD_Orientation{NDims} = pick_dir
             BoxI{NDims}(
                 min=pick_start_cell,
-                size=vsize(size(pick_dir_o.rule_permutation)...)
+                size=vsize(size(pick_dir.rule_permutation)...)
             )
         end
         update_rewrite_cache!(state.rewrite_cache, affected_area)
@@ -1210,25 +1215,7 @@ dsl_string_rewrite_mask(mask::NTuple{2, Float32}) = "%($(mask[1]):$(mask[2]))"
 function dsl_string_rewrite_md_array(array::Array{RewriteCell_MD{NDims}, NDims},
                                      take_source::Bool) where {NDims}
     output = preallocated_vector(Char, 1024)
-    append!(output, "[")
-
-    # The first two axes are flipped from Julia's normal convention (row, col)
-    #    to a more intuitive visual/designer convention (col, row).
-    fixed_array = if NDims > 1
-        permuted_axes = ntuple(Val(NDims)) do i
-            if i == 1
-                2
-            elseif i == 2
-                1
-            else
-                i
-            end
-        end
-        PermutedDimsArray(array, permuted_axes)
-    else
-        array
-    end
-    fixed_array_size = size(fixed_array)
+    append!(output, "[\n  ")
 
     # Define the incrementing index counter to iterate through the array in order
     #    and track which axis boundary we just crossed.
@@ -1236,7 +1223,7 @@ function dsl_string_rewrite_md_array(array::Array{RewriteCell_MD{NDims}, NDims},
     function advance_idx_and_get_changed_axis()::Int
         for i in 1:NDims
             idx[i] += 1
-            if idx[i] < fixed_array_size[i]
+            if idx[i] <= size(array, i)
                 return i
             else
                 idx[i] = 1
@@ -1250,32 +1237,69 @@ function dsl_string_rewrite_md_array(array::Array{RewriteCell_MD{NDims}, NDims},
     changed_axis = 1
     while changed_axis <= NDims
         # Write the separator.
+        # Note that the first axis from the user's POV is the column, not the row.
         if changed_axis == 1
-            append!(output, "\n  ")
-        elseif changed_axis == 2
             append!(output, " ")
+        elseif changed_axis == 2
+            append!(output, "\n  ")
         else
             push!(output, ' ')
-            for si in 1:changed_axis
+            for _ in 1:changed_axis
                 push!(output, ';')
             end
             append!(output, "\n  ")
         end
 
         # Write the current element.
-        if take_source
-            dsl_string_rewrite_source(array[idx...][1])
-        else
-            dsl_string_rewrite_dest(array[idx...][2])
-        end
+        append!(output,
+            if take_source
+                dsl_string_rewrite_source(array[idx...][1])
+            else
+                dsl_string_rewrite_dest(array[idx...][2])
+            end
+        )
 
         changed_axis = advance_idx_and_get_changed_axis()
     end
 
-    append!(output, "\n]")
+    append!(output, "\n ]")
     return String(output)
 end
 
+dsl_string_rewrite_axis(a::Integer) = if a < 5
+    ('x', 'y', 'z', 'w')[a]
+else
+    a
+end
+function dsl_string_rewrite_signed_axis(a::Integer)
+    letter = if abs(a) in 1:4
+        ('x', 'y', 'z', 'w')[abs(a)]
+    else
+        nothing
+    end
+    return string(
+        if a > 0
+            '+'
+        else
+            '-'
+        end,
+        if isnothing(letter)
+            "("
+        else
+            ""
+        end,
+        if exists(letter)
+            letter
+        else
+            abs(a)
+        end,
+        if isnothing(letter)
+            ")"
+        else
+            ""
+        end
+    )
+end
 dsl_string(@nospecialize strip::RewriteRule_Strip) = string(
     dsl_string_rewrite_source.(t[1] for t in strip.cells)...,
     " => ",
@@ -1288,14 +1312,10 @@ dsl_string(@nospecialize strip::RewriteRule_Strip) = string(
         (
             " \\[ ",
             # Explicit symmetries:
-            Iterators.flatten(
-                iter_join(
-                    ((
-                        (dir.sign < 0) ? '-' : '+',
-                        (dir.axis < 5) ? ('x', 'y', 'z', 'w')[dir.axis] : dir.axis
-                    ) for dir in strip.explicit_symmetries),
-                    ", "
-                )
+            iter_join_flatten(
+                (dsl_string_rewrite_signed_axis(dir.axis * dir.sign)
+                  for dir in strip.explicit_symmetries),
+                ", "
             )...,
             # Unlimited symmetries:
             if exists(strip.tail_symmetry) && !isempty(strip.explicit_symmetries)
@@ -1311,8 +1331,17 @@ dsl_string(@nospecialize strip::RewriteRule_Strip) = string(
                 )
             elseif strip.tail_symmetry isa NTuple{2, Optional{Int}}
                 tuple(
-                    "-(", strip.tail_symmetry[1], ")..., ",
-                    "+(", strip.tail_symmetry[2], ")...",
+                    if exists(strip.tail_symmetry[1])
+                        ("-(", strip.tail_symmetry[1], ")...",
+                         exists(strip.tail_symmetry[2]) ? ", " : "")
+                    else
+                        ()
+                    end...,
+                    if exists(strip.tail_symmetry[2])
+                        ("+(", strip.tail_symmetry[2], ")...")
+                    else
+                        ()
+                    end...
                 )
             else
                 error("Unhandled: ", typeof(strip.tail_symmetry))
@@ -1332,29 +1361,117 @@ dsl_string(@nospecialize md::RewriteRule_MD) = string(
     else
         (
             " \\[\n",
-            # For each chiral group:
-            Iterators.flatten(iter_join((
-                tuple(
-                    '{',
-                    # For each axis in the group:
-                    Iterators.flatten(iter_join((
-                        if ax < 5
-                            ('x', 'y', 'z', 'w')[ax]
-                        else
-                            ax
-                        end for ax in c
-                    ), ", "))...,
-                    '}'
-                ) for c in md.symmetry.chiral_groups
-            ), ",\n    "))...,
+
+            # Chiral groups:
+            iter_join_flatten(
+                Iterators.map(md.symmetry.chiral_groups) do cg
+                    return tuple(
+                        '{',
+                        iter_join(
+                            Iterators.map(dsl_string_rewrite_axis, cg),
+                            ", "
+                        )...,
+                        '}'
+                    )
+                end,
+                ",\n    "
+            )...,
+
             # Delimeter between chiral groups and axis choices:
             if !isempty(md.symmetry.grid_axis_choices) && !isempty(md.symmetry.chiral_groups)
                 ",\n    "
             else
                 ""
             end,
-            TODO: #TODO: Axis choices
-            " ]"
+
+            # Axis choices:
+            iter_join_flatten(
+                Iterators.map(md.symmetry.grid_axis_choices) do (perm_data, tail_symmetry)
+                    rule_axes = @view(perm_data[:, 1])
+                    permutations = @view(perm_data[:, 2:end])
+                    is_multi = (length(rule_axes) > 1)
+                    return tuple(
+                        # Header:
+                        if is_multi
+                            tuple(
+                                '(',
+                                iter_join(
+                                    Iterators.map(dsl_string_rewrite_axis, rule_axes),
+                                    ", "
+                                )...,
+                                ')'
+                            )
+                        else
+                            tuple(
+                                dsl_string_rewrite_axis(rule_axes[1])
+                            )
+                        end...,
+                        "[ ",
+
+                        # Elements:
+                        if is_multi
+                            iter_join_flatten(
+                                Iterators.map(1:size(permutations, 2)) do perm_i
+                                    permutation = @view permutations[:, perm_i]
+                                    return tuple(
+                                        '(',
+                                        iter_join(
+                                            Iterators.map(permutation) do grid_dir_int
+                                                return dsl_string_rewrite_signed_axis(grid_dir_int)
+                                            end,
+                                            ", "
+                                        )...,
+                                        ')'
+                                    )
+                                end,
+                                ", "
+                            )
+                        else
+                            iter_join(
+                                Iterators.map(dsl_string_rewrite_signed_axis, permutations),
+                                ", "
+                            )
+                        end...,
+
+                        # Separator between elements and tail symmetry:
+                        if !isempty(permutations) && !isa(tail_symmetry, Union{Nothing, NTuple{2, Nothing}})
+                            ", "
+                        else
+                            ""
+                        end,
+
+                        # Tail symmetries:
+                        if isnothing(tail_symmetry)
+                            tuple()
+                        elseif tail_symmetry isa Int
+                            tuple(
+                                tail_symmetry, "..."
+                            )
+                        elseif tail_symmetry isa NTuple{2, Optional{Int}}
+                            tuple(
+                                if exists(tail_symmetry[1])
+                                    ("-(", tail_symmetry[1], ")...",
+                                     exists(tail_symmetry[2]) ? ", " : "")
+                                else
+                                    ()
+                                end...,
+                                if exists(tail_symmetry[2])
+                                    ("+(", tail_symmetry[2], ")...")
+                                else
+                                    ()
+                                end...
+                            )
+                        else
+                            error("Unhandled: ", typeof(tail_symmetry))
+                        end...,
+
+                        " ]"
+                    )
+                end,
+                ",\n    "
+            )...,
+
+            "\n]"
         )
     end...
 )
@@ -1387,20 +1504,80 @@ dsl_string(@nospecialize op::MarkovOpRewrite) = string(
     end
 )
 
+"Turns an axis name/index into its index"
+function parse_markovjunior_axis_name(loc, inputs::MacroParserInputs, expr)::Int
+    if expr == :x
+        return 1
+    elseif expr == :y
+        return 2
+    elseif expr == :z
+        return 3
+    elseif expr == :w
+        return 4
+    elseif !isa(expr, Integer)
+        raise_parse_error(loc, inputs, "Axis must be a number of one of [ x, y, z, w ]! Got `", expr, "`")
+    elseif expr < 1
+        raise_parse_error(loc, inputs, "Axis must be a 1-based index! Got ", expr)
+    else
+        return convert(Int, expr)
+    end
+end
+"
+Turns a signed axis name (`x`, `-(1)`, `4`, `+z`, etc) into a tuple of axis and sign.
+If no sign is provided, the sign is set to 0.
 
-"Note that Source (lhs) patterns will return a Set as a List, for later processing"
+You can optionally have this return `nothing` when invalid syntax is given (by default it throws an error).
+"
+function parse_markovjunior_axis_signed(loc, inputs::MacroParserInputs, expr,
+                                        error_as_fallback::Bool = true)::Optional{NTuple{2, Int}}
+    if (expr in (:x, :y, :z, :w)) || (expr isa Integer && expr > 0)
+        return (parse_markovjunior_axis_name(loc, inputs, expr), 0)
+    elseif (expr isa Integer) && iszero(expr)
+        raise_parse_error(loc, inputs, "Axis must be a 1-based value!")
+    elseif (expr isa Integer) # Must be negative
+        raise_parse_error(loc, inputs, "Signed axis syntax requires parentheses, e.g. `+(3)` instead of `+3`")
+    elseif @capture(expr, -(a_Integer))
+        return (a, -1)
+    elseif @capture(expr, +(a_Integer))
+        return (a, +1)
+    elseif @capture(expr, -(x))
+        return (1, -1)
+    elseif @capture(expr, -(y))
+        return (2, -1)
+    elseif @capture(expr, -(z))
+        return (3, -1)
+    elseif @capture(expr, -(w))
+        return (4, -1)
+    elseif @capture(expr, +(x))
+        return (1, +1)
+    elseif @capture(expr, +(y))
+        return (2, +1)
+    elseif @capture(expr, +(z))
+        return (3, +1)
+    elseif @capture(expr, +(w))
+        return (4, +1)
+    elseif error_as_fallback
+        raise_parse_error(loc, inputs, "Unexpected syntax: `", expr, "`")
+    else
+        nothing
+    end
+end
+
+"Note that Source (lhs) patterns will return a Set as a List, to preserve input order for later processing"
 function parse_markovjunior_rewrite_rule_strip_side(inputs::MacroParserInputs, loc, expr,
-                                                    isSource::Bool)::Vector
-    push!(inputs.op_stack_trace, isSource ? "Left-hand side" : "Right-hand side")
+                                                    is_source::Bool)::Vector
+    push!(inputs.op_stack_trace, is_source ? "Left-hand side" : "Right-hand side")
     try
         try_lookup_char(c::Char)::Union{RewriteRuleCellSource, RewriteRuleCellDest{Int}} = if haskey(CELL_CODE_BY_CHAR, c)
             CELL_CODE_BY_CHAR[c]
         elseif c == '_'
             RewriteRuleCell_Wildcard()
         else
-            raise_parse_error(loc, inputs,
-                           "Unsupported color value '", c, "'! Supported are ",
-                           "[ ", iter_join(keys(CELL_CODE_BY_CHAR), ", ")..., " ]")
+            raise_parse_error(
+                loc, inputs,
+                "Unsupported color value '", c, "'! Supported are '_' and ",
+                  "[ ", iter_join(keys(CELL_CODE_BY_CHAR), ", ")..., " ]"
+            )
         end
 
         # The complex sequence of pixel rules ultimately turns into a series of binary operators --
@@ -1452,11 +1629,11 @@ function parse_markovjunior_rewrite_rule_strip_side(inputs::MacroParserInputs, l
                     return RewriteRuleCell_List(Tuple(try_lookup_char.(simple_repr[2])))
                 else
                     raise_parse_error(loc, inputs,
-                                   "Invalid nested syntax in ", isSource ? "Source" : "Dest",
+                                   "Invalid nested syntax in ", is_source ? "Source" : "Dest",
                                      " part of rule!")
                 end
             elseif (simple_repr isa Pair) && (simple_repr[1] == :set)
-                if isSource
+                if is_source
                     raise_parse_error(loc, inputs, "'Set' syntax (`{RGB}`) not allowed on the Source side")
                 end
 
@@ -1465,7 +1642,7 @@ function parse_markovjunior_rewrite_rule_strip_side(inputs::MacroParserInputs, l
                     return RewriteRuleCell_Set(simple_repr[2]...)
                 else
                     raise_parse_error(loc, inputs,
-                                   "Invalid nested syntax in ", isSource ? "Source" : "Dest",
+                                   "Invalid nested syntax in ", is_source ? "Source" : "Dest",
                                      " part of rule!")
                 end
             elseif (simple_repr isa Pair) && (simple_repr[1] == :ref)
@@ -1493,48 +1670,15 @@ function parse_markovjunior_rewrite_rule_strip_symmetry(inputs::MacroParserInput
     try
         s_explicit = GridDir[ ]
         s_tail::RewriteRule_TailSymmetry = nothing
-        function get_axis(a)::Int
-            if a isa Symbol
-                if a == :x
-                    return 1
-                elseif a == :y
-                    return 2
-                elseif a == :z
-                    return 3
-                elseif a == :w
-                    return 4
-                else
-                    raise_parse_error(loc, inputs, "Invalid axis token `a`")
-                end
-            elseif a isa Integer
-                if a == 0
-                    raise_parse_error(loc, inputs, "Symmetry axes (and all other indices in Julia) are 1-based!")
-                elseif a < 0
-                    raise_parse_error(loc, inputs, "Invalid symmetry axis: expected 1 or greater; got ", a)
-                else
-                    return convert(Int, a)
-                end
-            else
-                raise_parse_error(loc, inputs, "Unsupported symmetry entry: ", typeof(a))
-            end
-        end
+        get_axis(a) = parse_markovjunior_axis_name(loc, inputs, a)
         for expr in exprs
             if @capture(expr, a_...)
                 # Get the axis and optional sign.
-                (axis, dir) = if a isa Int
-                    (get_axis(a), nothing)
-                elseif @capture(a, +(b_))
-                    (get_axis(b), +1)
-                elseif @capture(a, -(b_))
-                    (get_axis(b), -1)
-                else
-                    raise_parse_error(loc, inputs,
-                                      "Expected `a...` or `+(a)...` or `-(a)...`; got `", a, "`")
-                end
+                (axis, dir) = parse_markovjunior_axis_signed(loc, inputs, a)
 
                 # Incorporate the symmetry tail.
                 if isnothing(s_tail)
-                    if isnothing(dir)
+                    if dir == 0
                         s_tail = axis
                     elseif dir == -1
                         s_tail = (axis, nothing)
@@ -1565,14 +1709,14 @@ function parse_markovjunior_rewrite_rule_strip_symmetry(inputs::MacroParserInput
                 else
                     error("Unhandled: ", axis, "/", dir, "/", sprint(io -> dump(io, a, maxdepth=100)))
                 end
-            elseif @capture(expr, +a_)
-                push!(s_explicit, GridDir(get_axis(a), 1))
-            elseif @capture(expr, -a_)
-                push!(s_explicit, GridDir(get_axis(a), -1))
             else
-                axis = get_axis(expr)
-                push!(s_explicit, GridDir(axis, -1))
-                push!(s_explicit, GridDir(axis, 1))
+                (axis, dir) = parse_markovjunior_axis_signed(loc, inputs, expr)
+                if dir in -1:0
+                    push!(s_explicit, GridDir(axis, -1))
+                end
+                if dir in 0:1
+                    push!(s_explicit, GridDir(axis, 1))
+                end
             end
         end
 
@@ -1734,8 +1878,447 @@ function parse_markovjunior_rewrite_rule_strip(inputs::MacroParserInputs, loc, e
     end
 end
 
-function parse_markovjunior_rewrite_rules_strip(inputs::MacroParserInputs, loc, expr
-                                               )::Tuple{AbstractMarkovRewritePriority, Tuple{Vararg{RewriteRule_Strip}}}
+"Note that Source (lhs) patterns will return a Set as a List, to preserve input order for later processing"
+function parse_markovjunior_rewrite_rule_md_side(inputs::MacroParserInputs,
+                                                 loc, expr,
+                                                 is_source::Bool
+                                                )::Array
+    with_parser_stacktrace(inputs,
+                           is_source ?
+                             "Left-hand side (multi-dimensional)" :
+                             "Right-hand side (multi-dimensional)") do
+        function lookup_char(c::Char, allow_wildcard::Bool)::Union{RewriteRuleCellSource, RewriteRuleCellDest{<:Tuple{Vararg{Int}}}}
+            if haskey(CELL_CODE_BY_CHAR, c)
+                CELL_CODE_BY_CHAR[c]
+            elseif allow_wildcard && (c == '_')
+                RewriteRuleCell_Wildcard()
+            else
+                raise_parse_error(
+                    loc, inputs,
+                    "Unsupported color value '", c, "'! Supported are ",
+                    allow_wildcard ? "'_' and " : "",
+                    "[ ", iter_join(keys(CELL_CODE_BY_CHAR), ", ")..., " ]"
+                )
+            end
+        end
+        function lookup_cell(cell_expr, pos)::Union{RewriteRuleCellSource, RewriteRuleCellDest{<:Tuple{Vararg{Int}}}}
+            with_parser_stacktrace(inputs, "Cell $pos: `$cell_expr`") do
+                return if @capture(cell_expr, {a_Symbol})
+                    if is_source
+                        raise_parse_error(loc, inputs,
+                                          "Set syntax not allowed on the Source side -- use List syntax instead")
+                    else
+                        RewriteRuleCell_Set(string(a)...)
+                    end
+                elseif @capture(cell_expr, [a_Symbol])
+                    RewriteRuleCell_List(Tuple(
+                        lookup_char.(Iterators.map(identity, string(a)), Ref(false))
+                    ))
+                elseif cell_expr isa Symbol
+                    cell_str = string(cell_expr)
+                    if length(cell_str) != 1
+                        raise_parse_error(loc, inputs,
+                                          "Color char '", cell_str,
+                                            "' should be one text character; got ", length(cell_str))
+                    else
+                        lookup_char(cell_str[1], true)
+                    end
+                elseif @capture(cell_expr, [a__])
+                    if any(!isa(i, Int) for i in a)
+                        raise_parse_error(loc, inputs,
+                                          "Lookup index should be made of integers; got ", typeof.(a))
+                    else
+                        RewriteRuleCell_Lookup(Tuple(a))
+                    end
+                else
+                    raise_parse_error(loc, inputs, "Unsupported syntax! `", cell_expr, "`")
+                end
+            end
+        end
+
+        # There are three kinds of multi-dimensional array literals:
+        #  hcat (1D array) -- expr args are just the elements.
+        #  vcat (2D array) -- expr args are each (head=:row, args=[ (values in this row....) ])
+        #  ncat (3+D array) -- expr args are recursively (head=:ncat, args=[ dim, slice_exprs... ])
+        #                        until getting to a 2D slice (head=:nrow, args=[ 1, row_exprs... ])
+        #                        and each row is (head=:row, args=[ elements... ])
+        as_array = if Base.isexpr(expr, :hcat)
+            # This snippet would normally generate a Vector,
+            #    so make it a 1-row Matrix with 'permutedims()'.
+            permutedims(lookup_cell.(expr.args, 1:length(expr.args)))
+        elseif Base.isexpr(expr, :vcat)
+            rows = (row_e -> row_e.args).(expr.args)
+            raw_matrix = stack(rows, dims=1)
+            lookup_cell.(raw_matrix, (c -> c.I).(CartesianIndices(raw_matrix)))
+        elseif Base.isexpr(expr, :ncat)
+            # Recursively stack rows, matrices, etc.
+            function stack_arrays(slice_expr, pos::Tuple{Vararg{Int}})
+                if Base.isexpr(slice_expr, :row)
+                    # Note that these position tuples will treat X as the first axis,
+                    #    which is fine as they're only used for logging errors to the user.
+                    poses = (i -> (i, pos...)).(1:length(slice_expr.args))
+                    return lookup_cell.(slice_expr.args, poses)
+                elseif Base.isexpr(slice_expr, :nrow)
+                    if isempty(slice_expr.args) || (slice_expr.args[1] != 1)
+                        raise_parse_error(loc, inputs,
+                            "Unexpected syntax format: :ncat/:nrow has ",
+                            if isempty(slice_expr.args)
+                                "no arguments"
+                            else
+                                "as its first argument `$(slice_expr.args[1])`"
+                            end
+                        )
+                    end
+                    elements = @view slice_expr.args[2:end]
+                    poses = (i -> (i, pos...)).(1:length(elements))
+                    return stack(stack_arrays.(elements, poses), dims=1)
+                elseif Base.isexpr(slice_expr, :ncat)
+                    if isempty(slice_expr.args) || !isa(slice_expr.args[1], Int)
+                        raise_parse_error(loc, inputs,
+                            "Unexpected syntax format: :ncat has ",
+                            if isempty(slice_expr.args)
+                                "no arguments"
+                            else
+                                "as its first argument `$(slice_expr.args[1])`"
+                            end
+                        )
+                    end
+                    elements = @view slice_expr.args[2:end]
+                    poses = (i -> (i, pos...)).(1:length(elements))
+                    return stack(stack_arrays.(elements, poses))
+                else
+                    raise_parse_error(loc, inputs,
+                      "Unexpected syntax within :ncat, at slice ", pos, " -- ",
+                      isa(slice_expr, Expr) ?
+                        ":$(slice_expr.head)" :
+                        "$(typeof(slice_expr))($slice_expr)"
+                    )
+                end
+            end
+            stack_arrays(expr, ())
+        else
+            error("Unexpected mode: ", expr)
+        end
+
+        # Swap the first two axes, so that column (X) is the first instead of the second.
+        # Note that 'list' rewrite cells do not need to be updated,
+        #    as they are written assuming X as the first axis.
+        # Also note that 1D arrays here will actually be a 1xN matrix, which still should do this
+        as_array = permutedims(as_array, (2, 1, (3:ndims(as_array))...))
+
+        return as_array
+    end
+end
+function parse_markovjunior_rewrite_rule_md_symmetry(inputs::MacroParserInputs,
+                                                     loc, exprs)::RewriteRule_MD_Symmetry_Definition
+    # If no symmetry is given at all, then support all symmetries.
+    if isnothing(exprs)
+        return RewriteRule_MD_Symmetry_Definition()
+    end
+
+    with_parser_stacktrace(inputs, "symmetry statement") do
+        s_permutations = Vector{Pair{Matrix{Int}, RewriteRule_TailSymmetry}}()
+        s_chiralities = Vector{Set{Int}}()
+        for expr in exprs
+            # Look for a chirality statement.
+            if @capture(expr, {chirality__})
+                with_parser_stacktrace(inputs, "chirality statement $(length(s_chiralities) + 1)") do
+                    new_axes = parse_markovjunior_axis_name.(Ref(loc), Ref(inputs), chirality)
+                    unique_new_axes = Set(new_axes)
+                    # I considered making it an error if there are redundant axes in this set,
+                    #    but decided to prioritize usability over correctness.
+                    if !isempty(unique_new_axes)
+                        push!(s_chiralities, unique_new_axes)
+                    end
+                end
+            # Look for a single-rule-axis statement.
+            elseif @capture(expr, axis_Symbol[ values__ ])
+                with_parser_stacktrace(inputs, "rule axis `$axis`") do
+                    rule_axis = parse_markovjunior_axis_name(loc, inputs, axis)
+
+                    # Parse out the normal permutations.
+                    n_explicit_permutations = 0
+                    grid_axes = map(values) do value_expr
+                        if @capture(value_expr, iv_...)
+                            Val(:tail) => parse_markovjunior_axis_signed(loc, inputs, iv)
+                        else
+                            (a, s) = parse_markovjunior_axis_signed(loc, inputs, value_expr)
+                            n_explicit_permutations += 1
+                            if s == 0
+                                n_explicit_permutations += 1
+                            end
+                            (a, s)
+                        end
+                    end
+                    permutation_matrix = fill(0,    1, n_explicit_permutations + 1)
+                    permutation_matrix[1, 1] = rule_axis
+                    n_written_permutations = 0
+                    for element in grid_axes
+                        if !isa(element, Pair{Val{:tail}})
+                            (grid_axis, grid_sign) = element
+                            if grid_sign in -1:0
+                                n_written_permutations += 1
+                                permutation_matrix[1, n_written_permutations + 1] = -grid_axis
+                            end
+                            if grid_sign in 0:1
+                                n_written_permutations += 1
+                                permutation_matrix[1, n_written_permutations + 1] = grid_axis
+                            end
+                        end
+                    end
+
+                    # Extract tail symmetries.
+                    tail_symmetry::NTuple{2, Optional{Int}} = (nothing, nothing)
+                    for element in grid_axes
+                        if element isa Pair{Val{:tail}}
+                            (grid_axis, grid_sign) = element[2]
+                            # Get the sign(s) covered by this tail symmetry,
+                            #    and the index of each sign in the output.
+                            signs::Tuple = if grid_sign == -1
+                                tuple(1 => -1)
+                            elseif grid_sign == 1
+                                tuple(2 => 1)
+                            elseif grid_sign == 0
+                                tuple(1 => -1, 2 => 1)
+                            else
+                                error("Unhandled: ", element[2])
+                            end
+
+                            # Apply each sign.
+                            for (s_i, grid_single_sign) in signs
+                                if exists(tail_symmetry[s_i])
+                                    raise_parse_error(
+                                        loc, inputs,
+                                        "Conflicting tail symmetries given (second one is axis ",
+                                          grid_axis, ")"
+                                    )
+                                else
+                                    @set! tail_symmetry[s_i] = grid_axis
+                                end
+                            end
+                        end
+                    end
+                    # Simplify the data representation of tail symmetry.
+                    tail_symmetry = if all(isnothing, tail_symmetry)
+                        nothing
+                    elseif ==(tail_symmetry...)
+                        tail_symmetry[1]
+                    else
+                        tail_symmetry
+                    end
+
+                    push!(s_permutations, permutation_matrix => tail_symmetry)
+                end
+            # Look for a multi-rule-axis statement.
+            elseif @capture(expr, rules_[ perms__ ]) && Base.isexpr(rules, :tuple)
+                with_parser_stacktrace(inputs, "rule axes `$rules`") do
+                    rule_axes::Vector{Int} = parse_markovjunior_axis_name.(Ref(loc), Ref(inputs), rules.args)
+                    n_rule_axes = length(rule_axes)
+
+                    # Each permutation given by the user can turn into one or more "real" permutations,
+                    #    if they reference grid axes without giving a sign.
+                    real_perms::Vector{Vector{Int}} = collect(Iterators.flatten(Iterators.map(perms) do perm_expr
+                        with_parser_stacktrace(inputs, "Permutation $perm_expr") do
+                            if Base.isexpr(perm_expr, :tuple)
+                                perm_axes = parse_markovjunior_axis_signed.(Ref(loc), Ref(inputs), perm_expr.args)
+                                if length(perm_axes) != n_rule_axes
+                                    raise_parse_error(loc, inputs,
+                                                      "Expected one element for each rule axis (",
+                                                        n_rule_axes, "), got ",
+                                                        length(perm_axes))
+                                end
+
+                                signed_output_perms = [ perm_axes ]
+                                signed_perm_i = 1
+                                while signed_perm_i <= length(signed_output_perms)
+                                    signed_perm::Vector = signed_output_perms[signed_perm_i]
+                                    for perm_axis_i in 1:length(signed_perm)
+                                        (i_axis, i_sign) = signed_perm[perm_axis_i]
+                                        if i_sign == 0
+                                            signed_perm2 = copy(signed_perm)
+                                            insert!(signed_output_perms, signed_perm_i + 1, signed_perm2)
+
+                                            signed_perm[perm_axis_i] = (i_axis, -1)
+                                            signed_perm2[perm_axis_i] = (i_axis, 1)
+
+                                            signed_perm_i -= 1
+                                            break
+                                        end
+                                    end
+
+                                    signed_perm_i += 1
+                                end
+
+                                # Convert each permutation from tuple(axis, sign) to a signed integer.
+                                return map(signed_output_perms) do perm
+                                    return map(a -> a[1] * a[2], perm)
+                                end
+                            else
+                                raise_parse_error(loc, inputs, "Expected a tuple of grid axes")
+                            end
+                        end
+                    end))
+
+                    # Build the properly-formatted permutation matrix.
+                    n_permutations = length(real_perms)
+                    permutation_matrix = fill(0, n_rule_axes, n_permutations + 1)
+                    permutation_matrix[:, 1] = rule_axes
+                    for perm_i in 1:n_permutations
+                        permutation_matrix[:, perm_i + 1] = real_perms[perm_i]
+                    end
+
+                    # Note that multi-axis statements can't have a tail symmetry.
+                    push!(s_permutations, permutation_matrix => nothing)
+                end
+            else
+                raise_parse_error(
+                    loc, inputs,
+                    "Unexpected syntax: `", expr, "`! Expected one of: ",
+                      "axis permutations (`x[ y, -z, +w... ]`), ",
+                      "multi-axis permutations (`(x, z)[ (+x, +y) ]`), ",
+                      "and chirality constraints (`{x, y, z}`)"
+                )
+            end
+        end
+
+        RewriteRule_MD_Symmetry_Definition(s_permutations, s_chiralities)
+    end
+end
+function parse_markovjunior_rewrite_rule_md(inputs::MacroParserInputs, loc, expr)
+    with_parser_stacktrace(inputs, "Block rewrite rule") do
+        if !@capture(expr, lhsExpr_ => b_)
+            raise_parse_error(loc, inputs, "Invalid format; expected `src => dest [modifiers]`")
+        end
+
+        # Strip out the modifiers.
+        # NOTE: MacroTools has a bug where the | operator doesn't work.
+        weightMulScalar = nothing
+        weightDivScalar = nothing
+        symmetryExprs = nothing
+        maskExpr = nothing
+        @capture(    b, c_ % maskExpr_ * weightMulScalar_Real \[ symmetryExprs__ ]) ||
+            @capture(b, c_ % maskExpr_ / weightDivScalar_Real \[ symmetryExprs__ ]) ||
+            @capture(b, c_ % maskExpr_ \ [ symmetryExprs__ ]) ||
+            @capture(b, c_ % maskExpr_ * weightMulScalar_Real) ||
+            @capture(b, c_ % maskExpr_ / weightDivScalar_Real) ||
+            @capture(b, c_ * weightMulScalar_Real \[ symmetryExprs__ ]) ||
+            @capture(b, c_ / weightDivScalar_Real \[ symmetryExprs__ ]) ||
+            @capture(b, c_ \[ symmetryExprs__ ]) ||
+            @capture(b, c_ * weightMulScalar_Real) ||
+            @capture(b, c_ / weightDivScalar_Real) ||
+            @capture(b, c_ % maskExpr_) ||
+            (c = b)
+        rhsExpr = c
+
+        # Parse the modifiers.
+        weight = convert(Float32, if exists(weightMulScalar)
+            @bp_check(isnothing(weightDivScalar))
+            weightMulScalar
+        elseif exists(weightDivScalar)
+            1 / convert(Float64, weightDivScalar)
+        else
+            1
+        end)
+        mask = if @capture(maskExpr, maskAExpr_Real:maskBExpr_Real)
+            convert.(Ref(Float32), (maskAExpr, maskBExpr))
+        elseif maskExpr isa Real
+            convert(Float32, maskExpr)
+        elseif isnothing(maskExpr)
+            nothing
+        else
+            raise_parse_error(loc, inputs, "Expected mask to be `%x` or `%(x:y)`; got `%$maskExpr`")
+        end
+        symmetry_def = parse_markovjunior_rewrite_rule_md_symmetry(inputs, loc, symmetryExprs)
+
+        # Parse the rule.
+        lhs = parse_markovjunior_rewrite_rule_md_side(inputs, loc, lhsExpr, true)
+        rhs = parse_markovjunior_rewrite_rule_md_side(inputs, loc, rhsExpr, false)
+
+        # Post-process and validate the rule.
+        if size(lhs) != size(rhs)
+            raise_parse_error(loc, inputs,
+                              "Source block is ", iter_join(size(lhs), "x")...,
+                                " while Dest block is ", iter_join(size(rhs), "x")...)
+        end
+        for ci::CartesianIndex in CartesianIndices(lhs)
+            # If source cell was parsed as a list, remake it as a Set.
+            # This reorders its elements, so if the destination is also a List then it needs to be reordered too.
+            if lhs[ci] isa RewriteRuleCell_List
+                if rhs[ci] isa RewriteRuleCell_List
+                    if length(lhs[ci]) != length(rhs[ci])
+                        raise_parse_error(loc, inputs,
+                                          "Destination cell ", Tuple(ci), " is a list of ",
+                                           length(rhs[ci]), " elements, but its Source cell has ",
+                                           length(lhs[ci]), " elements instead")
+                    else
+                        lhs_to_rhs = Dict{UInt8, UInt8}(
+                            L => R for (L, R) in zip(lhs[ci], rhs[ci])
+                        )
+                        lhs[ci] = RewriteRuleCell_Set(lhs[ci]...)
+                        rhs[ci] = RewriteRuleCell_List(Tuple(lhs_to_rhs[L] for L in lhs[ci]))
+                    end
+                else
+                    lhs[ci] = RewriteRuleCell_Set(lhs[ci]...)
+                end
+            end
+
+            # If dest cell is a list, the source cell must be too (at this point actually a Set).
+            if (rhs[ci] isa RewriteRuleCell_List) && !isa(lhs[ci], RewriteRuleCell_Set)
+                raise_parse_error(loc, inputs,
+                                  "Destination Cell ", Tuple(ci),
+                                   " is a list, but its Source cell is not!")
+            end
+
+            # If dest cell references a source cell, that reference must be valid.
+            if rhs[ci] isa RewriteRuleCell_Lookup{<:Tuple{Vararg{Int}}}
+                source_idx = rhs[ci].source_idx
+                if (length(source_idx) != ndims(lhs)) || any(!in(source_idx[n], 1:size(lhs, n))   for n in ndims(lhs))
+                    raise_parse_error(loc, inputs,
+                                      "Destination cell ", Tuple(ci),
+                                        " references invalid source cell at ", source_idx)
+                end
+            end
+        end
+
+        # Make sure symmetry data is well-defined.
+        #   * Rule axes aren't mentioned more than once.
+        mentioned_rule_axes = fill(false, ndims(lhs))
+        for (choice_set, tail_symmetry) in symmetry_def.grid_axis_choices
+            for rule_axis in @view choice_set[:, 1]
+                if mentioned_rule_axes[rule_axis]
+                    raise_parse_error(loc, inputs,
+                                      "More than one symmetry expression covers rule axis ",
+                                      if rule_axis < 5
+                                        ('x', 'y', 'z', 'w')[rule_axis]
+                                      else
+                                        rule_axis
+                                      end)
+                else
+                    mentioned_rule_axes[rule_axis] = true
+                end
+            end
+        end
+
+        #TODO: Find symmetric axes (watch out for Lookup cells that reference one side!) and eliminate redundant explicit+tail-symmetrt options
+
+        return RewriteRule_MD(
+            collect(
+                RewriteCell_MD{ndims(lhs)},
+                Iterators.map(tuple, lhs, rhs)
+            ),
+            mask, weight,
+            symmetry_def
+        )
+    end
+end
+
+function parse_markovjunior_rewrite_rules(inputs::MacroParserInputs, loc, expr
+                                         )::Tuple{AbstractMarkovRewritePriority, Tuple{Vararg{Union{RewriteRule_Strip, RewriteRule_MD}}}}
+    parse_rule_expr(inner_loc, line) = if @capture(expr, a_ => b_) && any(Base.isexpr(a, n) for n in (:hcat, :vcat, :ncat)) 
+        parse_markovjunior_rewrite_rule_md(inputs, inner_loc, line)
+    else
+        parse_markovjunior_rewrite_rule_strip(inputs, inner_loc, line)
+    end
     if Base.isexpr(expr, :block)
         outputs = Vector{RewriteRule_Strip}()
         priority = Ref{Optional{AbstractMarkovRewritePriority}}(nothing)
@@ -1757,14 +2340,13 @@ function parse_markovjunior_rewrite_rules_strip(inputs::MacroParserInputs, loc, 
                     end
                 end
             else
-                push!(outputs, parse_markovjunior_rewrite_rule_strip(inputs, inner_loc, line))
+                push!(outputs, parse_rule_expr(inner_loc, line))
             end
         end
         return (something(priority[], MarkovRewritePriority_Everything()),
                 Tuple(outputs))
     else
-        (MarkovRewritePriority_Everything(),
-         tuple(parse_markovjunior_rewrite_rule_strip(inputs, loc, expr)))
+        (MarkovRewritePriority_Everything(), tuple(parse_rule_expr(loc, expr)))
     end
 end
 function parse_markovjunior_op(::Val{Symbol("@rewrite")},
@@ -1779,7 +2361,7 @@ function parse_markovjunior_op(::Val{Symbol("@rewrite")},
     if length(args) == 3
         with_parsed_markovjunior_bias_statement(inputs, loc, args[3]) do biases
             return MarkovOpRewrite(
-                parse_markovjunior_rewrite_rules_strip(inputs, loc, args[2])...,
+                parse_markovjunior_rewrite_rules(inputs, loc, args[2])...,
                 parse_markovjunior_threshold(inputs, loc, args[1]),
                 Tuple(biases)
             )
@@ -1787,14 +2369,14 @@ function parse_markovjunior_op(::Val{Symbol("@rewrite")},
     elseif length(args) == 2
         if check_markovjunior_threshold_appearance(args[1])
             return MarkovOpRewrite(
-                parse_markovjunior_rewrite_rules_strip(inputs, loc, args[2])...,
+                parse_markovjunior_rewrite_rules(inputs, loc, args[2])...,
                 parse_markovjunior_threshold(inputs, loc, args[1]),
                 ()
             )
         else
             with_parsed_markovjunior_bias_statement(inputs, loc, args[2]) do biases
                 return MarkovOpRewrite(
-                    parse_markovjunior_rewrite_rules_strip(inputs, loc, args[1])...,
+                    parse_markovjunior_rewrite_rules(inputs, loc, args[1])...,
                     nothing,
                     Tuple(biases)
                 )
@@ -1802,7 +2384,7 @@ function parse_markovjunior_op(::Val{Symbol("@rewrite")},
         end
     elseif length(args) == 1
         return MarkovOpRewrite(
-            parse_markovjunior_rewrite_rules_strip(inputs, loc, args[1])...,
+            parse_markovjunior_rewrite_rules(inputs, loc, args[1])...,
             nothing,
             ()
         )

@@ -66,9 +66,45 @@ const BIG_TEST = @markovjunior 3 'R' begin
             G => Y *2
         end temperature(0.4)
     end temperature(0.9)
+
+    # Next op is 25
+    @rewrite [ [Rw] _ B ] => [ R G w ]
+    @rewrite [ R G B
+               w g b
+             ] => [
+                _ _ _
+                _ _ _
+             ]
+    @rewrite [
+        R G B
+        w g b
+      ] => [
+        _ _ _
+        _ _ _
+      ] %0.1 /2 \[
+        {x, y, z}
+    ]
+    @rewrite(
+        [ R G B
+          w g b ;;;
+          M T O
+          [MTO] R R
+        ] => [
+          [1, 2, 1] [1, 2, 2] [2, 1, 1]
+          [2, 1, 1] [3, 2, 2] [3, 2, 2] ;;;
+          {RGB} {MTO} {wgb}
+          [RGB]      G     B
+        ] \[
+            x[ +y, +z... ],
+            (2, z)[ (+(1), -(3)), (-(3), +(1)) ]
+        ]
+    )
 end
+
+const CELL_CODE = MJ.CELL_CODE_BY_CHAR
+const WILDCARD = MJ.RewriteRuleCell_Wildcard()
 const BIG_TEST_ANSWER = MJ.MarkovAlgorithm(
-    MJ.CELL_CODE_BY_CHAR['R'],
+    CELL_CODE['R'],
     3, 3,
 
     Pair{Symbol, Vector{Any}}[
@@ -82,7 +118,7 @@ const BIG_TEST_ANSWER = MJ.MarkovAlgorithm(
             tuple(
                 MJ.RewriteRule_Strip(
                     tuple(
-                        (MJ.CELL_CODE_BY_CHAR['R'], MJ.CELL_CODE_BY_CHAR['G'])
+                        (CELL_CODE['R'], CELL_CODE['G'])
                     ),
                     nothing, 1.0f0,
                     MJ.GridDir[ MJ.GridDir(1, 1) ], nothing
@@ -96,9 +132,9 @@ const BIG_TEST_ANSWER = MJ.MarkovAlgorithm(
             tuple(
                 MJ.RewriteRule_Strip(
                     tuple(
-                        (MJ.CELL_CODE_BY_CHAR['R'], MJ.CELL_CODE_BY_CHAR['b']),
-                        (MJ.CELL_CODE_BY_CHAR['G'], MJ.CELL_CODE_BY_CHAR['g']),
-                        (MJ.CELL_CODE_BY_CHAR['B'], MJ.CELL_CODE_BY_CHAR['w'])
+                        (CELL_CODE['R'], CELL_CODE['b']),
+                        (CELL_CODE['G'], CELL_CODE['g']),
+                        (CELL_CODE['B'], CELL_CODE['w'])
                     ),
                     nothing, 1.0f0,
                     MJ.GridDir[ ], 1
@@ -112,7 +148,7 @@ const BIG_TEST_ANSWER = MJ.MarkovAlgorithm(
             tuple(
                 MJ.RewriteRule_Strip(
                     tuple(
-                        (MJ.CELL_CODE_BY_CHAR['R'], MJ.CELL_CODE_BY_CHAR['G'])
+                        (CELL_CODE['R'], CELL_CODE['G'])
                     ),
                     nothing, 1.0f0,
                     MJ.GridDir[ MJ.GridDir(1, 1) ], nothing
@@ -126,7 +162,7 @@ const BIG_TEST_ANSWER = MJ.MarkovAlgorithm(
             tuple(
                 MJ.RewriteRule_Strip(
                     tuple(
-                        (MJ.CELL_CODE_BY_CHAR['R'], MJ.RewriteRuleCell_Wildcard())
+                        (CELL_CODE['R'], WILDCARD)
                     ),
                     nothing, 1.0f0,
                     MJ.GridDir[ MJ.GridDir(1, 1) ], nothing
@@ -140,7 +176,7 @@ const BIG_TEST_ANSWER = MJ.MarkovAlgorithm(
             tuple(
                 MJ.RewriteRule_Strip(
                     tuple(
-                        (MJ.RewriteRuleCell_Wildcard(), MJ.CELL_CODE_BY_CHAR['R'])
+                        (WILDCARD, CELL_CODE['R'])
                     ),
                     nothing, 1.0f0,
                     MJ.GridDir[ MJ.GridDir(1, 1) ], nothing
@@ -154,9 +190,9 @@ const BIG_TEST_ANSWER = MJ.MarkovAlgorithm(
             tuple(
                 MJ.RewriteRule_Strip(
                     tuple(
-                        (MJ.CELL_CODE_BY_CHAR['R'], MJ.RewriteRuleCell_Lookup{Int}(2)),
-                        (MJ.CELL_CODE_BY_CHAR['G'], MJ.RewriteRuleCell_Wildcard()),
-                        (MJ.CELL_CODE_BY_CHAR['B'], MJ.RewriteRuleCell_Lookup{Int}(1))
+                        (CELL_CODE['R'], MJ.RewriteRuleCell_Lookup{Int}(2)),
+                        (CELL_CODE['G'], WILDCARD),
+                        (CELL_CODE['B'], MJ.RewriteRuleCell_Lookup{Int}(1))
                     ),
                     nothing, 1.0f0,
                     MJ.GridDir[ ], 1
@@ -172,16 +208,16 @@ const BIG_TEST_ANSWER = MJ.MarkovAlgorithm(
             tuple(
                 MJ.RewriteRule_Strip(
                     tuple(
-                        (MJ.CELL_CODE_BY_CHAR['R'], MJ.CELL_CODE_BY_CHAR['b']),
+                        (CELL_CODE['R'], CELL_CODE['b']),
                         (
                             MJ.RewriteRuleCell_Set('w', 'G'),
                             MJ.RewriteRuleCell_List((
-                                MJ.CELL_CODE_BY_CHAR['R'],
-                                MJ.CELL_CODE_BY_CHAR['M']
+                                CELL_CODE['R'],
+                                CELL_CODE['M']
                             ))
                         ),
                         (
-                            MJ.CELL_CODE_BY_CHAR['B'],
+                            CELL_CODE['B'],
                             MJ.RewriteRuleCell_Set('w', 'g', 'b')
                         )
                     ),
@@ -197,9 +233,9 @@ const BIG_TEST_ANSWER = MJ.MarkovAlgorithm(
             tuple(
                 MJ.RewriteRule_Strip(
                     tuple(
-                        (MJ.RewriteRuleCell_Wildcard(), MJ.RewriteRuleCell_Lookup{Int}(1)),
-                        (MJ.RewriteRuleCell_Wildcard(), MJ.RewriteRuleCell_Lookup{Int}(3)),
-                        (MJ.RewriteRuleCell_Wildcard(), MJ.RewriteRuleCell_Lookup{Int}(2))
+                        (WILDCARD, MJ.RewriteRuleCell_Lookup{Int}(1)),
+                        (WILDCARD, MJ.RewriteRuleCell_Lookup{Int}(3)),
+                        (WILDCARD, MJ.RewriteRuleCell_Lookup{Int}(2))
                     ),
                     nothing, 2.0f0,
                     MJ.GridDir[ ], 1
@@ -220,7 +256,7 @@ const BIG_TEST_ANSWER = MJ.MarkovAlgorithm(
                         (
                             MJ.RewriteRuleCell_Set('G'),
                             MJ.RewriteRuleCell_List(tuple(
-                                MJ.CELL_CODE_BY_CHAR['M']
+                                CELL_CODE['M']
                             ))
                         )
                     ),
@@ -238,7 +274,7 @@ const BIG_TEST_ANSWER = MJ.MarkovAlgorithm(
             tuple(
                 MJ.RewriteRule_Strip(
                     tuple(
-                        (MJ.CELL_CODE_BY_CHAR['R'], MJ.CELL_CODE_BY_CHAR['G'])
+                        (CELL_CODE['R'], CELL_CODE['G'])
                     ),
                     0.1f0, 1.0f0,
                     MJ.GridDir[ MJ.GridDir(1, 1) ], nothing
@@ -252,7 +288,7 @@ const BIG_TEST_ANSWER = MJ.MarkovAlgorithm(
             tuple(
                 MJ.RewriteRule_Strip(
                     tuple(
-                        (MJ.CELL_CODE_BY_CHAR['R'], MJ.CELL_CODE_BY_CHAR['G'])
+                        (CELL_CODE['R'], CELL_CODE['G'])
                     ),
                     0.2f0, 3.5f0,
                     MJ.GridDir[ MJ.GridDir(1, 1) ], nothing
@@ -266,7 +302,7 @@ const BIG_TEST_ANSWER = MJ.MarkovAlgorithm(
             tuple(
                 MJ.RewriteRule_Strip(
                     tuple(
-                        (MJ.CELL_CODE_BY_CHAR['R'], MJ.CELL_CODE_BY_CHAR['G'])
+                        (CELL_CODE['R'], CELL_CODE['G'])
                     ),
                     0.3f0, convert(Float32, 1 / 4.1),
                     MJ.GridDir[ MJ.GridDir(1, 1) ], nothing
@@ -282,8 +318,8 @@ const BIG_TEST_ANSWER = MJ.MarkovAlgorithm(
             tuple(
                 MJ.RewriteRule_Strip(
                     tuple(
-                        (MJ.CELL_CODE_BY_CHAR['R'], MJ.CELL_CODE_BY_CHAR['G']),
-                        (MJ.CELL_CODE_BY_CHAR['M'], MJ.CELL_CODE_BY_CHAR['T'])
+                        (CELL_CODE['R'], CELL_CODE['G']),
+                        (CELL_CODE['M'], CELL_CODE['T'])
                     ),
                     nothing, 1.0f0,
                     [ MJ.GridDir(1, -1), MJ.GridDir(1, 1) ], nothing
@@ -300,8 +336,8 @@ const BIG_TEST_ANSWER = MJ.MarkovAlgorithm(
             tuple(
                 MJ.RewriteRule_Strip(
                     tuple(
-                        (MJ.CELL_CODE_BY_CHAR['R'], MJ.CELL_CODE_BY_CHAR['G']),
-                        (MJ.CELL_CODE_BY_CHAR['M'], MJ.CELL_CODE_BY_CHAR['T'])
+                        (CELL_CODE['R'], CELL_CODE['G']),
+                        (CELL_CODE['M'], CELL_CODE['T'])
                     ),
                     nothing, 1.0f0,
                     [ MJ.GridDir(1, 1) ], nothing
@@ -318,8 +354,8 @@ const BIG_TEST_ANSWER = MJ.MarkovAlgorithm(
             tuple(
                 MJ.RewriteRule_Strip(
                     tuple(
-                        (MJ.CELL_CODE_BY_CHAR['R'], MJ.CELL_CODE_BY_CHAR['G']),
-                        (MJ.CELL_CODE_BY_CHAR['M'], MJ.CELL_CODE_BY_CHAR['T'])
+                        (CELL_CODE['R'], CELL_CODE['G']),
+                        (CELL_CODE['M'], CELL_CODE['T'])
                     ),
                     nothing, 1.0f0,
                     MJ.GridDir[ ], 1
@@ -335,8 +371,8 @@ const BIG_TEST_ANSWER = MJ.MarkovAlgorithm(
             tuple(
                 MJ.RewriteRule_Strip(
                     tuple(
-                        (MJ.CELL_CODE_BY_CHAR['R'], MJ.CELL_CODE_BY_CHAR['G']),
-                        (MJ.CELL_CODE_BY_CHAR['M'], MJ.CELL_CODE_BY_CHAR['T'])
+                        (CELL_CODE['R'], CELL_CODE['G']),
+                        (CELL_CODE['M'], CELL_CODE['T'])
                     ),
                     nothing, 1.0f0,
                     [ MJ.GridDir(1, -1), MJ.GridDir(1, 1), MJ.GridDir(2, -1) ], 4
@@ -354,24 +390,24 @@ const BIG_TEST_ANSWER = MJ.MarkovAlgorithm(
             tuple(
                 MJ.RewriteRule_Strip(
                     tuple(
-                        (MJ.CELL_CODE_BY_CHAR['R'], MJ.CELL_CODE_BY_CHAR['G'])
+                        (CELL_CODE['R'], CELL_CODE['G'])
                     ),
                     nothing, 1.0f0,
                     MJ.GridDir[ MJ.GridDir(1, 1) ], nothing
                 ),
                 MJ.RewriteRule_Strip(
                     tuple(
-                        (MJ.CELL_CODE_BY_CHAR['R'], MJ.RewriteRuleCell_Lookup{Int}(2)),
-                        (MJ.RewriteRuleCell_Wildcard(), MJ.RewriteRuleCell_Wildcard()),
+                        (CELL_CODE['R'], MJ.RewriteRuleCell_Lookup{Int}(2)),
+                        (WILDCARD, WILDCARD),
                         (
                             MJ.RewriteRuleCell_Set('b', 'B'),
                             MJ.RewriteRuleCell_List((
-                                MJ.CELL_CODE_BY_CHAR['B'],
-                                MJ.CELL_CODE_BY_CHAR['b']
+                                CELL_CODE['B'],
+                                CELL_CODE['b']
                             ))
                         ),
                         (
-                            MJ.CELL_CODE_BY_CHAR['w'],
+                            CELL_CODE['w'],
                             MJ.RewriteRuleCell_Set('w', 'b', 'R')
                         )
                     ),
@@ -387,33 +423,33 @@ const BIG_TEST_ANSWER = MJ.MarkovAlgorithm(
 
         # Next op is 18
         MJ.MarkovOpDrawBox(
-            MJ.CELL_CODE_BY_CHAR['R'],
+            CELL_CODE['R'],
             MJ.DrawBoxSpace.uv,
             true,
             Box1Df(min=Vec(0), size=Vec(0.2)),
             nothing, nothing
         ),
         MJ.MarkovOpDrawBox(
-            MJ.CELL_CODE_BY_CHAR['b'],
+            CELL_CODE['b'],
             MJ.DrawBoxSpace.uv,
             true,
             Box1Di(size=Vec(1), center=Vec(0)),
             nothing, 0.2f0
         ),
         MJ.MarkovOpDrawBox(
-            MJ.CELL_CODE_BY_CHAR['w'],
+            CELL_CODE['w'],
             MJ.DrawBoxSpace.uv,
             false,
             Box2Df(size=Vec(0.1f0, 0.5f0), max=Vec(1.0f0, 1.0f0)),
-            (Val(:whitelist), MJ.CellTypeSet('R')),
+            (Val(:whitelist), MJ.CellTypeSet("R")),
             nothing
         ),
         MJ.MarkovOpDrawBox(
-            MJ.CELL_CODE_BY_CHAR['M'],
+            CELL_CODE['M'],
             MJ.DrawBoxSpace.pixel,
             true,
             Box1Di(min=Vec(1), max=Vec(5)),
-            (Val(:blacklist), MJ.CellTypeSet('w', 'g', 'b')),
+            (Val(:blacklist), MJ.CellTypeSet("wgb")),
             (0.1f0, 0.9f0)
         ),
 
@@ -425,7 +461,7 @@ const BIG_TEST_ANSWER = MJ.MarkovAlgorithm(
                     tuple(
                         MJ.RewriteRule_Strip(
                             tuple(
-                                (MJ.CELL_CODE_BY_CHAR['R'], MJ.CELL_CODE_BY_CHAR['b'])
+                                (CELL_CODE['R'], CELL_CODE['b'])
                             ),
                             nothing, 1.0f0,
                             MJ.GridDir[ MJ.GridDir(1, 1) ], nothing
@@ -447,7 +483,7 @@ const BIG_TEST_ANSWER = MJ.MarkovAlgorithm(
                     tuple(
                         MJ.RewriteRule_Strip(
                             tuple(
-                                (MJ.CELL_CODE_BY_CHAR['R'], MJ.CELL_CODE_BY_CHAR['R'])
+                                (CELL_CODE['R'], CELL_CODE['R'])
                             ),
                             nothing, 1.0f0,
                             MJ.GridDir[ MJ.GridDir(1, 1) ], nothing
@@ -469,7 +505,7 @@ const BIG_TEST_ANSWER = MJ.MarkovAlgorithm(
                     tuple(
                         MJ.RewriteRule_Strip(
                             tuple(
-                                (MJ.CELL_CODE_BY_CHAR['R'], MJ.CELL_CODE_BY_CHAR['G'])
+                                (CELL_CODE['R'], CELL_CODE['G'])
                             ),
                             nothing, 1.0f0,
                             MJ.GridDir[ MJ.GridDir(1, 1) ], nothing
@@ -483,14 +519,14 @@ const BIG_TEST_ANSWER = MJ.MarkovAlgorithm(
                     tuple(
                         MJ.RewriteRule_Strip(
                             tuple(
-                                (MJ.CELL_CODE_BY_CHAR['G'], MJ.CELL_CODE_BY_CHAR['B'])
+                                (CELL_CODE['G'], CELL_CODE['B'])
                             ),
                             nothing, 1.0f0,
                             MJ.GridDir[ MJ.GridDir(1, 1) ], nothing
                         ),
                         MJ.RewriteRule_Strip(
                             tuple(
-                                (MJ.CELL_CODE_BY_CHAR['G'], MJ.CELL_CODE_BY_CHAR['Y'])
+                                (CELL_CODE['G'], CELL_CODE['Y'])
                             ),
                             nothing, 2.0f0,
                             MJ.GridDir[ MJ.GridDir(1, 1) ], nothing
@@ -506,6 +542,70 @@ const BIG_TEST_ANSWER = MJ.MarkovAlgorithm(
             MJ.AbstractMarkovBias[
                 MJ.MarkovBiasTemperature(0.9f0)
             ]
+        ),
+
+        # Next op is 25
+        MJ.MarkovOpRewrite(
+            DEFAULT_PRIORITY,
+            tuple(MJ.RewriteRule_MD(
+                permutedims(MJ.RewriteCell_MD{2}[ (MJ.RewriteRuleCell_Set('w', 'R'), CELL_CODE['R'])  (WILDCARD, CELL_CODE['G'])   (CELL_CODE['B'], CELL_CODE['w'])   ]),
+                nothing, 1.0f0, MJ.RewriteRule_MD_Symmetry_Definition()
+            )),
+            nothing, ()
+        ),
+        MJ.MarkovOpRewrite(
+            DEFAULT_PRIORITY,
+            tuple(MJ.RewriteRule_MD(
+                permutedims(MJ.RewriteCell_MD{2}[
+                    (CELL_CODE['R'], WILDCARD)    (CELL_CODE['G'], WILDCARD)    (CELL_CODE['B'], WILDCARD)
+                    (CELL_CODE['w'], WILDCARD)    (CELL_CODE['g'], WILDCARD)    (CELL_CODE['b'], WILDCARD)
+                ]),
+                nothing, 1.0f0, MJ.RewriteRule_MD_Symmetry_Definition()
+            )),
+            nothing, ()
+        ),
+        MJ.MarkovOpRewrite(
+            DEFAULT_PRIORITY,
+            tuple(MJ.RewriteRule_MD(
+                permutedims(MJ.RewriteCell_MD{2}[
+                    (CELL_CODE['R'], WILDCARD)    (CELL_CODE['G'], WILDCARD)    (CELL_CODE['B'], WILDCARD)
+                    (CELL_CODE['w'], WILDCARD)    (CELL_CODE['g'], WILDCARD)    (CELL_CODE['b'], WILDCARD)
+                ]),
+                0.1f0,
+                0.5f0,
+                MJ.RewriteRule_MD_Symmetry_Definition(
+                    Vector{Pair{Matrix{Int}, MJ.RewriteRule_TailSymmetry}}(),
+                    Set{Int}[
+                        Set([ 1, 2, 3 ])
+                    ]
+                )
+            )),
+            nothing, ()
+        ),
+        MJ.MarkovOpRewrite(
+            DEFAULT_PRIORITY,
+            tuple(MJ.RewriteRule_MD(
+                permutedims(MJ.RewriteCell_MD{3}[
+                    (CELL_CODE['R'], MJ.RewriteRuleCell_Lookup((1, 2, 1)))       (CELL_CODE['G'], MJ.RewriteRuleCell_Lookup((1, 2, 2)))       (CELL_CODE['B'], MJ.RewriteRuleCell_Lookup((2, 1, 1)))
+                    (CELL_CODE['w'], MJ.RewriteRuleCell_Lookup((2, 1, 1)))       (CELL_CODE['g'], MJ.RewriteRuleCell_Lookup((3, 2, 2)))       (CELL_CODE['b'], MJ.RewriteRuleCell_Lookup((3, 2, 2)))   ;;;
+                    (CELL_CODE['M'], MJ.RewriteRuleCell_Set('R', 'G', 'B'))      (CELL_CODE['T'], MJ.RewriteRuleCell_Set('M', 'T', 'O'))      (CELL_CODE['O'], MJ.RewriteRuleCell_Set('w', 'g', 'b'))
+                    (MJ.RewriteRuleCell_Set('M', 'T', 'O'), MJ.RewriteRuleCell_List((c->CELL_CODE[c]).(('R', 'G', 'B'))))    (CELL_CODE['R'], CELL_CODE['G'])    (CELL_CODE['R'], CELL_CODE['B'])
+                ], (2, 1, 3)),
+                nothing, 1.0f0,
+                MJ.RewriteRule_MD_Symmetry_Definition(
+                    Pair{Matrix{Int}, MJ.RewriteRule_TailSymmetry}[
+                        [
+                            1    2
+                        ] => (nothing, 3),
+                        [
+                            2    1   -3
+                            3    -3   1
+                        ] => nothing
+                    ],
+                    Vector{Set{Int}}()
+                )
+            )),
+            nothing, ()
         )
     ]
 )
@@ -573,13 +673,29 @@ function test_compare(a::MJ.MarkovOpRewrite, b::MJ.MarkovOpRewrite, tab::String)
     else
         for (ra, rb, i) in zip(a.rules, b.rules, 1:length(a.rules))
             println(tab, "Rule ", i, ", ", MJ.dsl_string(ra), "    (", MJ.dsl_string(rb), ")")
-            if length(ra.cells) != length(rb.cells)
-                println(tab, "\tA has ", length(ra.cells), " cells, while B has ", length(rb.cells), "!")
+            if typeof(ra).name != typeof(rb).name
+                println(tab, "\tA is ", typeof(ra).name, " while B is ", typeof(rb).name, "!")
+                return nothing
+            end
+
+            cell_count_fn = (ra isa MJ.RewriteRule_Strip) ? length : size
+            cell_vsize_fn = (ra isa MJ.RewriteRule_Strip) ? (t -> Vec(length(t))) : vsize
+            if cell_count_fn(ra.cells) != cell_count_fn(rb.cells)
+                println(tab, "\tA has ", iter_join(cell_count_fn(ra.cells), "x")...,
+                             " cells, while B has ", iter_join(cell_count_fn(rb.cells), "x")...,
+                             "!")
             else
-                for (ca, cb, j) in zip(ra.cells, rb.cells, 1:length(ra.cells))
+                v_n_cells = cell_vsize_fn(ra.cells)
+                for (ca, cb, _j) in zip(ra.cells, rb.cells, one(typeof(v_n_cells)):v_n_cells)
+                    j = if ndims(_j) == 1
+                        _j.x
+                    else
+                        _j
+                    end
                     println(tab, "\tCell ", j, ", ", ca, "   (", cb, ")")
                     if ca != cb
-                        println(tab, "\t\tMismatch!")
+                        println(tab, "\t\tMismatch at cell ", j, "!\n",
+                                tab, "\t\t\tA=", ca, "\n", tab, "\t\t\tB=", cb)
                     end
                 end
             end
@@ -591,21 +707,58 @@ function test_compare(a::MJ.MarkovOpRewrite, b::MJ.MarkovOpRewrite, tab::String)
                         typeof(ra.mask), "(", ra.mask, ") vs ",
                         typeof(rb.mask), "(", rb.mask, ")")
             end
-            if length(ra.explicit_symmetries) != length(rb.explicit_symmetries)
-                println(tab, "\tA has ", length(ra.explicit_symmetries), " explicit symmetries ",
-                         "while B has ", length(rb.explicit_symmetries))
-            else
-                for (sa, sb, j) in zip(ra.explicit_symmetries, rb.explicit_symmetries, 1:length(ra.explicit_symmetries))
-                    println(tab, "\tExplicit symmetry ", sa, "  (", sb, ")...")
-                    if sa != sb
-                        println(tab, "\t\tMismatch!")
+            if (ra isa MJ.RewriteRule_Strip)
+                if length(ra.explicit_symmetries) != length(rb.explicit_symmetries)
+                    println(tab, "\tA has ", length(ra.explicit_symmetries), " explicit symmetries ",
+                            "while B has ", length(rb.explicit_symmetries))
+                else
+                    for (sa, sb, j) in zip(ra.explicit_symmetries, rb.explicit_symmetries, 1:length(ra.explicit_symmetries))
+                        println(tab, "\tExplicit symmetry ", sa, "  (", sb, ")...")
+                        if sa != sb
+                            println(tab, "\t\tMismatch!")
+                        end
                     end
                 end
-            end
-            if ra.tail_symmetry != rb.tail_symmetry
-                println(tab, "\tTail-symmetry mismatch! ",
-                            ra.tail_symmetry,
-                            " vs ", rb.tail_symmetry)
+                if ra.tail_symmetry != rb.tail_symmetry
+                    println(tab, "\tTail-symmetry mismatch! ",
+                                ra.tail_symmetry,
+                                " vs ", rb.tail_symmetry)
+                end
+            elseif (ra isa MJ.RewriteRule_MD)
+                (sa, sb) = (ra.symmetry, rb.symmetry)
+                if length(sa.grid_axis_choices) != length(sb.grid_axis_choices)
+                    println(tab, "\tSymmetry mismatch! ",
+                                 "A has ", length(sa.grid_axis_choices), " axis choice sets ",
+                                 "while B has ", length(sb.grid_axis_choices))
+                else for ((ma, ta), (mb, tb), mi) in zip(sa.grid_axis_choices, sb.grid_axis_choices, 1:length(sa.grid_axis_choices))
+                    if @view(ma[:, 1]) != @view(mb[:, 1])
+                        println(tab, "\tMismatch of grid_axis_choices[", mi, "]'s chosen rule axes!\n",
+                                tab, "\t\tA=", ma[:, 1], "\n",
+                                tab, "\t\tB=", mb[:, 1])
+                    end
+                    if @view(ma[:, 2:end]) != @view(mb[:, 2:end])
+                        println(tab, "\tMismatch of grid_axis_choices[", mi, "]'s permutations!\n",
+                                tab, "\t\tA: ", ma[:, 2:end], "\n",
+                                tab, "\t\tB: ", mb[:, 2:end])
+                    end
+                    if ta != tb
+                        println(tab, "\tMismatch of grid_axis_choices[", mi, "]'s tail symmetry!\n",
+                                tab, "\t\tA=", ta, "   B=", tb)
+                    end
+                end end
+                if length(sa.chiral_groups) != length(sb.chiral_groups)
+                    println(tab, "\tSymmetry mismatch! ",
+                                 "A has ", length(sa.chiral_groups), " chiral groups ",
+                                 "while B  has ", length(sb.chiral_groups))
+                else for (ca, cb, ci) in zip(sa.chiral_groups, sb.chiral_groups, 1:length(sa.chiral_groups))
+                    println(tab, "\tSymmetry chiral group ", ci, ": A={", iter_join(ca, ", ")...,
+                                 "}    B={", iter_join(cb, ", ")..., "}")
+                    if ca != cb
+                        println(tab, "\t\tMismatch! ")
+                    end
+                end end
+            else
+                error("Unhandled: ", typeof(ra))
             end
 
             if ra != rb
@@ -641,7 +794,6 @@ end
           test_compare(BIG_TEST, BIG_TEST_ANSWER),
           "INVALID result from `@markovjunior`! ",
             "Detailed printout is above this line -- A is the actual, B is the expected")
-
 const BIG_TEST_2 = MJ.parse_markovjunior(MJ.dsl_string(BIG_TEST))
 @bp_check(BIG_TEST_2 == BIG_TEST_ANSWER,
           test_compare(BIG_TEST_2, BIG_TEST_ANSWER),

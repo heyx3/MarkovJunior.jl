@@ -140,7 +140,7 @@ We'll go into detail on everything, but here is a quick cheat sheet of **all** t
         (x, y)[ (+x, +y), (+y, +x) ]
         # Z is the only choice left for the block's Z,
         #   and not specifing anything means it can flip either way along that Z axis.
-        # However we can add a second kind of constraint to tie it to the Y axis,
+        # However we can add a "chirality" constraint between it and the Y axis,
         #   so that their handedness is preserved.
         {y, z}
     ]
@@ -451,8 +451,6 @@ For example a 3D block can be used on a 4D grid but not a 2D grid.
 
 ### Multidimensional symmetry
 
-> *For more info on how I ended up with this system, [read here](multidim_theory.md).*
-
 By default, like with normal rewrite rules, blocks can be oriented any which way.
 This gets very complicated as you go beyond 2D, but there is a simple way to think about it:
   a block's orientation on the grid is merely a process of selection.
@@ -480,6 +478,10 @@ Here are examples of block symmetry modifiers:
 \[z[+z]]
 ````
 
+> **NOTE**: *you must add commas between the elements of a symmetry statement!*
+> *Otherwise the parser will break and throw a strange parsing error,*
+> * which is hard for us to catch and rethrow more clearly.*
+
 As with the simpler "strip" rewrite rules, you can use `a...`
   to indicate matching with any extra dimensions starting at `a`.
 
@@ -501,7 +503,7 @@ For example, this permits the block X and Y axes to rotate amongst themselves bu
 ````
 
 > *This use-case actually has its own macro, `\[  (x, y)[ @rotations(x, y) ]  ]`.*
-> *This macro can be used with any number of axes too!*
+> *The macro can be used with any number of axes too!*
 
 This next example either allows the block's X to flip,
   or for the whole block to reorient along the grid's WZ plane.
