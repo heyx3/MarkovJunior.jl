@@ -956,7 +956,7 @@ rewrite_rule_option_indices(state::MarkovOpRewrite_State, rule_idx::Integer) = (
      (state.weighted_options_buffer_first_indices[rule_idx+1] - 1)
 )
 
-function markov_op_initialize(r::MarkovOpRewrite{NTuple{NRules, Any}, TBias, TPriority},
+function markov_op_initialize(r::MarkovOpRewrite{<:NTuple{NRules, Any}, TBias, TPriority},
                               grid::CellGrid{NDims}, rng::PRNG,
                               context::MarkovOpContext
                              ) where {NDims, NRules, TBias, TPriority}
@@ -1144,10 +1144,10 @@ function markov_op_iterate(r::MarkovOpRewrite{TRules, TSelfBiases, TPriority},
         end)(r.rules[pick_rule_i])
 
         # Mark the affected area.
-        affected_area = if rule isa RewriteRule_Strip
+        affected_area::BoxI{NDims} = if r.rules[pick_rule_i] isa RewriteRule_Strip
             pick_end_cell = grid_dir_pos_along(pick_dir, pick_start_cell, rule_len-1)
             (pick_start_cell, pick_end_cell) = minmax(pick_start_cell, pick_end_cell)
-            BoxI{NDims}(pick_start_cell:pick_end_cell)
+            Box(pick_start_cell:pick_end_cell)
         else
             BoxI{NDims}(
                 min=pick_start_cell,
