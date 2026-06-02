@@ -568,7 +568,8 @@ To make a deterministic modification to a grid, you can use
   `@fill 'C' S(A=N, B=M) [rule] [mask]`.
 
 This operation will fill a single color in every pixel of a box described by the given space.
-A rule can optionally filter which color pixels are affected.
+A rule can optionally filter which color pixels are affected,
+   so you can also think of it as a "replace" operation.
 
 If this box's space is described with vectors, and not scalars,
   then the box can't be higher-dimensional than the grid!

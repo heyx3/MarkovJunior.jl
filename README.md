@@ -23,8 +23,12 @@ markovjunior_run_tool()
 The released 0.1 version was a proof-of-concept, with a 2D renderer --
   totally functional and fun to play with.
 
-The current 0.2 version has a rewritten DSL that is terse, highly extendible and broadly-featured.
-Next on the docket is 3D rendering and many more Operations and Biases.
+The current version has lots of nice features:
+
+* A terse, extendible, broadly-featured DSL
+* Both 2D and 3D rendering
+* More kinds of Operations and Biases
+
 [You can find documentation on the new syntax here](docs/dsl.md).
 
 Math and rendering is all built on top of my [B+ game framework](https://github.com/heyx3/B-plus).
@@ -32,6 +36,18 @@ Math and rendering is all built on top of my [B+ game framework](https://github.
 The unit tests in *test/runtests.jl* are mostly focused on parsing,
   while correctness is mostly checked by running sample scenes in the GUI,
   but there are exceptions for important algorithm-heavy internal functions.
+
+## Why higher-dimensional grids?
+
+I decided to support any-dimensional grids, mainly because it was cool and Julia makes it feasible.
+However there are real, if underexplored, benefits!
+
+* You can add a Time axis to the grid to get animated output
+* You can add an extra axis to store multiple pixels of data at each output pixel, like temp variables.
+* You could perhaps use it to foster logical connections between disparate areas of the grid,
+  by connecting them through the extra dimensions.
+
+If you come up with any higher-dimensional tricks, share them in a Github Issue!
 
 ## Development
 
