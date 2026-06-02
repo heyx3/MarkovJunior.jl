@@ -258,7 +258,7 @@ function update_gui_runner_texture_2D(runner::GuiRunner)
     (_, array::Matrix{v3f}, tex::Texture) = runner.rendering
 
     # Generate the pixel buffer for upload to the GPU.
-    #  * Figure out the resolution it should have:
+    #  * Figure out the final 2D slice resolution:
     resolution_2D = if ndims(runner.algorithm_state.grid[]) == 1
         Vec(length(runner.algorithm_state.grid[]), 1)
     else
@@ -306,7 +306,6 @@ function update_gui_runner_texture_2D(runner::GuiRunner)
     runner.rendering = (Val(2), array, tex)
     return nothing
 end
-
 function update_gui_runner_render_3D(runner::GuiRunner, rerender_view::Bool)
     (_, scene::Render3D.Scene, viewport::Render3D.FullViewport) = runner.rendering
 
@@ -1065,8 +1064,14 @@ function gui_main(runner::GuiRunner, delta_seconds::Float32)
                 runner.algorithm_error_msg = "File with that name already exists!"
             end
         end
-        if can_use_new_scene_name && CImGui.Button("Create scene")
-            try
+        if can_use_new_scene_name && !runner.current_scene_has_changes && CImGui.Button("Create scene")
+            # Check if the file already exists.
+            # This is a bit redundant with the above, but it's the only easy way to avoid
+            #    constantly checking for the file every X seconds.
+            if isfile(path_scene(runner.memory.new_scene_file_name * ".jl"))
+                can_use_new_scene_name = false
+                runner.algorithm_error_msg = "File with that name already exists!"
+            else try
                 new_scene_str = "@markovjunior begin\n\t@rewrite 1 b=>w\n\t@rewrite wb=>ww\nend"
                 open(io -> write(io, new_scene_str),
                      path_scene(runner.memory.new_scene_file_name * ".jl"),
@@ -1080,7 +1085,7 @@ function gui_main(runner::GuiRunner, delta_seconds::Float32)
                 update_gui_runner_scenes!(runner)
             catch e
                 runner.algorithm_error_msg = "Unable to create file: $(sprint(showerror, e))"
-            end
+            end end
         end
     end
 
