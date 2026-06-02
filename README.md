@@ -20,18 +20,15 @@ markovjunior_run_tool()
 
 ## Description
 
-The released 0.1 version was a proof-of-concept, with a 2D renderer --
-  totally functional and fun to play with.
-
-The current version has lots of nice features:
+Lots of nice features have already been implemented:
 
 * A terse, extendible, broadly-featured DSL
 * Both 2D and 3D rendering
-* More kinds of Operations and Biases
+* More Operations and Biases
 
 [You can find documentation on the new syntax here](docs/dsl.md).
 
-Math and rendering is all built on top of my [B+ game framework](https://github.com/heyx3/B-plus).
+Math, GUI, and rendering are all built on top of my [B+ game framework](https://github.com/heyx3/B-plus).
 
 The unit tests in *test/runtests.jl* are mostly focused on parsing,
   while correctness is mostly checked by running sample scenes in the GUI,
@@ -42,17 +39,17 @@ The unit tests in *test/runtests.jl* are mostly focused on parsing,
 I decided to support any-dimensional grids, mainly because it was cool and Julia makes it feasible.
 However there are real, if underexplored, benefits!
 
-* You can add a Time axis to the grid to get animated output
+* You can add a Time axis to the grid to get animated output.
 * You can add an extra axis to store multiple pixels of data at each output pixel, like temp variables.
 * You could perhaps use it to foster logical connections between disparate areas of the grid,
   by connecting them through the extra dimensions.
 
-If you come up with any higher-dimensional tricks, share them in a Github Issue!
+If you have any thoughts on higher-dimensional tricks, share them in a Github Issue!
 
 ## Development
 
-On the main branch, this tool uses the main branch of B+ (and its sub-packages).
-Clone BplusCore, BplusApp, BplusTools, and Bplus,
+On the main branch, this package uses the main branch of B+ (and its sub-packages).
+So you should clone BplusCore, BplusApp, BplusTools, and Bplus,
   then run the following from the Julia REPL:
 
 ````julia
@@ -66,7 +63,7 @@ Clone BplusCore, BplusApp, BplusTools, and Bplus,
 
 Due to a [bug with FixedPointNumbers.jl](https://github.com/JuliaMath/FixedPointNumbers.jl/issues/317)
   -- possibly a [bug with PackageCompiler itself](https://github.com/JuliaLang/PackageCompiler.jl/issues/1092) --
-  the public release can't be used with PackageCompiler.
+  the public version of that package can't be used with PackageCompiler.
 Instead, you need to [clone this fork](github.com/Kyjor/FixedPointNumbers.jl/tree/bugfix/remove-asserts-from-precompile),
   at branch `bugfix/remove-asserts-from-precompile` (e.g. `git checkout bugfix/remove-asserts-from-precompile`),
   and link it to this project:
@@ -84,7 +81,7 @@ Instead, you need to [clone this fork](github.com/Kyjor/FixedPointNumbers.jl/tre
 ## Scenes
 
 Different algorithm setups can be found in the *scenes/* folder.
-They are commented with explanations of how they work.
+They are heavily commented to help you learn.
 
 A small handful of them are still not converted to the v0.2 syntax,
   so don't be alarmed if they fail to run!

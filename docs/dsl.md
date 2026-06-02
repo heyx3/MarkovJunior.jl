@@ -1,10 +1,9 @@
 # `@markovjunior` DSL syntax
 
 Below is a comprehensive reference for the syntax to define a MarkovJunior algorithm.
-If you're feeling overwhelmed, maybe just read the example scenes
-  and come back here periodically to clarify.
+If you're feeling overwhelmed, just read the example scenes and come back here for specific questions.
 
-The new Julia macro `@markovjunior [dims] [clear_value] begin ... end`
+Our new Julia macro `@markovjunior [dims] [clear_value] begin ... end`
   evaluates into an instance of `MarkovAlgorithm`.
 This represents a sequence of operations that generate a grid of colored pixels,
   in any dimension (most commonly 2 for images and 3 for voxel scenes).
@@ -20,17 +19,21 @@ Keep in mind for convenience, Julia macros (code statements with the `@` symbol)
 If using the former, there are a few expressions you must keep in parentheses
   which will be mentioned as they come up.
 
-> ***Important note**: Julia uses 1-based indices, and so does our library! For example the first grid axis is 1 and not 0.*
+> ***Important note**: Julia uses 1-based indices, and so does our library! For example, the first axis is 1 and not 0.*
 
 ## Parameters
 
 By default the grid starts with all pixels black, but you can change this initial color.
-For example `@markovjunior 'M' begin ... end` to start with Magenta.
+For example `@markovjunior 'M' begin ... end` starts with a Magenta fill.
+
+> *If you want to customize the starting state, such as placing one red pixel in the center of the grid,*
+> *use the [`@fill` operation](#fill).*
 
 By default the grid can have any number of dimensions, but you can fix this with
   e.g. `@markovjunior 2 begin ... end`.
-There also can be expressions inside the macro (such as `@fill`) which imply a minimum number of dimensions;
-  if there are any dimensional mismatches then the macro throws an error.
+There are also some expressions inside the macro which imply a minimum number of dimensions,
+  e.g. `@fill` with a 2D box will require at least a 2D grid.
+If there are any dimensional mismatches between the `@markovjunior` and the grid, an error is thrown.
 
 ## Main Sequence
 
