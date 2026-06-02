@@ -161,7 +161,7 @@ function markov_op_iterate(b::MarkovOpDrawBox{NBox, TRule},
     # If the user wants to finish asap, and we made it to the beginning of a row,
     #    do a quick fill of the rest.
     if isnothing(ticks_left[]) && (state.next_pixel.x == first(state.pixels).x)
-        foreach(apply_at, state.next_pixel:last(state.pixels))
+        foreach(apply_at, first(state.pixels):last(state.pixels))
         markov_op_cancel(b, state, context)
         return nothing
     # Otherwise apply to the next pixel and try to advance.
@@ -336,16 +336,15 @@ function parse_markovjunior_op(::Val{Symbol("@fill")},
     end
     #   * If at least one is float, promote the other to float
     if (eltype(argValA) == Float32) || (eltype(argValB) == Float32)
-        if argValA isa Tuple
-            argValA = convert.(Ref(Float32), argValA)
-        else
-            argValA = convert(Float32, argValA)
-        end
-        if argValB isa Tuple
-            argValB = convert.(Ref(Float32), argValB)
-        else
-            argValB = convert(Float32, argValB)
-        end
+        argValA = convert.(Ref(Float32), argValA)
+        argValB = convert.(Ref(Float32), argValB)
+    end
+    # If the rect is in UV space, make sure the values are float and not integer.
+    # Integer boxes with the same min and max are size 1,
+    #    so thin lines would get casted to cover the entire space!
+    if (space == DrawBoxSpace.uv) && all(f -> f isa Integer, tuple(argValA..., argValB...))
+        argValA = convert.(Ref(Float32), argValA)
+        argValB = convert.(Ref(Float32), argValB)
     end
 
     # Finally, put the space arguments into an actual value.

@@ -214,7 +214,7 @@ end
 # Optimize hashing by compressing the GridDir into its index.
 Base.hash(d::GridDir, u::UInt) = Base.hash(grid_dir_index(d), u)
 
-"A contiguous and oriented line of cells"
+"A contiguous and oriented line of cells; see `CellRegion{N}` for the multidimensional version"
 struct CellLine{N}
     start_cell::CellIdx{N}
     movement::GridDir
@@ -228,32 +228,63 @@ function Base.print(io::IO, l::CellLine)
 end
 
 "
-Walks through every cell in a small contiguous line.
-Optionally, you can break the loop early by making your lambda return `true`
-  and then this returns whether that happened.
+A contiguous region of cells, the multidimensional equivalent of `CellLine{N}`.
+It's just a wrapper around `BoxI{N}` but the goal is to be a clearly-typed sibling of `CellLine`.
 "
-function for_each_cell_in_line(toDo, line::CellLine{N},
-                               ::Val{Breakable}
-                              )::(Breakable ? Bool : Nothing) where {N, Breakable}
-    for iz in zero(Int32):(line.length - one(Int32))
-        cell = line.start_cell
-        @set! cell[line.movement.axis] += (iz * line.movement.sign)
-        result = toDo(iz + one(Int32), cell)
-        if Breakable && convert(Bool, result)
-            return true
+struct CellRegion{N}
+    b::BoxI{N}
+end
+CellRegion(r::Bplus.Math.VecRange) = CellRegion(Box(r))
+Base.print(io::IO, r::CellRegion) = print(io, "R{", r.b, "}")
+
+"
+Walks through every cell in a small contiguous line/area.
+Invokes your lambda with `cell_idx, local_idx`, where `local_idx` is either
+  `Int32` for strips (`CellLine` input) or `VecI` for multidimensional (`CellRegion` input).
+
+If you pass `true` then you can break the loop early by making your lambda return `true`,
+  in which case this returns whether an early break happened.
+"
+function for_each_cell(toDo, area::Union{CellLine{N}, CellRegion{N}},
+                       ::Val{Breakable}
+                      )::(Breakable ? Bool : Nothing) where {N, Breakable}
+    if area isa CellLine
+        for iz in zero(Int32):(line.length - one(Int32))
+            cell = line.start_cell
+            @set! cell[line.movement.axis] += (iz * line.movement.sign)
+            result = toDo(iz + one(Int32), cell)
+            if Breakable && convert(Bool, result)
+                return true
+            end
         end
+    elseif area isa CellRegion
+        for iv in area.b
+            result = toDo(iv - min_inclusive(area.b) + one(Int32), iv)
+            if Breakable && convert(Bool, result)
+                return true
+            end
+        end
+    else
+        error("Unhandled: ", typeof(area))
     end
     return Breakable ? false : nothing
 end
-@inline for_each_cell_in_line(toDo, line, breakable::Bool=false) = for_each_cell_in_line(toDo, line, Val(breakable))
+@inline for_each_cell(toDo, line, breakable::Bool=false) = for_each_cell(toDo, line, Val(breakable))
 
-function cell_line_aabb(line::CellLine{N})::Box{N, Int32} where {N}
-    start_pos = line.start_cell
-    end_pos = start_pos
-    @set! end_pos[line.movement.axis] += line.movement.dir * (line.length - 1)
-    (start_pos, end_pos) = Bplus.Math.minmax(start_pos, end_pos)
-    return Box{N, Int32}(
-        min=start_pos,
-        max=end_pos
-    )
+"Gets the bounds around a `CellLine` or `CellRegion` (in the latter case it just returns the region's Box)"
+function cell_line_aabb(area::Union{CellLine{N}, CellRegion{N}})::Box{N, Int32} where {N}
+    if area isa CellRegion
+        return area.b
+    elseif area isa CellLine
+        start_pos = area.start_cell
+        end_pos = start_pos
+        @set! end_pos[area.movement.axis] += area.movement.dir * (area.length - 1)
+        (start_pos, end_pos) = Bplus.Math.minmax(start_pos, end_pos)
+        return Box{N, Int32}(
+            min=start_pos,
+            max=end_pos
+        )
+    else
+        error("Unhandled: ", typeof(area))
+    end
 end

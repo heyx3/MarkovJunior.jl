@@ -88,7 +88,7 @@ Calculates the desirability of this action, at this moment, in this grid.
 Returns `nothing` if the action must not happen.
 "
 function markov_bias_calculate(bias::AbstractMarkovBias, bias_state,
-                               grid::CellGrid{N}, at::CellLine{N},
+                               grid::CellGrid{N}, at::Union{CellLine{N}, CellRegion{N}},
                                rng::PRNG
                               )::Optional{Float32} where {N}
     error("Unhandled: ", typeof(bias))

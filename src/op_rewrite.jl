@@ -41,7 +41,7 @@ pick_rewrite_value(dest::RewriteRuleCell_Wildcard,               src::RewriteRul
 #  Rewrite rule: 1D strip
 
 "A description of extra allowed symmetries starting at a specific axis, optionally different starting axes per-direction"
-const RewriteRule_TailSymmetry = Union{Optional{Int}, NTuple{2, Optional{Int}}}
+const RewriteRule_TailSymmetry = Union{Nothing, Int, NTuple{2, Optional{Int}}}
 
 struct RewriteRule_Strip{NCells, TCells<:NTuple{NCells, RewriteCell{Int}}}
     cells::TCells
@@ -407,36 +407,48 @@ function find_all_md_symmetries(def::RewriteRule_MD_Symmetry_Definition,
             " was not mentioned anywhere so it has implicit tail symmetry of `1...`."
         )
 
-        # The specific grid axes available will be different for each option,
-        #    but the number of choices should be constant.
-        n_set_rule_axes = count(set_rule_axes)
-        n_original_options = length(options)
-        n_grid_axis_choices = n_grid_dims - n_set_rule_axes
-        push!(options_to_remove, 1:n_original_options) # After the loop, the original options are replaced
-        for src_option_i in 1:n_original_options
-            src_option = options[src_option_i]
-            @markovjunior_assert(src_option[a_rule].axis == -1,
-                                 "Rule-axis ", a_rule, " actually was set??")
-            # Gather the candidate grid axes.
-            fill!(unused_grid_axes, true)
-            for dir in src_option
-                (dir.axis != -1) && (unused_grid_axes[dir.axis] = false)
-            end
-            @markovjunior_assert(count(unused_grid_axes) == n_grid_axis_choices,
-                                 "Expected ", n_grid_axis_choices,
-                                   " unused grid axes for each option at this point, but found ",
-                                   unused_grid_axes, " in option ", src_option_i)
-            # Try using each one.
-            for a_grid in 1:n_grid_dims if unused_grid_axes[a_grid]
-                for a_grid_sign in (-1, 1)
-                    a_grid_dir = GridDir(a_grid, a_grid_sign)
-                    #TODO: Check chirality against this choice
-
-                    option = map(identity, src_option)
-                    option[a_rule] = a_grid_dir
+        # If there are no explicit symmetries/existing options at all,
+        #    then this rule axis provides an initial set of options.
+        if count(set_rule_axes) < 1
+            for a_grid in 1:n_grid_dims
+                for s_grid in (-1, +1)
+                    option = map(i -> UNCHOSEN_GRID_DIR, 1:n_rule_dims)
+                    option[a_rule] = GridDir(a_grid, s_grid)
                     push!(options, option)
                 end
-            end end
+            end
+        else
+            # The specific grid axes available will be different for each option,
+            #    but the number of choices should be constant.
+            n_set_rule_axes = count(set_rule_axes)
+            n_original_options = length(options)
+            n_grid_axis_choices = n_grid_dims - n_set_rule_axes
+            push!(options_to_remove, 1:n_original_options) # After the loop, the original options are replaced
+            for src_option_i in 1:n_original_options
+                src_option = options[src_option_i]
+                @markovjunior_assert(src_option[a_rule].axis == -1,
+                                    "Rule-axis ", a_rule, " actually was set??")
+                # Gather the candidate grid axes.
+                fill!(unused_grid_axes, true)
+                for dir in src_option
+                    (dir.axis != -1) && (unused_grid_axes[dir.axis] = false)
+                end
+                @markovjunior_assert(count(unused_grid_axes) == n_grid_axis_choices,
+                                    "Expected ", n_grid_axis_choices,
+                                    " unused grid axes for each option at this point, but found ",
+                                    unused_grid_axes, " in option ", src_option_i)
+                # Try using each one.
+                for a_grid in 1:n_grid_dims if unused_grid_axes[a_grid]
+                    for a_grid_sign in (-1, 1)
+                        a_grid_dir = GridDir(a_grid, a_grid_sign)
+                        #TODO: Check chirality against this choice
+
+                        option = map(identity, src_option)
+                        option[a_rule] = a_grid_dir
+                        push!(options, option)
+                    end
+                end end
+            end
         end
 
         # Finish up.
@@ -444,8 +456,10 @@ function find_all_md_symmetries(def::RewriteRule_MD_Symmetry_Definition,
         set_rule_axes[a_rule] = true
     end end
 
-    result = hcat(options...)
-    @md_symm_logln("Final result: [")
+    # If there are no options then the output type can't be deduced automatically :(
+    result = isempty(options) ? Matrix{GridDir}(undef, n_rule_dims, 0) : hcat(options...)
+
+    @md_symm_logln("Final symmetry output: [")
     for i_rule_axis in 1:size(result, 1)
         for i_entry in 1:size(result, 2)
             @md_symm_log(md_symm_loggable_dirs((result[i_rule_axis, i_entry], ))..., " ")
@@ -469,7 +483,7 @@ struct RewriteRule_MD_Orientations{NGridDims}
     # Number of availble orientations (i.e. number of columns in the below tables)
     n_entries::Int
 
-    # Each column is an entry, each row is a rule axis mapping to the grid
+    # Each column is an entry; each row is a rule axis; each element maps one rule axis to the grid.
     rule_to_grid::Matrix{GridDir}
     # Each column is an entry from 'rule_to_grid';
     #    each row is one grid axis, storing its optional mapping to the grid.
@@ -506,11 +520,11 @@ function RewriteRule_MD_Orientations(rule_array::Array{RewriteCell_MD{NRuleDims}
 
     # Build the reverse lookup.
     grid_to_rule::Matrix{GridDir} = markov_allocator_acquire_array(allocator, (NGridDims, n_entries), GridDir)
-    fill!(grid_to_rule, GridDir(-1, -1))
-    for col in 1:n_entries
-        for src_row in 1:NRuleDims
-            dir = rule_to_grid[src_row, col]
-            grid_to_rule[dir.axis] = GridAxis(src_row, dir.sign)
+    fill!(grid_to_rule, GridDir(-1, -1, true))
+    for entry_i in 1:n_entries
+        for rule_axis in 1:NRuleDims
+            dir = rule_to_grid[rule_axis, entry_i]
+            grid_to_rule[dir.axis, entry_i] = GridDir(rule_axis, dir.sign)
         end
     end
 
@@ -519,25 +533,33 @@ function RewriteRule_MD_Orientations(rule_array::Array{RewriteCell_MD{NRuleDims}
     rule_permutations = markov_allocator_acquire_array(allocator, (n_entries, ), PermArrayType)
     rule_permutation_apply_buffers = markov_allocator_acquire_array(
         allocator,
-        (size(rule_permutations, 1), ), CellGrid{NGridDims}
+        (n_entries, ), CellGrid{NGridDims}
     )
+    @md_symm_logln("=-=-=-=-=-=-=-\nCrunching orientations for rule:\n", sprint(dump, rule_array),
+                   "\n\trule_to_grid: ", sprint(dump, rule_to_grid),
+                   "\n\tgrid_to_rule: ", sprint(dump, grid_to_rule))
     for permutation_i in 1:n_entries
         perm_rule_to_grid::AbstractVector{GridDir} = @view rule_to_grid[:, permutation_i]
         perm_grid_to_rule::AbstractVector{GridDir} = @view grid_to_rule[:, permutation_i]
         # Append stub dimensions until the rule matches the world grid.
         rule_full_d = reshape(rule_array, (
             size(rule_array)...,
-            (1 for i in (ndims(rule_array)+1):NGridDims)
+            (1 for i in (ndims(rule_array)+1):NGridDims)...
         ))
         # Now shuffle the rule axes to follow the permutation.
-        axis_permutation::NTuple{NGridDims, Int} = ntuple(Val(NGridDims)) do i
+        axis_permutation::NTuple{NGridDims, Int} = ntuple(Val(ndims(rule_full_d))) do i
             if perm_grid_to_rule[i].axis > 0
                 perm_grid_to_rule[i].axis
             else
                 i
             end
         end
-        permuted_view = PermutedDimsArray(rule_array, axis_permutation)
+        permuted_view = PermutedDimsArray(rule_full_d, axis_permutation)
+        @md_symm_logln("\t", permutation_i, ": ", ntuple(Val(NRuleDims)) do ar
+            perm_rule_to_grid[ar].axis * perm_rule_to_grid[ar].sign
+        end, " using permutedims ", axis_permutation, " (from grid side: ", ntuple(Val(NGridDims)) do ag
+            perm_grid_to_rule[ag].axis * perm_grid_to_rule[ag].sign
+        end, ")")
         # Note that there is no lazy "flip axis" operator, so we wait to do that
         #   until after the permutation is copied into a new array.
 
@@ -580,18 +602,20 @@ function RewriteRule_MD_Orientations(rule_array::Array{RewriteCell_MD{NRuleDims}
             permuted_allocation[inds] = cell
         end
         # Apply the flipping of some axes.
-        for i_grid in 1:NGridDims
-            if perm_grid_to_rule.sign < 0
-                reverse!(permuted_allocation, dims=i_grid)
+        for i_rule in 1:NRuleDims
+            if perm_rule_to_grid[i_rule].sign < 0
+                @md_symm_logln("\t\t(flip along rule axis ", i_rule, ")")
+                reverse!(permuted_allocation, dims=perm_rule_to_grid[i_rule].axis)
             end
         end
+        @md_symm_logln("\t\t", sprint(dump, permuted_allocation))
 
         # Allocate a parallel array for rule application.
-        push!(rule_permutation_apply_buffers, markov_allocator_acquire_array(
+        rule_permutation_apply_buffers[permutation_i] = markov_allocator_acquire_array(
             allocator,
             size(permuted_allocation),
             UInt8
-        ))
+        )
     end
 
     return RewriteRule_MD_Orientations{NGridDims}(
@@ -647,6 +671,7 @@ Base.:(==)(a::RewriteRule_MD{NDims1}, b::RewriteRule_MD{NDims2}) where {NDims1, 
 )
 Base.ndims(r::RewriteRule_MD{NDims}) where {NDims} = NDims
 
+pick_mask(r::RewriteRule_MD, rng::PRNG)::Float32 = pick_mask_impl(r.mask, rng)
 
 "
 Checks for a rule matching against the given grid when applied starting at the given grid cell.
@@ -655,25 +680,36 @@ Assumes for performance that the rule doesn't stick outside the grid.
 Additionally, symmetry permutation should already be baked into the rule array
   (e.g. it must have as many dimensions as the grid).
 "
-function rule_matches(rule_array::Array{RewriteCell_MD, NDims},
+function rule_matches(rule_array::Array{RewriteCell_MD{NDims}, NDims},
                       grid_array::CellGrid{NDims},
                       rule_start_in_grid::CellIdx{NDims}
                      )::Bool where {NDims}
     # Assert the rule is in-bounds.
-    @markovjunior_debug begin
-        in_bounds = Vec(Iterators.map(rule_start_in_grid, size(grid_array), size(rule_array)
-                                     ) do (p, g, r)
-            p in 1:(g - r + 1)
-        end...)
-        @bp_check(all(in_bounds),
-                  "Rule starts at ", rule_start_in_grid, " and extends by ", size(rule_array),
-                    ", while grid is ", size(grid_array), ". Per-axis: ", in_bounds)
-    end
+    @markovjunior_assert(
+        all((rule_start_in_grid > zero(Int32)) &
+            ((rule_start_in_grid + vsize(rule_array) - one(Int32)) <= vsize(grid_array))),
+        "Rule starts at ", rule_start_in_grid, " and extends by ", vsize(rule_array),
+          ", while grid is ", vsize(grid_array),
+          ". Per-axis: min=", rule_start_in_grid > zero(Int32),
+                    "  max=", (rule_start_in_grid + vsize(rule_array) - one(Int32)) <= vsize(grid_array)
+    )
 
     # Try the rule.
-    return all(one(CellIdx{NDims}):vsize(rule_array)) do pos
-        match_rewrite_source(rule_array[pos][1], grid_array[pos + rule_start_in_grid])
+    @md_symm_logln "Matching a " vsize(rule_array) " rule to the grid at " rule_start_in_grid "..."
+    result = all(one(CellIdx{NDims}):vsize(rule_array)) do r_pos
+        g_pos = rule_start_in_grid + r_pos - one(Int32)
+        cell_rule = rule_array[r_pos][1]
+        value = grid_array[g_pos]
+        result = match_rewrite_source(cell_rule, value)
+        @md_symm_log(
+            "    Cell from ", r_pos, " to ", g_pos,
+            ", ", cell_rule, " against ", value, ": ", result,
+            (r_pos == vsize(rule_array)) ? "\n" : ""
+        )
+        return result
     end
+    @md_symm_logln
+    return result
 end
 
 "
@@ -695,16 +731,21 @@ function visit_rule_match_data(process_candidate::TLambda,
                                grid_inner_subset::BoxI{NGridDims}
                               )::Optional where {NRuleDims, NGridDims, TLambda}
     IVec = VecI{NGridDims}
+    @md_symm_logln("\n=====-----=======---======\nMatching this rule:\n", sprint(dump, rule.cells),
+                   "\n against this grid:\n", sprint(dump, grid))
     for orientation::RewriteRule_MD_Orientation in orientations(cached_orientations)
+        perm_size = vsize(orientation.rule_permutation)
+        @md_symm_logln("\n\t=======================\nFinding matches for orientation ", Tuple(orientation.rule_to_grid), "...")
+        @md_symm_logln("\t\tRule: ", sprint(dump, orientation.rule_permutation))
         start_corner_min::IVec = max(one(IVec),
-                                     min_inclusive(grid_inner_subset))
-        start_corner_max::IVec = min(vsize(grid) - vsize(orientation.rule_permutation) + 1,
-                                     max_inclusive(grid_innner_subset))
+                                     min_inclusive(grid_inner_subset) - perm_size + one(Int32))
+        start_corner_max::IVec = min(vsize(grid) - perm_size + 1,
+                                     max_inclusive(grid_inner_subset))
         for start_pos in start_corner_min:start_corner_max
             if isnothing(grid_mask) || (grid_mask[start_pos] <= rule_chosen_mask)
-                user_out = process_candidate(
-                    start_pos, orientation,
-                )
+                matches = rule_matches(orientation.rule_permutation, grid, start_pos)
+                matches && @md_symm_logln("\t\t\tMATCH at ", start_pos)
+                user_out = process_candidate(start_pos, orientation, matches)
                 exists(user_out) && return user_out
             end
         end
@@ -727,7 +768,7 @@ struct RewriteCache{NDims, NRules,
                     TRules<:NTuple{NRules, Union{RewriteRule_Strip, RewriteRule_MD}}}
     grid::TGrid
     rules::TRules
-    rule_md_orientations::NTuple{NRules, Optional{RewriteRule_MD_Orientation{NDims}}}
+    rule_md_orientations::NTuple{NRules, Optional{RewriteRule_MD_Orientations{NDims}}}
 
     mask_grid::Optional{MaskGrid{NDims}}
     rule_masks::NTuple{NRules, Float32}
@@ -762,6 +803,7 @@ function RewriteCache(grid::CellGrid{NDims}, mask_grid::Optional{MaskGrid{NDims}
                            else
                                ("<", iter_join(dir.grid_to_rule, ", ")..., ">")
                            end...)
+                @md_symm_logln() # If also logging MD-stuff then we need a newline between our match logs
                 push!(set, (cell, dir))
             end
             return nothing
@@ -775,7 +817,7 @@ function RewriteCache(grid::CellGrid{NDims}, mask_grid::Optional{MaskGrid{NDims}
         else
             cached_orientations = RewriteRule_MD_Orientations(
                 rule.cells, rule.symmetry,
-                Val(NGridDims), context.allocator
+                Val(NDims), context.allocator
             )
             visit_rule_match_data(process_rule_match, rule, cached_orientations,
                                   grid, mask_grid, mask, whole_grid_range)
@@ -1022,10 +1064,17 @@ function markov_op_iterate(r::MarkovOpRewrite{TRules, TSelfBiases, TPriority},
         foreach(r.rules, 1:NRules) do rule, rule_i
             state.weighted_options_buffer_first_indices[rule_i] = 1 + length(state.weighted_options_buffer)
             for (start_cell, dir) in state.rewrite_cache.applications[rule_i]
-                cell_line = CellLine(start_cell, dir, convert(Int32, length(rule.cells)))
+                cell_at = if rule isa RewriteRule_Strip
+                    CellLine(start_cell, dir, convert(Int32, length(rule.cells)))
+                elseif rule isa RewriteRule_MD
+                    rule_size = vsize((dir::RewriteRule_MD_Orientation{NDims}).rule_permutation)
+                    CellRegion(start_cell:(start_cell + rule_size))
+                else
+                    error("Unhandled: ", typeof(rule))
+                end
                 biases::NTuple{NBiases, Optional{Float32}} = markov_bias_calculate.(
                     state.biases, state.bias_states,
-                    Ref(grid), Ref(cell_line), Ref(rng)
+                    Ref(grid), Ref(cell_at), Ref(rng)
                 )
                 @markovjunior_assert(all(b -> something(b, 1.0f0) >= 0, biases),
                                      "Some biases returned negative values! ",
@@ -1106,7 +1155,7 @@ function markov_op_iterate(r::MarkovOpRewrite{TRules, TSelfBiases, TPriority},
         # Apply the rule.
         # Because each rule is a different type but known at compile-time,
         #    we should add a layer of dispatch when executing it.
-        rule_len::Int32 = (rule -> begin
+        affected_area::BoxI{NDims} = (rule -> begin
             if rule isa RewriteRule_Strip
                 source_values = Tuple(
                     grid[grid_dir_pos_along(pick_dir, pick_start_cell, i-1)]
@@ -1120,13 +1169,17 @@ function markov_op_iterate(r::MarkovOpRewrite{TRules, TSelfBiases, TPriority},
                                                         rng)
                 end
 
-                return convert(Int32, length(rule.cells))
+                # Calculate the affected area.
+                rule_len = convert(Int32, length(rule.cells))
+                pick_end_cell = grid_dir_pos_along(pick_dir, pick_start_cell, rule_len-1)
+                (pick_start_cell, pick_end_cell) = minmax(pick_start_cell, pick_end_cell)
+                Box(pick_start_cell:pick_end_cell)
             else
                 pick_dir_o::RewriteRule_MD_Orientation{NDims} = pick_dir
 
                 # Grab a view of the grid area covered by the rule.
                 values_range = ntuple(Val(NDims)) do i
-                    pick_start_cell[i] .+ (1:size(pick_dir_o.rule_permutation, i))
+                    pick_start_cell[i] : (pick_start_cell[i] + size(pick_dir_o.rule_permutation, i) - 1)
                 end
                 values_view = @view grid[values_range...]
 
@@ -1135,32 +1188,26 @@ function markov_op_iterate(r::MarkovOpRewrite{TRules, TSelfBiases, TPriority},
                 source_values .= values_view
 
                 # Generate the grid area's new values.
-                values_view .= pick_rewrite_value.((t->t[1]).(pick_dir_o.rule_permutation),
-                                                   (t->t[2]).(pick_dir_o.rule_permutation),
+                values_view .= pick_rewrite_value.((t->t[2]).(pick_dir_o.rule_permutation),
+                                                   (t->t[1]).(pick_dir_o.rule_permutation),
                                                    Ref(source_values),
-                                                   Tuple.(eachindex(pick_dir_o.rule_permutation)),
+                                                   Tuple.(eachindex(IndexCartesian(), pick_dir_o.rule_permutation)),
                                                    Ref(rng))
+
+                # Calculate the affected area.
+                BoxI{NDims}(
+                    min=pick_start_cell,
+                    size=vsize(pick_dir.rule_permutation)
+                )
             end
         end)(r.rules[pick_rule_i])
 
-        # Mark the affected area.
-        affected_area::BoxI{NDims} = if r.rules[pick_rule_i] isa RewriteRule_Strip
-            pick_end_cell = grid_dir_pos_along(pick_dir, pick_start_cell, rule_len-1)
-            (pick_start_cell, pick_end_cell) = minmax(pick_start_cell, pick_end_cell)
-            Box(pick_start_cell:pick_end_cell)
-        else
-            BoxI{NDims}(
-                min=pick_start_cell,
-                size=vsize(size(pick_dir.rule_permutation)...)
-            )
-        end
+        # Update bookkeeping.
         update_rewrite_cache!(state.rewrite_cache, affected_area)
-        # Update biases.
         state.bias_states = markov_bias_update.(
             state.biases, state.bias_states,
             Ref(grid), Ref(affected_area), Ref(rng)
         )
-        # Update counters.
         if exists(ticks_left[])
             ticks_left[] -= 1
         end
@@ -1609,7 +1656,6 @@ function parse_markovjunior_rewrite_rule_strip_side(inputs::MacroParserInputs, l
                 [ flatten_rule_expr(a)..., flatten_rule_expr(b)... ]
             else
                 raise_parse_error(loc, inputs, "Unsupported bit of syntax: ", e)
-                @bp_check(false, "Unhandled: ", typeof(e), "(", e, ")")
             end
         end
         flatten_rule_expr(o) = raise_parse_error(loc, inputs, "Unsupported expression: ", typeof(o), "(", o, ")")
@@ -2068,7 +2114,7 @@ function parse_markovjunior_rewrite_rule_md_symmetry(inputs::MacroParserInputs,
                     end
 
                     # Extract tail symmetries.
-                    tail_symmetry::NTuple{2, Optional{Int}} = (nothing, nothing)
+                    raw_tail_symmetry::NTuple{2, Optional{Int}} = (nothing, nothing)
                     for element in grid_axes
                         if element isa Pair{Val{:tail}}
                             (grid_axis, grid_sign) = element[2]
@@ -2099,12 +2145,12 @@ function parse_markovjunior_rewrite_rule_md_symmetry(inputs::MacroParserInputs,
                         end
                     end
                     # Simplify the data representation of tail symmetry.
-                    tail_symmetry = if all(isnothing, tail_symmetry)
+                    tail_symmetry = if all(isnothing, raw_tail_symmetry)
                         nothing
-                    elseif ==(tail_symmetry...)
-                        tail_symmetry[1]
+                    elseif ==(raw_tail_symmetry...)
+                        raw_tail_symmetry[1]
                     else
-                        tail_symmetry
+                        raw_tail_symmetry
                     end
 
                     push!(s_permutations, permutation_matrix => tail_symmetry)
@@ -2314,13 +2360,13 @@ end
 
 function parse_markovjunior_rewrite_rules(inputs::MacroParserInputs, loc, expr
                                          )::Tuple{AbstractMarkovRewritePriority, Tuple{Vararg{Union{RewriteRule_Strip, RewriteRule_MD}}}}
-    parse_rule_expr(inner_loc, line) = if @capture(expr, a_ => b_) && any(Base.isexpr(a, n) for n in (:hcat, :vcat, :ncat)) 
+    parse_rule_expr(inner_loc, line) = if @capture(line, a_ => b_) && any(Base.isexpr(a, n) for n in (:hcat, :vcat, :ncat)) 
         parse_markovjunior_rewrite_rule_md(inputs, inner_loc, line)
     else
         parse_markovjunior_rewrite_rule_strip(inputs, inner_loc, line)
     end
     if Base.isexpr(expr, :block)
-        outputs = Vector{RewriteRule_Strip}()
+        outputs = Vector{Union{RewriteRule_Strip, RewriteRule_MD}}()
         priority = Ref{Optional{AbstractMarkovRewritePriority}}(nothing)
         parse_markovjunior_block(expr.args) do inner_loc, line
             if @capture(line, PRIORITIZE(args__))

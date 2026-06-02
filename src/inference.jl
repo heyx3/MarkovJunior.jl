@@ -266,7 +266,7 @@ function infer_weight(inference::AllInference_State{N},
     # Cache the colors along the cell line, for convenience.
     empty!(inference.buffer1)
     types_in_line = let r = Ref(CellTypeSet())
-        for_each_cell_in_line(at) do idx, cell::CellIdx{N}
+        for_each_cell(at) do idx, cell::CellIdx{N}
             cell_value = inference.grid[cell]
             push!(inference.buffer1, cell_value)
             r[] = push(r[], cell_value)
@@ -279,7 +279,7 @@ function infer_weight(inference::AllInference_State{N},
     # Accumulate inference weights from path constraints.
     weight_from_path::Float32 = 0
     path_penalty::Float32 = 1
-    is_illegal = for_each_cell_in_line(at, true) do idx, cell::CellIdx{N}
+    is_illegal = for_each_cell(at, true) do idx, cell::CellIdx{N}
         cell_value = inference.grid[cell]
         paths = get(inference.source.paths_by_type, cell_value, nothing)
         if exists(paths)

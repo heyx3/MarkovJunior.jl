@@ -39,6 +39,7 @@ const BIG_TEST = @markovjunior 3 'R' begin
     @rewrite                           RM=>GT                   temperature(0.2)
     @rewrite                           RM=>GT  \[ x, -(2), 4... ] temperature(0.1)
 
+    # Next op is 17
     @rewrite begin
         PRIORITIZE(rare)
         R => G
@@ -384,7 +385,7 @@ const BIG_TEST_ANSWER = MJ.MarkovAlgorithm(
             )
         ),
 
-        # Next op is 13
+        # Next op is 17
         MJ.MarkovOpRewrite(
             MJ.MarkovRewritePriority_Rare(),
             tuple(
@@ -433,7 +434,7 @@ const BIG_TEST_ANSWER = MJ.MarkovAlgorithm(
             CELL_CODE['b'],
             MJ.DrawBoxSpace.uv,
             true,
-            Box1Di(size=Vec(1), center=Vec(0)),
+            Box1Df(size=Vec(1), center=Vec(0)),
             nothing, 0.2f0
         ),
         MJ.MarkovOpDrawBox(
@@ -1027,6 +1028,19 @@ test_all_md_symmetries(4, 6, MJ.RewriteRule_MD_Symmetry_Definition(
                 #    !  1 and 4 are both trying to be {6}  !
     ])
 )
+test_all_md_symmetries(2, 2, MJ.RewriteRule_MD_Symmetry_Definition(
+    Pair{Matrix{Int}, MJ.RewriteRule_TailSymmetry}[ ],
+    Set{Int}[ ]
+), permutedims([
+    MJ.GridDir(1, -1)  MJ.GridDir(2, -1)
+    MJ.GridDir(1, -1)  MJ.GridDir(2, 1)
+    MJ.GridDir(1, 1)   MJ.GridDir(2, -1)
+    MJ.GridDir(1, 1)   MJ.GridDir(2, 1)
+    MJ.GridDir(2, -1)  MJ.GridDir(1, -1)
+    MJ.GridDir(2, -1)  MJ.GridDir(1, 1)
+    MJ.GridDir(2, 1)  MJ.GridDir(1, -1)
+    MJ.GridDir(2, 1)  MJ.GridDir(1, 1)
+]))
 # FOR NEW_TESTS:
 # MJ.log_md_symmetry_logic() = true
 
