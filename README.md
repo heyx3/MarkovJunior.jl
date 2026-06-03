@@ -61,6 +61,13 @@ So you should clone BplusCore, BplusApp, BplusTools, and Bplus,
 ] dev ../Bplus.jl
 ````
 
+### Compilation (to .exe or .dll)
+
+We use the standard Jula project *PackageCompiler.jl* to compile the main codebase into a DLL,
+  and the codebase+GUI tool into an EXE.
+
+#### FixedPointNumbers.jl workaround
+
 Due to a [bug with FixedPointNumbers.jl](https://github.com/JuliaMath/FixedPointNumbers.jl/issues/317)
   -- possibly a [bug with PackageCompiler itself](https://github.com/JuliaLang/PackageCompiler.jl/issues/1092) --
   the public version of that package can't be used with PackageCompiler.
@@ -69,14 +76,25 @@ Instead, you need to [clone this fork](github.com/Kyjor/FixedPointNumbers.jl/tre
   and link it to this project:
 
 ````julia
-# Add it to the local Julia environment:
+# First add it to your global Julia environment:
 ] activate
 ] dev ../FixedPointNumbers.jl
-# Add it to this project:
+# Second add it to this project:
 ] activate .
 ] dev ../FixedPointNumbers.jj
 # Not sure why both of the above are needed, but they are.
 ````
+
+#### `nvpatch` workaround
+
+In the GUI tool, due to the use of *Bplus.jl*, we need to run on discrete GPU's instead of integrated ones.
+The best way to ensure graphics drivers know this is to export specific constants in the compiled executable.
+Unfortunately there's no way to do that through *PackageCompiler.jl*, so we use an external tool
+  [called `nvpatch`](https://github.com/toptensoftware/nvpatch).
+
+If you build this project without `nvpatch` installed, you'll get a stern warning.
+Users will have to force the discrete GPU themselves through Nvidia's Control Panel (or AMD's equivalent).
+Otherwise they'll get errors on startup.
 
 ## Scenes
 
