@@ -2132,14 +2132,14 @@ function parse_markovjunior_rewrite_rule_md_symmetry(inputs::MacroParserInputs,
 
                             # Apply each sign.
                             for (s_i, grid_single_sign) in signs
-                                if exists(tail_symmetry[s_i])
+                                if exists(raw_tail_symmetry[s_i])
                                     raise_parse_error(
                                         loc, inputs,
                                         "Conflicting tail symmetries given (second one is axis ",
                                           grid_axis, ")"
                                     )
                                 else
-                                    @set! tail_symmetry[s_i] = grid_axis
+                                    @set! raw_tail_symmetry[s_i] = grid_axis
                                 end
                             end
                         end

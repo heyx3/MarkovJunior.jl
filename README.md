@@ -22,9 +22,10 @@ markovjunior_run_tool()
 
 Lots of nice features have already been implemented:
 
-* A terse, extendible, broadly-featured DSL
-* Both 2D and 3D rendering
-* More Operations and Biases
+* A terse yet broadly-featured DSL
+* Both 2D and 3D rendering of scenes
+* Any-dimensional rewrite rules with complex symmetry specifications
+* Numerous hooks to extend the DSL -- new Ops, Biases, and more
 
 [You can find documentation on the new syntax here](docs/dsl.md).
 

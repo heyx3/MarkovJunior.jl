@@ -100,21 +100,25 @@ struct MarkovAlgorithm
     min_dimension::Int # Will be 1 if there aren't any restrictions;
                        #   will be fixed_dimension if it exists
 
-    pragmas::Vector{Pair{Symbol, Vector{Any}}} # Nonstandard commands meant to be parsed by the user of this package
     sequence::Vector{AbstractMarkovOp}
+    pragmas::Vector{Pair{Symbol, Vector{Any}}} # Nonstandard commands/data meant to be parsed by the user of this package
+    add_ons::Dict{Symbol, Any} # Data associated with this algorithm after parsing (as opposed to pragmas which are parsed)
 end
 Base.:(==)(a::MarkovAlgorithm, b::MarkovAlgorithm) = (
     a.initial_fill == b.initial_fill &&
     a.fixed_dimension == b.fixed_dimension &&
     a.min_dimension == b.min_dimension &&
+    a.sequence == b.sequence &&
     a.pragmas == b.pragmas &&
-    a.sequence == b.sequence
+    a.add_ons == b.add_ons
 )
 
 
 "Information about the algorithm state relevant to a Bias struct"
 struct MarkovBiasContext
     allocator::AbstractMarkovAllocator
+    pragmas::Vector{Pair{Symbol, Vector{Any}}} # Not a copy! The same instance in `MarkovAlgorithm`
+    add_ons::Dict{Symbol, Any} # Not a copy! The same instance in the `MarkovAlgorithm`
 end
 
 "
@@ -192,7 +196,10 @@ function markov_algo_start(algo::MarkovAlgorithm,
                 empty!(a)
                 a
             end,
-            MarkovBiasContext(allocator)
+            MarkovBiasContext(
+                allocator,
+                algo.pragmas, algo.add_ons
+            )
         ),
         rng,
         Ref{Optional{Int}}()

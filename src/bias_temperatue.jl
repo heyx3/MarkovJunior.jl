@@ -4,7 +4,7 @@ struct MarkovBiasTemperature <: AbstractMarkovBias
 end
 
 markov_bias_calculate(t::MarkovBiasTemperature, ::Nothing,
-                      ::CellGrid{N}, ::Any, ::Union{CellLine{N}, CellRegion{N}},
+                      ::CellGrid{N}, ::Union{CellLine{N}, CellRegion{N}},
                       rng::PRNG
                      ) where {N} = rand(rng, Float32) * t.amount
 

@@ -108,11 +108,6 @@ const BIG_TEST_ANSWER = MJ.MarkovAlgorithm(
     CELL_CODE['R'],
     3, 3,
 
-    Pair{Symbol, Vector{Any}}[
-        :Hi => Any[ 1, 3, 22 ],
-        :hello => Any[ ]
-    ],
-
     [
         MJ.MarkovOpRewrite(
             DEFAULT_PRIORITY,
@@ -608,7 +603,13 @@ const BIG_TEST_ANSWER = MJ.MarkovAlgorithm(
             )),
             nothing, ()
         )
-    ]
+    ],
+
+    Pair{Symbol, Vector{Any}}[
+        :Hi => Any[ 1, 3, 22 ],
+        :hello => Any[ ]
+    ],
+    Dict{Symbol, Any}()
 )
 
 function test_compare(a::MJ.MarkovAlgorithm, b::MJ.MarkovAlgorithm, tab::String = "")
@@ -1043,6 +1044,10 @@ test_all_md_symmetries(2, 2, MJ.RewriteRule_MD_Symmetry_Definition(
 ]))
 # FOR NEW_TESTS:
 # MJ.log_md_symmetry_logic() = true
+
+
+# External tests:
+include("add_ons.jl")
 
 
 println("\n\nTests passed!\n")

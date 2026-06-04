@@ -83,7 +83,7 @@ include("op_sequence.jl")
 include("bias_temperatue.jl")
 export AbstractMarkovAllocator, AbstractMarkovBias, AbstractMarkovOp,
        MarkovAlgorithm, MarkovAlgoState, MarkovOpContext,
-       markov_op_min_dimension, markov_algo_grid, markov_algo_n_iterations,
+       markov_algo_grid, markov_algo_n_iterations,
        markov_algo_start, markov_algo_step, markov_algo_is_started, markov_algo_is_finished
 #
 

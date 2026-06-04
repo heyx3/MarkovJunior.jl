@@ -150,7 +150,7 @@ function parse_markovjunior(_macro_args)::MarkovAlgorithm
         end
     end
     return MarkovAlgorithm(initial_fill, inputs.fixed_dims, inputs.min_dims,
-                           pragmas, main_sequence)
+                           main_sequence, pragmas, Dict{Symbol, Any}())
 end
 "Tries to evaluate a `@markovjunior` macro, throwing an error if that's not what was parsed"
 function parse_markovjunior(syntax::Union{String, Expr})::MarkovAlgorithm
