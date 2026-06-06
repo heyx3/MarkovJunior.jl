@@ -163,9 +163,6 @@ function parse_markovjunior(syntax::Union{String, Expr})::MarkovAlgorithm
     end
 end
 
-export ParsedMarkovAlgorithm, @markovjunior, parse_markovjunior,
-       markov_initial_fill, markov_main_sequence,
-       markov_fixed_dimension, markov_fixed_resolution
 #
 
 

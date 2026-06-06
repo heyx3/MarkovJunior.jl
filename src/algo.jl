@@ -285,8 +285,12 @@ markov_algo_is_finished(algo::MarkovAlgorithm, state::MarkovAlgoState) = (state.
 "Operations can require a minimum number of dimensions for the grid"
 markov_op_min_dimension(::AbstractMarkovOp)::Int = 1
 
+"Gets the grid that generation is running on"
 markov_algo_grid(s::MarkovAlgoState) = s.grid[]
+"Gets the current number of iterations executed so far"
 markov_algo_n_iterations(s::MarkovAlgoState) = s.n_iterations
+
+markov_algo_to_string(a::MarkovAlgorithm) = dsl_string(a)
 
 
 #################

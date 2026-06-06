@@ -992,6 +992,9 @@ mutable struct MarkovOpRewrite_State{NDims, NRules,
     weight_data_buffer::RewriteGroupDesirability
     # Info about all potential applications of each individual rule.
     weight_data_buffer_per_rule::Vector{RewriteGroupDesirability}
+
+    # Buffer for holding a final group of sub-choices to choose from.
+    final_choices_buffer::Vector{RewritePotentialApplication{NDims}}
 end
 rewrite_rule_option_indices(state::MarkovOpRewrite_State, rule_idx::Integer) = (
     state.weighted_options_buffer_first_indices[rule_idx] :
@@ -1028,7 +1031,8 @@ function markov_op_initialize(r::MarkovOpRewrite{<:NTuple{NRules, Any}, TBias, T
         markov_allocator_acquire_array(context.allocator, tuple(128), RewritePotentialApplication{NDims}),
         markov_allocator_acquire_array(context.allocator, tuple(NRules+1), Int),
         RewriteGroupDesirability(),
-        markov_allocator_acquire_array(context.allocator, tuple(NRules), RewriteGroupDesirability)
+        markov_allocator_acquire_array(context.allocator, tuple(NRules), RewriteGroupDesirability),
+        markov_allocator_acquire_array(context.allocator, tuple(256), RewritePotentialApplication{NDims})
     )
     if all(isempty, cache.applications)
         @logic_logln("MarkovOpRewrite has no options at the start; canceling...")
@@ -1100,7 +1104,16 @@ function markov_op_iterate(r::MarkovOpRewrite{TRules, TSelfBiases, TPriority},
 
         @logic_logln("There are ", length(state.weighted_options_buffer),
                       " options with biases ranging from ",
-                      state.weight_data_buffer.min, " to ", state.weight_data_buffer.max)
+                      state.weight_data_buffer.min, " to ", state.weight_data_buffer.max,
+                      ": [")
+        log_logic() && for option::RewritePotentialApplication{NDims} in state.weighted_options_buffer
+            @logic_logln("\tRule ", option.rule_idx, " at ", option.start_cell, " along ",
+                         (option.dir isa GridDir) ?
+                             option.dir :
+                             Tuple((g.axis * g.sign) for g in option.dir.rule_to_grid),
+                         "; desirability=", option.desirability)
+        end
+        @logic_logln("]\n")
 
         # If no options are left, we're done.
         if isempty(state.weighted_options_buffer)
@@ -1131,19 +1144,25 @@ function markov_op_iterate(r::MarkovOpRewrite{TRules, TSelfBiases, TPriority},
         rule_desirability_data = state.weight_data_buffer_per_rule[pick_rule_i]
 
         # Pick an option within that rule.
-        (pick_start_cell, pick_dir) =
-           # If all weights are equal then we can use use trivial uniform-random selection.
-          if rule_desirability_data.min == rule_desirability_data.max
-            @logic_logln("Luckily we can use uniform-random selection, which is much faster")
-            choice = rand(rng, picked_options)
-            (choice.start_cell, choice.dir)
-          else
-            picked_option = picked_options[
-                weighted_random_array_element((o.desirability for o in picked_options),
-                                              rule_desirability_data.sum,
-                                              rand(rng, Float32))
-            ]
-            (picked_option.start_cell, picked_option.dir)
+        if rule_desirability_data.min == rule_desirability_data.max
+            @logic_logln("No biases exist, so we'll use uniform-random selection")
+        else
+            @logic_logln("Picking the move with the highest desirability (",
+                         rule_desirability_data.max, ")")
+            empty!(state.final_choices_buffer)
+            append!(state.final_choices_buffer,
+                    Iterators.filter(app -> app.desirability == rule_desirability_data.max,
+                                     picked_options))
+            picked_options = @view state.final_choices_buffer[1:end] # Explicit indices for type-stability
+            @markovjunior_assert(!isempty(picked_options),
+                                 "Somehow none of the options in this rule have their max desirability ",
+                                   rule_desirability_data.max)
+            if length(picked_options) > 1
+                @logic_logln("\tThere are ", length(picked_options), ", so one will be chosen randomly")
+            end
+        end
+        (pick_start_cell, pick_dir) = let p = rand(rng, picked_options)
+            (p.start_cell, p.dir)
         end
         @logic_logln("Decided to apply the rule at ", pick_start_cell, " along ",
                      if pick_dir isa GridDir
@@ -1236,6 +1255,7 @@ function markov_op_cancel(op::MarkovOpRewrite, s::MarkovOpRewrite_State,
         markov_allocator_release_array(allocator, s.weighted_options_buffer)
         markov_allocator_release_array(allocator, s.weight_data_buffer_per_rule)
         markov_allocator_release_array(allocator, s.weighted_options_buffer_first_indices)
+        markov_allocator_release_array(allocator, s.final_choices_buffer)
     end
     run(context.allocator)
 end
