@@ -310,7 +310,7 @@ In particular:
 
 As mentioned before, a `@rewrite` with multiple rules will normally choose what to do with uniform randomness.
 You can change this behavior by adding weights to each rule,
-  and/or a "bias" section to the end of the statement (either as a single statement or as a block):
+  and/or a "bias" section to the end of the statement (as either a single expression or a block):
 
 ````julia
 # A single bias term:
@@ -329,6 +329,8 @@ end
     field(R<-G<-Y, recompute)
 end
 ````
+
+The various biases are described below.
 
 #### Weighted rules
 
@@ -351,38 +353,60 @@ end
 Weight modifiers must be specified after the mask (e.g. `%0.5  *3`)
   and before the [symmetry modifier](#symmetry) (e.g. `*3  \[ -x ]`).
 
-#### Field bias
+#### Bias: Field
 
-**TODO: A simpler version where you omit the first group, and all colors are affected equally.**
+> *This is our equivalent of the original MarkovJunior's `<field>` node.*
 
-A bias of `field(A<-B<-C, ...)` does two things:
-* Strongly bias rewrite rules towards `C` cells, then outward through `B` cells.
-* Prevent the rewrite rules from changing cells that have the value `A`,
-  unless they can be reached through a path of `B` cells starting at any `C` cell.
+A bias of `field(A)` will first compute a **pathing field** outward from all `A` cells,
+  storing integer distance from the nearest `A`.
+Then all rewrites are biased to stay as low as possible in this field, close to the original `A` cells.
+There are many ways to extend this behavior.
 
-You may add multiple colors for each part of the field,
-  e.g. `field(RG <- Y <- bwg)`.
+* Provide multiple colors for the source cells: `field(RGBwbg)`.
+* Flip the bias to be *away* from source cells, using a minus sign: `field(-A)`.
+* Force the field to be recomputed any time paths are affected (e.g. when source cells are rewritten)
+  with a `live` parameter: `field(A, live)`.
+  * Without this parameter the field is computed once when the rewrite op starts,
+   which is much more performant.
+  Don't recompute unless you really need it!
+* Limit the cells in the pathing field by providing a "path": `field(A->BC)` will focus on paths
+  from `A` cells through `B` and/or `C` cells;
+  others are "outside" the pathing field and cannot be rewritten.
+  * If you want outside cells to not be forbidden but merely have the lowest Bias,
+  pass a `soft` parameter: `field(A->BC, soft)`.
+  * When flipping the bias of a field with paths, like `field(-A->BC)`,
+  a friendlier syntax is available: `field(A<-BC)`.
+  Note that if a field is reversed, has paths, and is `soft`, then outside cells are rewritten *first*!
+  * You can mark the source cells **or** the path cells (not both) with an underscore or asterisk,
+  to mean "all other cells".
+  For example `field(*->BC)` uses everything but `B` and `C` for source cells.
+* A field that has paths, like `field(A->BC)`, can also be assigned an "anchor": `field(A->BC | DE)`.
+  Cells are outside the pathing field if they don't have a connection to an anchor --
+  in this case, to a `D` or `E` cell through `A`, `B`, and `C` cells.
+  * As above, you can use asterisk/underscore to mean "all other cell types" for the anchor: `field(A->BC | _)`.
+* To switch from deterministic Bias to weighted-random, pass `randomness=x`.
+  The default is 0, which means that bias is always directly tied to the pathing field.
+  * Values from 0 to 1 mean that each potential rewrite's Bias becomes a weighted-random value
+   based on the pathing field, with the weights becoming more drastic near 0.
+  * Values above 1 make the weights less important, approaching uniform-random bias values.
 
-If there are multiple field associated with one source (`A` in the above example),
-  there only needs to be one legal path through one field for the rewrite rule to be legal.
-However the illegal fields can each add a "penalty" to make that rewrite less likely.
-
-Extra optional arguments are as follows:
-* Flip the direction of the arrows (e.g. `field(A->B->C)`) to instead bias rules near `A`,
-  then outward through `B` towards `C`.
-* Pass `recompute` (e.g. `field(A->B->C, recompute)`) to force the field to be recomputed after every rule application.
-  This significantly lowers performance in exchange for perfect correctness in tricky situations.
-* Pass `penalty=X` to provide a penalty scale,
-  in the event that other fields have a legal path to the cell but this one does not.
-  A value of 1.0 means "no penalty"; higher values increase the relative importance of this field
-  when choosing rules to apply.
-
-#### Solve bias
+#### Bias: Solve
 
 A bias of `solve(b->w)` will try to turn each `b` pixel into `w`.
 This is our version of original Markov Junior's "inference" node (a.k.a. `<observe>`).
 
 **TODO: Finish**
+
+#### Bias: Temperature
+
+This bias adds randomness to other biases, where `f` is the scale of the randomness.
+More precisely, a uniform-random value from 0 to `f` is added to the total Bias for each rewrite choice.
+
+Temperature works great for small-scale randomness, shuffling the most preferred moves
+  with the almost-most-preferred moves.
+It does not help for large-scale randomness, because low-bias moves cannot be chosen
+  except by raising the temperature so high that the other biases are meaningless.
+Instead, individual biases need to offer their own way of doing large-scale randomness.
 
 ### Multidimensional matches
 
