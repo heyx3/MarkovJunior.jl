@@ -1,8 +1,9 @@
 # v0.3
 
 * Add 3D view to the scene renderer
-* Improve rewrite rule syntax
-* Various GUI improvements
+* Support compilation to an exe (*scripts/compile_program.jl*)
+* Improve Ops syntax (see DSL documentation)
+* Various GUI/tool improvements
 
 # v0.2
 
