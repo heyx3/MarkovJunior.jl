@@ -112,5 +112,5 @@
 	# Create a night sky.
 	@fill 'b' uv(min=0, max=(1, 0.85)) +T %0.975
 	@fill 'b' uv(min=(0, 0.85), max=1) +T
-	@fill 'g' uv(min=0, max=1) +T
+	@fill 'g' +T
 end

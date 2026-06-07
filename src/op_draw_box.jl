@@ -247,10 +247,25 @@ function parse_markovjunior_op(::Val{Symbol("@fill")},
         !@capture(full_line, @fill exCol_Char exSpace_Symbol(exArgNameA_=exArgValA_, exArgNameB_=exArgValB_) -exRuleSub_           ) &&
         !@capture(full_line, @fill exCol_Char exSpace_Symbol(exArgNameA_=exArgValA_, exArgNameB_=exArgValB_)               %exMask_) &&
         !@capture(full_line, @fill exCol_Char exSpace_Symbol(exArgNameA_=exArgValA_, exArgNameB_=exArgValB_) +exRuleAdd_   %exMask_) &&
-        !@capture(full_line, @fill exCol_Char exSpace_Symbol(exArgNameA_=exArgValA_, exArgNameB_=exArgValB_) -exRuleSub_   %exMask_)
+        !@capture(full_line, @fill exCol_Char exSpace_Symbol(exArgNameA_=exArgValA_, exArgNameB_=exArgValB_) -exRuleSub_   %exMask_) &&
+       !@capture(full_line,  @fill exCol_Char                                                                                      ) &&
+        !@capture(full_line, @fill exCol_Char                                                                +exRuleAdd_           ) &&
+        !@capture(full_line, @fill exCol_Char                                                                -exRuleSub_           ) &&
+        !@capture(full_line, @fill exCol_Char                                                                              %exMask_) &&
+        !@capture(full_line, @fill exCol_Char                                                                +exRuleAdd_   %exMask_) &&
+        !@capture(full_line, @fill exCol_Char                                                                -exRuleSub_   %exMask_)
     #begin
         raise_parse_error(loc, inputs,
-                       "Invalid format! Expected `@fill 'C' S(A=N, B=M) [rule] [mask]`")
+                          "Invalid format! Expected `@fill 'C' [S(A=N, B=M)] [rule] [mask]`")
+    end
+
+    # Fill in defaults.
+    if isnothing(exSpace)
+        exSpace = :uv
+        exArgNameA = :min
+        exArgValA = 0
+        exArgNameB = :max
+        exArgValB = 1
     end
 
     # Do some quick error-checking of expression types.

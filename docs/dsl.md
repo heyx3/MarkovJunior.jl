@@ -590,9 +590,10 @@ For example `\[  (x, y)[ (+y, +z), @inversions(y, z) ]   ]` turns into
 ## `@fill`
 
 To make a deterministic modification to a grid, you can use
-  `@fill 'C' S(A=N, B=M) [rule] [mask]`.
+  `@fill 'C' [S(A=N, B=M)] [rule] [mask]`.
 
-This operation will fill a single color in every pixel of a box described by the given space.
+This operation will fill a single color within a specific region of the grid.
+If the region (`S(...)` above) isn't provided, it defaults to the entire grid.
 A rule can optionally filter which color pixels are affected,
    so you can also think of it as a "replace" operation.
 

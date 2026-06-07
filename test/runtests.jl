@@ -53,8 +53,9 @@ const BIG_TEST = @markovjunior 3 'R' begin
     @fill 'b' uv(size=1, center=0) %0.2
     @fill 'w' uv(size=(0.1, 0.5), max=1) +R
     @fill 'M' pixel(min=1, max=5) -wgb %(0.1:0.9)
+    @fill 'w' +gbw
 
-    # Next op is 22
+    # Next op is 23
     @sequence @rewrite(10, R=>b)
     @sequence (area/2) @rewrite(10, R=>R) begin
         temperature(11.2)
@@ -68,7 +69,7 @@ const BIG_TEST = @markovjunior 3 'R' begin
         end temperature(0.4)
     end temperature(0.9)
 
-    # Next op is 25
+    # Next op is 26
     @rewrite [ [Rw] _ B ] => [ R G w ]
     @rewrite [ R G B
                w g b
@@ -448,8 +449,16 @@ const BIG_TEST_ANSWER = MJ.MarkovAlgorithm(
             (Val(:blacklist), MJ.CellTypeSet("wgb")),
             (0.1f0, 0.9f0)
         ),
+        MJ.MarkovOpDrawBox(
+            CELL_CODE['w'],
+            MJ.DrawBoxSpace.uv,
+            true,
+            Box1Df(min=Vec(0), max=Vec(1)),
+            (Val(:whitelist), MJ.CellTypeSet("gbw")),
+            nothing
+        ),
 
-        # Next op is 22
+        # Next op is 23
         MJ.MarkovOpSequence(
             MJ.AbstractMarkovOp[
                 MJ.MarkovOpRewrite(
@@ -540,7 +549,7 @@ const BIG_TEST_ANSWER = MJ.MarkovAlgorithm(
             ]
         ),
 
-        # Next op is 25
+        # Next op is 26
         MJ.MarkovOpRewrite(
             DEFAULT_PRIORITY,
             tuple(MJ.RewriteRule_MD(
