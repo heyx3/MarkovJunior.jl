@@ -25,6 +25,7 @@ mutable struct GuiMemory
     new_scene_file_name::String
 
     is_playing::Bool
+    prefers_running_to_end::Bool
     ticks_per_second::Float32
     ticks_per_jump::Int32
     ticks_for_profile::Int32
@@ -40,7 +41,7 @@ GuiMemory() = GuiMemory(
     FALLBACK_SCENE_NAME, read(path_scene(FALLBACK_SCENE_NAME), String),
     "0x1234567890abcdef",
     "MyScene",
-    false, 150, 10, 1000, 10,
+    false, false, 150, 10, 1000, 10,
     2,
     v3f(1, 1, 1), vnorm(v3f(1, -1, -1))
 )
@@ -189,7 +190,7 @@ function GuiRunner(memory::GuiMemory,
         Vector{Texture}()
     )
 
-    reset_gui_runner_algo(runner, true, false, true)
+    reset_gui_runner_algo(runner, true, false, true, true)
     if runner.rendering[1] isa Val{2}
         update_gui_runner_texture_2D(runner)
     elseif runner.rendering[1] isa Val{3}
@@ -336,7 +337,8 @@ function update_gui_runner_render_3D(runner::GuiRunner, rerender_view::Bool)
 end
 
 function reset_gui_runner_algo(runner::GuiRunner,
-                               parse_new_seed::Bool, parse_new_algorithm::Bool, update_resolution::Bool)
+                               parse_new_seed::Bool, parse_new_algorithm::Bool, update_resolution::Bool,
+                               allow_run_to_end::Bool)
     old_grid_size::Tuple = if exists(runner.algorithm_state)
         size(runner.algorithm_state.grid[])
     else
@@ -402,6 +404,10 @@ function reset_gui_runner_algo(runner::GuiRunner,
     # Finally, we can start the algorithm!
     runner.algorithm_state = markov_algo_start(runner.algorithm, Tuple(new_resolution), runner.current_seed)
 
+    if allow_run_to_end && runner.memory.prefers_running_to_end
+        finish_gui_runner_algo(runner, Ref(false))
+    end
+
     # Configure rendering.
     #TODO: Inspect @pragma statements in the algorithm for render hints, otherwise use fixed/min dimensions of the algo, otherwise use current renderer
     if runner.rendering[1] isa Val{2}
@@ -451,6 +457,8 @@ function finish_gui_runner_algo(runner::GuiRunner, grid_has_changed::Ref{Bool})
             break
         end
     end
+
+    return nothing
 end
 
 gui_runner_is_finished(runner::GuiRunner)::Bool = isnothing(runner.algorithm_state) ||
@@ -688,7 +696,7 @@ function gui_main(runner::GuiRunner, delta_seconds::Float32)
             CImGui.SetNextItemWidth(-1)
             gui_with_style(CImGui.LibCImGui.ImGuiCol_Button, BUTTON_COLOR_RUN_SPECIAL) do
                 if CImGui.Button("Reset", BUTTON_SIZE_RUN_SPECIAL)
-                    reset_gui_runner_algo(runner, false, false, false)
+                    reset_gui_runner_algo(runner, false, false, false, true)
                     grid_has_changed[] = true
                 end
             end
@@ -771,11 +779,17 @@ function gui_main(runner::GuiRunner, delta_seconds::Float32)
             CImGui.Text("ticks/s")
         CImGui.TableNextColumn()
             CImGui.SetNextItemWidth(-1)
+            new_runs_to_end = Ref(runner.memory.prefers_running_to_end)
             if gui_with_style(() -> CImGui.Button("Run to End", BUTTON_SIZE_RUN_SPECIAL),
-                              LCIG.ImGuiCol_Button, BUTTON_COLOR_RUN_SPECIAL)
+                              LCIG.ImGuiCol_Button,
+                              new_runs_to_end[] ? v3f(0.3, 0.8, 0.5) : BUTTON_COLOR_RUN_SPECIAL)
             #begin
-                finish_gui_runner_algo(runner, grid_has_changed)
+                new_runs_to_end[] = !new_runs_to_end[]
+                if new_runs_to_end[]
+                    finish_gui_runner_algo(runner, grid_has_changed)
+                end
             end
+            runner.memory.prefers_running_to_end = new_runs_to_end[]
         CImGui.TableNextColumn()
             CImGui.Dummy(0, UNITS_VPAD)
             CImGui.SetNextItemWidth(-1)
@@ -819,14 +833,14 @@ function gui_main(runner::GuiRunner, delta_seconds::Float32)
                             LCIG.ImGuiCol_Button, v3f(0.2, 0.1, 0.1),
                             unchanged = seed_has_changed)
             #begin
-                reset_gui_runner_algo(runner, true, false, false)
+                reset_gui_runner_algo(runner, true, false, false, true)
                 grid_has_changed[] = true
             end
             if CImGui.Button("Reset with rnd seed", v2f(150, 32))
                 runner.memory.current_seed_src = string(rand(UInt64))
                 update!(runner.next_seed, runner.memory.current_seed_src)
 
-                reset_gui_runner_algo(runner, true, false, false)
+                reset_gui_runner_algo(runner, true, false, false, true)
                 grid_has_changed[] = true
             end
         end
@@ -872,7 +886,7 @@ function gui_main(runner::GuiRunner, delta_seconds::Float32)
          gui_with_style(CImGui.LibCImGui.ImGuiCol_ButtonHovered, v3f(0.2, 0.1, 0.1), unchanged=resolution_is_different) do
           gui_with_style(CImGui.LibCImGui.ImGuiCol_ButtonActive, v3f(0.2, 0.1, 0.1), unchanged=resolution_is_different) do
             if CImGui.Button("Reset with new size", v2f(150, 25)) && resolution_is_different
-                reset_gui_runner_algo(runner, false, false, true)
+                reset_gui_runner_algo(runner, false, false, true, true)
                 grid_has_changed[] = true
             end
         end end end
@@ -1053,13 +1067,17 @@ function gui_main(runner::GuiRunner, delta_seconds::Float32)
         was_new_scene_name_edited::Bool = gui_text!(runner.next_scene_name)
         CImGui.SameLine(0, 20)
         runner.memory.new_scene_file_name = string(runner.next_scene_name)
+        new_scene_file_and_extension = runner.memory.new_scene_file_name
+        if !endswith(new_scene_file_and_extension, ".jl")
+            new_scene_file_and_extension *= ".jl"
+        end
         can_use_new_scene_name = none(c -> c in runner.memory.new_scene_file_name,
                                       ('/', '\\', '*'))
         if !can_use_new_scene_name && isempty(runner.algorithm_error_msg)
             runner.algorithm_error_msg = "Invalid path chars in new scene name!"
         end
         if was_new_scene_name_edited && can_use_new_scene_name
-            can_use_new_scene_name = !isfile(path_scene(runner.memory.new_scene_file_name * ".jl"))
+            can_use_new_scene_name = !isfile(path_scene(new_scene_file_and_extension))
             if !can_use_new_scene_name && isempty(runner.algorithm_error_msg)
                 runner.algorithm_error_msg = "File with that name already exists!"
             end
@@ -1068,17 +1086,17 @@ function gui_main(runner::GuiRunner, delta_seconds::Float32)
             # Check if the file already exists.
             # This is a bit redundant with the above, but it's the only easy way to avoid
             #    constantly checking for the file every X seconds.
-            if isfile(path_scene(runner.memory.new_scene_file_name * ".jl"))
+            if isfile(path_scene(new_scene_file_and_extension))
                 can_use_new_scene_name = false
                 runner.algorithm_error_msg = "File with that name already exists!"
             else try
                 new_scene_str = "@markovjunior begin\n\t@rewrite 1 b=>w\n\t@rewrite wb=>ww\nend"
                 open(io -> write(io, new_scene_str),
-                     path_scene(runner.memory.new_scene_file_name * ".jl"),
+                     path_scene(new_scene_file_and_extension),
                      "w")
 
                 # Switch to editing the new scene.
-                runner.memory.current_scene_file_name = runner.memory.new_scene_file_name * ".jl"
+                runner.memory.current_scene_file_name = new_scene_file_and_extension
                 runner.memory.current_scene_src = new_scene_str
                 update!(runner.next_algorithm, new_scene_str)
 
@@ -1106,21 +1124,7 @@ function gui_main(runner::GuiRunner, delta_seconds::Float32)
         end
 
         if CImGui.Button("Restart##WithNewAlgorithm")
-            reset_gui_runner_algo(runner, false, true, true)
-            if runner.rendering[1] isa Val{2}
-                update_gui_runner_texture_2D(runner)
-            elseif runner.rendering[1] isa Val{3}
-                update_gui_runner_render_3D(runner, true)
-            else
-                error("Unhandled: ", typeof(runner.rendering))
-            end
-        end
-        CImGui.SameLine(0, 20)
-        if CImGui.Button("Restart and Finish##WithNewAlgorithm")
-            reset_gui_runner_algo(runner, false, true, true)
-            if isempty(runner.algorithm_error_msg)
-                finish_gui_runner_algo(runner, Ref(false))
-            end
+            reset_gui_runner_algo(runner, false, true, true, true)
             if runner.rendering[1] isa Val{2}
                 update_gui_runner_texture_2D(runner)
             elseif runner.rendering[1] isa Val{3}
