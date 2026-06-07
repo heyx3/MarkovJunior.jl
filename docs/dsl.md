@@ -377,13 +377,11 @@ There are many ways to extend this behavior.
   * When flipping the bias of a field with paths, like `field(-A->BC)`,
   a friendlier syntax is available: `field(A<-BC)`.
   Note that if a field is reversed, has paths, and is `soft`, then outside cells are rewritten *first*!
-  * You can mark the source cells **or** the path cells (not both) with an underscore or asterisk,
-  to mean "all other cells".
-  For example `field(*->BC)` uses everything but `B` and `C` for source cells.
+  * To flip the pathing so that only writes *outside* the path are allowed, pass `forbidden`:
+  `field(A->BC, forbidden)`.
 * A field that has paths, like `field(A->BC)`, can also be assigned an "anchor": `field(A->BC | DE)`.
   Cells are outside the pathing field if they don't have a connection to an anchor --
   in this case, to a `D` or `E` cell through `A`, `B`, and `C` cells.
-  * As above, you can use asterisk/underscore to mean "all other cell types" for the anchor: `field(A->BC | _)`.
 * To switch from deterministic Bias to weighted-random, pass `randomness=x`.
   The default is 0, which means that bias is always directly tied to the pathing field.
   * Values from 0 to 1 mean that each potential rewrite's Bias becomes a weighted-random value
