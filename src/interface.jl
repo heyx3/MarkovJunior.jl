@@ -71,7 +71,7 @@ Returns the new state object for this bias.
 Default: does nothing, returns the same state.
 "
 markov_bias_update(bias::AbstractMarkovBias, bias_state,
-                   grid::CellGrid{N}, subset::BoxI{N},
+                   grid::CellGrid{N}, subset::BoxI{N}, old_subset_values::CellGrid{N},
                    rng::PRNG
                   ) where {N} = bias_state
 "
@@ -80,11 +80,12 @@ Default: does nothing.
 "
 markov_bias_cleanup(bias::AbstractMarkovBias, bias_state) = nothing
 
-"Adds type-stability to the bias's state object (by default, returns `Nothing`)"
+"Required for type-stability; may be different per-instance; defaults to `Nothing`"
+markov_bias_state_type(a::AbstractMarkovBias) = markov_bias_state_type(typeof(a))
 markov_bias_state_type(::Type{<:AbstractMarkovBias})::Type = Nothing
 
 "
-Calculates the desirability of this action, at this moment, in this grid.
+Calculates the desirability of a rewrite action, at this moment, in this grid.
 Returns `nothing` if the action must not happen.
 "
 function markov_bias_calculate(bias::AbstractMarkovBias, bias_state,

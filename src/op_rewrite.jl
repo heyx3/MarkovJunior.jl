@@ -926,7 +926,7 @@ Decides which rewrite rule to apply.
 
 Must implement the following interface:
 * `pick_rule_using_rewrite_priority(...)` to return the rule index.
-* `parse_markovjunior_rewrite_priority(::Val{x}, ...)`
+* `parse_markovjunior_rewrite_priority(::Val{:x}, ...)`
   to parse itself from the statement `PRIORITY(x, args...)`
 * `dsl_string(self)` to turn the struct back into a DSL statement.
 "
@@ -951,7 +951,7 @@ dsl_string(p::AbstractMarkovRewritePriority) = error("Unimplemented: ", typeof(p
 ##################
 #  Rewrite Op
 
-"A simple MarkovJunior rewrite op, affecting a 1D strip of pixels"
+"The beating heart of MarkovJunior: matches groups of pixels against a pattern, and rewrites them"
 struct MarkovOpRewrite{TRules <: Tuple{Vararg{Union{RewriteRule_Strip, RewriteRule_MD}}},
                        TBias <: Tuple{Vararg{AbstractMarkovBias}},
                        TPriority <: AbstractMarkovRewritePriority
@@ -995,6 +995,9 @@ mutable struct MarkovOpRewrite_State{NDims, NRules,
 
     # Buffer for holding a final group of sub-choices to choose from.
     final_choices_buffer::Vector{RewritePotentialApplication{NDims}}
+    # Buffer for holding the previous pixel values after applying a 1D rewrite rule.
+    # At least as long as the longest 1D rewrite rule.
+    prev_1D_pixels_buffer::Vector{UInt8}
 end
 rewrite_rule_option_indices(state::MarkovOpRewrite_State, rule_idx::Integer) = (
     state.weighted_options_buffer_first_indices[rule_idx] :
@@ -1023,6 +1026,9 @@ function markov_op_initialize(r::MarkovOpRewrite{<:NTuple{NRules, Any}, TBias, T
     bias_states::TBiasStates = map(b -> markov_bias_initialize(b, grid, rng, context.bias_context), biases)
 
     threshold = isnothing(r.threshold) ? nothing : get_threshold(r.threshold, grid, rng)
+    longest_1D_rule::Int = maximum(Tuple(
+        length(ru.cells) for ru in r.rules if ru isa RewriteRule_Strip
+    ); init=0)
 
     out_state = MarkovOpRewrite_State{NDims, NRules, typeof(grid), typeof(r.rules),
                                         length(biases), typeof(biases), TBiasStates}(
@@ -1032,7 +1038,8 @@ function markov_op_initialize(r::MarkovOpRewrite{<:NTuple{NRules, Any}, TBias, T
         markov_allocator_acquire_array(context.allocator, tuple(NRules+1), Int),
         RewriteGroupDesirability(),
         markov_allocator_acquire_array(context.allocator, tuple(NRules), RewriteGroupDesirability),
-        markov_allocator_acquire_array(context.allocator, tuple(256), RewritePotentialApplication{NDims})
+        markov_allocator_acquire_array(context.allocator, tuple(256), RewritePotentialApplication{NDims}),
+        markov_allocator_acquire_array(context.allocator, tuple(max(longest_1D_rule, 1)), UInt8)
     )
     if all(isempty, cache.applications)
         @logic_logln("MarkovOpRewrite has no options at the start; canceling...")
@@ -1174,8 +1181,8 @@ function markov_op_iterate(r::MarkovOpRewrite{TRules, TSelfBiases, TPriority},
         # Apply the rule.
         # Because each rule is a different type but known at compile-time,
         #    we should add a layer of dispatch when executing it.
-        affected_area::BoxI{NDims} = (rule -> begin
-            if rule isa RewriteRule_Strip
+        (rule -> begin
+            (affected_area, original_values) = if rule isa RewriteRule_Strip
                 source_values = Tuple(
                     grid[grid_dir_pos_along(pick_dir, pick_start_cell, i-1)]
                     for i in 1:length(rule.cells)
@@ -1183,6 +1190,7 @@ function markov_op_iterate(r::MarkovOpRewrite{TRules, TSelfBiases, TPriority},
                 # Each rule's rewrite cell is also a different type known at compile-time.
                 foreach(rule.cells, 1:length(rule.cells)) do (rewrite_source, rewrite_dest), cell_i
                     cell_pos = grid_dir_pos_along(pick_dir, pick_start_cell, cell_i-1)
+                    state.prev_1D_pixels_buffer[cell_i] = grid[cell_pos]
                     grid[cell_pos] = pick_rewrite_value(rewrite_dest, rewrite_source,
                                                         source_values, cell_i,
                                                         rng)
@@ -1192,7 +1200,20 @@ function markov_op_iterate(r::MarkovOpRewrite{TRules, TSelfBiases, TPriority},
                 rule_len = convert(Int32, length(rule.cells))
                 pick_end_cell = grid_dir_pos_along(pick_dir, pick_start_cell, rule_len-1)
                 (pick_start_cell, pick_end_cell) = minmax(pick_start_cell, pick_end_cell)
-                Box(pick_start_cell:pick_end_cell)
+                b = Box(pick_start_cell:pick_end_cell)
+
+                # Create an N-dimensional view of the source values in the grid.
+                source_view_shape = ntuple(Val(NDims)) do i
+                    if i == pick_dir.axis
+                        Base.:(:)
+                    else
+                        1
+                    end
+                end
+                source_view = reshape(@view(state.prev_1D_pixels_buffer[1:end]),
+                                      source_view_shape...)
+
+                b, source_view
             else
                 pick_dir_o::RewriteRule_MD_Orientation{NDims} = pick_dir
 
@@ -1217,16 +1238,19 @@ function markov_op_iterate(r::MarkovOpRewrite{TRules, TSelfBiases, TPriority},
                 BoxI{NDims}(
                     min=pick_start_cell,
                     size=vsize(pick_dir.rule_permutation)
-                )
+                ), source_values
             end
+
+            # Update inner bookkeeping.
+            update_rewrite_cache!(state.rewrite_cache, affected_area)
+            state.bias_states = markov_bias_update.(
+                state.biases, state.bias_states,
+                Ref(grid), Ref(affected_area), Ref(original_values),
+                Ref(rng)
+            )
         end)(r.rules[pick_rule_i])
 
-        # Update bookkeeping.
-        update_rewrite_cache!(state.rewrite_cache, affected_area)
-        state.bias_states = markov_bias_update.(
-            state.biases, state.bias_states,
-            Ref(grid), Ref(affected_area), Ref(rng)
-        )
+        # Update outer bookkeeping.
         if exists(ticks_left[])
             ticks_left[] -= 1
         end
@@ -1256,6 +1280,7 @@ function markov_op_cancel(op::MarkovOpRewrite, s::MarkovOpRewrite_State,
         markov_allocator_release_array(allocator, s.weight_data_buffer_per_rule)
         markov_allocator_release_array(allocator, s.weighted_options_buffer_first_indices)
         markov_allocator_release_array(allocator, s.final_choices_buffer)
+        markov_allocator_release_array(allocator, s.prev_1D_pixels_buffer)
     end
     run(context.allocator)
 end
