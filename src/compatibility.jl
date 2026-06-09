@@ -22,3 +22,22 @@ function ordered_collection_get_idx(oc::Union{OrderedDict, OrderedSet}, idx::Int
 
     return inner.keys[idx]
 end
+
+"Scoped wrapper for read-write locks"
+@inline function lock_read(to_do, rwl::ReadWriteLock)
+    readlock(rwl)
+    try
+        return to_do()
+    finally
+        readunlock(rwl)
+    end
+end
+"Scoped wrapper for read-write locks"
+@inline function lock_write(to_do, rwl::ReadWriteLock)
+    lock(rwl)
+    try
+        return to_do()
+    finally
+        unlock(rwl)
+    end
+end

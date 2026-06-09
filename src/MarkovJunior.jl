@@ -57,7 +57,7 @@ module MarkovJunior
 using Random, Setfield, Profile, Printf
 const System = Base.Sys
 
-using MacroTools, NamedTupleTools
+using MacroTools, NamedTupleTools, ConcurrentUtilities
 using OrderedCollections, StaticArrays, DataStructures, Combinatorics
 using StructTypes, JSON3
 using GLFW, CImGui, CSyntax
@@ -97,5 +97,8 @@ if BUILT_WITH_TOOL
     include("tool_main.jl")
     export markovjunior_run_tool
 end
+
+# Library:
+include("lib_interface.jl")
 
 end # module
