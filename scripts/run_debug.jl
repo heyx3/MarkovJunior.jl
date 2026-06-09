@@ -3,6 +3,7 @@
 
 using Pkg
 Pkg.activate(joinpath(@__FILE__, "../.."))
+println(".")
 
 using MarkovJunior
 MarkovJunior.markovjunior_asserts_enabled() = true

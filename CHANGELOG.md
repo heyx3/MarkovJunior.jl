@@ -2,7 +2,8 @@
 
 * Add 3D view to the scene renderer
 * Support compilation to an exe (*scripts/compile_program.jl*)
-* Improve Ops syntax (see DSL documentation)
+* Improve Ops syntax (see [DSL documentation](docs/dsl.md))
+* Fix up the interface for custom extensions (see [*add_ons* documentation](docs/add_ons.md))
 * Various GUI/tool improvements
 
 # v0.2

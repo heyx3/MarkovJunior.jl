@@ -927,7 +927,7 @@ Decides which rewrite rule to apply.
 Must implement the following interface:
 * `pick_rule_using_rewrite_priority(...)` to return the rule index.
 * `parse_markovjunior_rewrite_priority(::Val{:x}, ...)`
-  to parse itself from the statement `PRIORITY(x, args...)`
+  to parse itself from the statement `PRIORITIZE(x, args...)`
 * `dsl_string(self)` to turn the struct back into a DSL statement.
 "
 abstract type AbstractMarkovRewritePriority end
@@ -1004,10 +1004,23 @@ rewrite_rule_option_indices(state::MarkovOpRewrite_State, rule_idx::Integer) = (
      (state.weighted_options_buffer_first_indices[rule_idx+1] - 1)
 )
 
+function markov_op_state_type(op::MarkovOpRewrite{TRules}, TGrid::Type{<:CellGrid{NGridDims}},
+                              rng::PRNG, context::MarkovOpContext
+                             ) where {NGridDims, TRules}
+    all_biases = Iterators.flatten((context.all_biases, op.biases))
+    return MarkovOpRewrite_State{
+        NGridDims, length(op.rules), TGrid, TRules,
+        count(i->true, all_biases), Tuple{typeof.(all_biases)...},
+        Tuple{markov_bias_state_type.(all_biases, Ref(TGrid), Ref(rng), Ref(context.bias_context))...}
+    }
+end
 function markov_op_initialize(r::MarkovOpRewrite{<:NTuple{NRules, Any}, TBias, TPriority},
-                              grid::CellGrid{NDims}, rng::PRNG,
+                              TState::Type{<:MarkovOpRewrite_State{NDims, NRules, TGrid, TRules,
+                                                                   NFullBiases, TFullBiases, TFullBiasStates}},
+                              grid::TGrid, rng::PRNG,
                               context::MarkovOpContext
-                             ) where {NDims, NRules, TBias, TPriority}
+                             ) where {NDims, NRules, TGrid<:CellGrid{NDims}, TRules, TBias, TPriority,
+                                      NFullBiases, TFullBiases, TFullBiasStates}
     mask_grid = if all(rule -> isnothing(rule.mask), r.rules)
         nothing
     else
@@ -1021,17 +1034,18 @@ function markov_op_initialize(r::MarkovOpRewrite{<:NTuple{NRules, Any}, TBias, T
                          context)
 
     append!(context.all_biases, r.biases)
-    biases = Tuple(context.all_biases)
-    TBiasStates = Tuple{markov_bias_state_type.(typeof.(biases))...}
-    bias_states::TBiasStates = map(b -> markov_bias_initialize(b, grid, rng, context.bias_context), biases)
+    biases::TFullBiases = Tuple(context.all_biases)
+    bias_states::TFullBiasStates = Tuple(Iterators.map(
+        (b,t) -> markov_bias_initialize(b, t, grid, rng, context.bias_context),
+        biases, TFullBiasStates.parameters
+    ))
 
     threshold = isnothing(r.threshold) ? nothing : get_threshold(r.threshold, grid, rng)
     longest_1D_rule::Int = maximum(Tuple(
         length(ru.cells) for ru in r.rules if ru isa RewriteRule_Strip
     ); init=0)
 
-    out_state = MarkovOpRewrite_State{NDims, NRules, typeof(grid), typeof(r.rules),
-                                        length(biases), typeof(biases), TBiasStates}(
+    out_state = TState(
         threshold, cache,
         biases, bias_states,
         markov_allocator_acquire_array(context.allocator, tuple(128), RewritePotentialApplication{NDims}),

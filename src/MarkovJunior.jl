@@ -20,6 +20,7 @@ The following functions allow you to work with an instance:
 To define a new `AbstractMarkovOp` (like `@rewrite`), implement the following
   un-exported interface (see their doc-strings for more info):
 
+* `markov_op_state_type`
 * `markov_op_initialize`
 * `markov_op_iterate`
 * `markov_op_cancel` if you have any resources/allocations to release;
@@ -33,11 +34,11 @@ you may want to call this when your op finishes as well
 To define a new `AbstractMarkovBias`, implement the following
   un-exported interface (see their doc-strings for more info):
 
+* `markov_bias_state_type`
 * `markov_bias_initialize`
 * `markov_bias_update`
 * `markov_bias_cleanup`
 * `markov_bias_calculate`
-* `markov_bias_state_type` is important to provide type-stability
 * `dsl_string`; note that biases are represented with function call syntax
 * `parse_markovjunior_bias` is the inverse of `dsl_string`
 * `check_markovjunior_biases` if your new bias has rules
@@ -84,8 +85,9 @@ include("bias_temperatue.jl")
 export AbstractMarkovAllocator, AbstractMarkovBias, AbstractMarkovOp,
        MarkovAlgorithm, MarkovAlgoState, MarkovOpContext,
        markov_algo_grid, markov_algo_n_iterations,
-       markov_algo_start, markov_algo_step, markov_algo_is_started, markov_algo_is_finished,
-       @markovjunior, parse_markovjunior, markov_algo_to_string
+       markov_algo_start, markov_algo_step, markov_algo_finish,
+       markov_algo_is_started, markov_algo_is_finished,
+       @markovjunior, markov_algo_parse, markov_algo_to_string
 
 # Tooling:
 if BUILT_WITH_TOOL

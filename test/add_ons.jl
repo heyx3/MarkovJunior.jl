@@ -1,6 +1,10 @@
-# Tests the ability to add onto the algorithm with pragmas and custom data.
+# Tests the ability to extend the algorithm with:
+#   * A custom Bias reading from 'add_ons'
+#   * A custom Op reading from 'pragmas'
+#   * A custom Op reading/writing to 'data_store'
 
 using Setfield
+
 
 "
 Orders pixels by X, then Y, then Z, etc, where the first pixel is chosen first.
@@ -8,11 +12,11 @@ Ordering can be flipped by giving a named bool to the algo's `add_ons`.
 "
 struct CustomBias <: MJ.AbstractMarkovBias end
 const ADDON_CUSTOM_BIAS_FLIPPED_KEY = :flip_custom_bias
-function MJ.markov_bias_initialize(::CustomBias, grid::MJ.CellGrid, ::PRNG, ctx::MJ.MarkovBiasContext)
+MJ.markov_bias_state_type(::Type{CustomBias}) = Bool
+function MJ.markov_bias_initialize(::CustomBias, ::Type{Bool}, grid::MJ.CellGrid, ::PRNG, ctx::MJ.MarkovBiasContext)
     return haskey(ctx.add_ons, ADDON_CUSTOM_BIAS_FLIPPED_KEY) &&
            convert(Bool, ctx.add_ons[ADDON_CUSTOM_BIAS_FLIPPED_KEY])
 end
-MJ.markov_bias_state_type(::Type{CustomBias}) = Bool
 function impl_custom_bias(pos::MJ.CellIdx{N}, size::MJ.CellIdx{N},
                           is_flipped::Bool
                           ;
@@ -41,7 +45,7 @@ MJ.parse_markovjunior_bias(::Val{:custom}, inputs::MJ.MacroParserInputs,
     test_mj = MJ.@markovjunior 'b' begin
         @rewrite b => w custom()
     end
-    test_parsed_mj = parse_markovjunior(MJ.dsl_string(test_mj))
+    test_parsed_mj = markov_algo_parse(MJ.dsl_string(test_mj))
     @bp_check(test_mj == test_parsed_mj,
               "Custom Bias parsing failed!\n\nSource:\n", test_mj,
               "\nDest:\n", test_parsed_mj)
@@ -107,7 +111,6 @@ MJ.parse_markovjunior_bias(::Val{:custom}, inputs::MJ.MacroParserInputs,
 end)()
 
 
-
 "Outputs a checkerboard pattern"
 struct CustomOp <: MJ.AbstractMarkovOp
     a::UInt8
@@ -118,20 +121,20 @@ struct CustomOpState{N}
     overridden_b::UInt8
     next_pos::MJ.CellIdx{N}
 end
+MJ.markov_op_state_type(::Type{CustomOp}, ::Val{N}) where {N} = CustomOpState{N}
 const PRAGMA_CUSTOM_OP_OVERRIDE_A = :cust_a_forced
 const PRAGMA_CUSTOM_OP_OVERRIDE_B = :cust_b_forced
 function MJ.markov_op_initialize(co::CustomOp, ::MJ.CellGrid{N}, ::PRNG, ctx::MJ.MarkovOpContext) where {N}
     # Look for pragma statements that force checkerboard values for the whole grid.
     a = co.a
     b = co.b
-    for (name::Symbol, values::Vector{Any}) in ctx.pragmas
-        if name == PRAGMA_CUSTOM_OP_OVERRIDE_A
-            (override, ) = values
-            a = MJ.CELL_CODE_BY_SYMBOL[override]
-        elseif name == PRAGMA_CUSTOM_OP_OVERRIDE_B
-            (override, ) = values
-            b = MJ.CELL_CODE_BY_SYMBOL[override]
-        end
+    if haskey(ctx.pragmas_map, PRAGMA_CUSTOM_OP_OVERRIDE_A)
+        (override, ) = ctx.pragmas_map[PRAGMA_CUSTOM_OP_OVERRIDE_A][end]
+        a = MJ.CELL_CODE_BY_SYMBOL[override]
+    end
+    if haskey(ctx.pragmas_map, PRAGMA_CUSTOM_OP_OVERRIDE_B)
+        (override, ) = ctx.pragmas_map[PRAGMA_CUSTOM_OP_OVERRIDE_B][end]
+        b = MJ.CELL_CODE_BY_SYMBOL[override]
     end
 
     return CustomOpState{N}(a, b, one(MJ.CellIdx{N}))
@@ -174,10 +177,11 @@ end
     test_mj1 = @markovjunior 'b' begin
         @cust R G
     end
-    test_parsed_mj = parse_markovjunior(markov_algo_to_string(test_mj1))
+    test_parsed_mj = markov_algo_parse(markov_algo_to_string(test_mj1))
     @bp_check(test_mj1 == test_parsed_mj,
               "Custom Op parsing failed!\n\nSource:\n", test_mj1,
-                "\nDest:\n", test_parsed_mj)
+                "\nDest:\n", test_parsed_mj,
+                "\nSource as string: ", markov_algo_to_string(test_mj1))
     state_1 = MJ.markov_algo_start(test_mj1, (3, 4, 2), 0xaabbcc)
     MJ.markov_algo_finish(test_mj1, state_1)
     grid_1 = MJ.markov_algo_grid(state_1)
@@ -195,14 +199,77 @@ end
         @cust R G
         @fill 'g' uv(min=0, max=1) -B
     end
-    test_parsed_mj = parse_markovjunior(markov_algo_to_string(test_mj2))
+    test_parsed_mj = markov_algo_parse(markov_algo_to_string(test_mj2))
     @bp_check(test_mj2 == test_parsed_mj,
               "Custom Op parsing #2 failed!\n\nSource:\n", test_mj2,
-                "\nDest:\n", test_parsed_mj)
-    state_2 = MJ.markov_algo_start(test_mj2, (10, ), 0x80110110)
-    MJ.markov_algo_finish(test_mj2, state_2)
-    grid_2 = MJ.markov_algo_grid(state_2)
+                "\nDest:\n", test_parsed_mj,
+                "\nSource as string: ", markov_algo_to_string(test_mj2))
+    state_2 = markov_algo_start(test_mj2, (10, ), 0x80110110)
+    markov_algo_finish(test_mj2, state_2)
+    grid_2 = markov_algo_grid(state_2)
     @bp_check(grid_2 == getindex.(Ref(MJ.CELL_CODE_BY_SYMBOL), [
         :B, :g, :B, :g, :B, :g, :B, :g, :B, :g
     ]), "Actual: ", grid_2)
+end)()
+
+
+"
+A custom Op that writes to a specific pixel.
+The pixel location is parsed from the Op.
+The output value is taken from the algorithm instance's `data_store`,
+  starting at 0 and incrementing each time the Op is used.
+"
+struct CustomOp2{N} <: MJ.AbstractMarkovOp
+    location::VecI{N}
+end
+MJ.markov_op_state_type(::Type{<:CustomOp2}, ::Val) = Some{Nothing}
+function MJ.markov_op_initialize(co2::CustomOp2{N}, grid::MJ.CellGrid{N}, ::PRNG, ::MJ.MarkovOpContext) where {N}
+    return if all(co2.location > 0) && all(co2.location <= vsize(grid))
+        Some(nothing)
+    else
+        nothing
+    end
+end
+function MJ.markov_op_iterate(co2::CustomOp2{N}, state::Some{Nothing}, grid::MJ.CellGrid{N}, ::PRNG, ctx::MJ.MarkovOpContext) where {N}
+    counter = get!(() -> Ref(zero(UInt8)), ctx.data_store, :cust_op_2_counter)::Ref{UInt8}
+    grid[co2.location] = counter[]
+    counter[] += 1
+    return nothing
+end
+MJ.dsl_string(co2::CustomOp2) = "@cust2 $(iter_join(co2.location, " ")...)"
+function MJ.parse_markovjunior_op(::Val{Symbol("@cust2")},
+                                  inputs::MJ.MacroParserInputs,
+                                  loc, expr_args, full_line)
+    @bp_check(all(x -> x isa Real, expr_args),
+              "Coords should be numbers, but got ", expr_args)
+    return CustomOp2(Vec{length(expr_args), Int32}(expr_args...))
+end
+
+# Test the custom Op.
+(() -> begin
+    test_mj = @markovjunior 2 'S' begin
+        @cust2 1 2 # Writes 0
+        @cust2 2 2 # Writes 1
+        @cust2 1 1 # Writes 2
+    end
+
+    test_mj_str = markov_algo_to_string(test_mj)
+    test_mj_parsed = markov_algo_parse(test_mj_str)
+    @bp_check(test_mj == test_mj_parsed,
+              "Failed to stringify/parse CustomOp2!",
+                "\nSource:\n", test_mj,
+                "\nSource to string: ", test_mj_str,
+                "\nDest:\n", test_mj_parsed)
+
+    # Test data_store multiple times, just to be sure nothing is persistent.
+    for i in 1:10
+        state_mj = markov_algo_start(test_mj, (3, 4), 0x0aa1bcde)
+        markov_algo_finish(test_mj, state_mj)
+        grid = markov_algo_grid(state_mj)
+        @bp_check(grid == UInt8[
+            2 0 15 15
+            15 1 15 15
+            15 15 15 15
+        ], "Iter ", i, ";  actual: ", grid)
+    end
 end)()

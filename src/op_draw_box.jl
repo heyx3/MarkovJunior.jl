@@ -104,10 +104,13 @@ struct MarkovOpDrawBox_State{N, TMask<:Optional{MaskGrid{N}}}
     mask_level::Float32
 end
 
+markov_op_state_type(op::MarkovOpDrawBox, ::Type{<:CellGrid{NDims}}, ::PRNG, ::MarkovOpContext) where {NDims} =
+    MarkovOpDrawBox_State{NDims, isnothing(op.mask) ? Nothing : Array{Float32, NDims}}
 function markov_op_initialize(b::MarkovOpDrawBox{NBox, TRule},
+                              state_type::Type{<:MarkovOpDrawBox_State},
                               grid::CellGrid{NGrid},
                               rng::PRNG, context::MarkovOpContext
-                             ) where {NBox, NGrid, TRule}
+                             )::Optional{state_type} where {NBox, NGrid, TRule}
     box = get_draw_box_pixels(
         b.space, b.box,
         convert(Vec{NGrid, Int32}, vsize(grid)),

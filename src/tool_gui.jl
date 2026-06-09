@@ -110,13 +110,13 @@ function GuiRunner(memory::GuiMemory,
     scene_idx = get_something(findfirst(s -> s == memory.current_scene_file_name, available_scenes), 0)
 
     parsed_algo::MarkovAlgorithm = try
-        parse_markovjunior(memory.current_scene_src)
+        markov_algo_parse(memory.current_scene_src)
     catch e
         initial_error_msg = string(
             "Unable to compile initial scene (fallback used instead):\n",
             sprint(showerror, e)
         )
-        parse_markovjunior(read(path_scene(FALLBACK_SCENE_NAME), String))
+        markov_algo_parse(read(path_scene(FALLBACK_SCENE_NAME), String))
     end
 
     app = Render3D.App()
@@ -353,7 +353,7 @@ function reset_gui_runner_algo(runner::GuiRunner,
 
         @markovjunior_assert(runner.memory.current_scene_src == string(runner.next_algorithm))
         runner.algorithm = try
-            parse_markovjunior(runner.memory.current_scene_src)
+            markov_algo_parse(runner.memory.current_scene_src)
         catch e
             runner.algorithm_error_msg = string(
                 "Failed to parse: ", sprint(showerror, e),

@@ -15,6 +15,7 @@ const DEFAULT_PRIORITY = MJ.MarkovRewritePriority_Everything()
 const BIG_TEST = @markovjunior 3 'R' begin
     @pragma Hi 1 3 22
     @pragma hello
+    @pragma Hi "abcd"
 
     @rewrite R => G
     @rewrite RGB => bgw
@@ -614,15 +615,22 @@ const BIG_TEST_ANSWER = MJ.MarkovAlgorithm(
         )
     ],
 
-    Pair{Symbol, Vector{Any}}[
-        :Hi => Any[ 1, 3, 22 ],
-        :hello => Any[ ]
-    ],
+    [ :Hi => 1, :hello => 1, :Hi => 2 ],
+    Dict(
+        :Hi => Any[
+            Any[ 1, 3, 22 ],
+            Any[ "abcd" ]
+        ],
+        :hello => Any[
+            Any[ ]
+        ]
+    ),
     Dict{Symbol, Any}()
 )
 
 function test_compare(a::MJ.MarkovAlgorithm, b::MJ.MarkovAlgorithm, tab::String = "")
-    println("Comparing two algorithms...")
+    println(tab, "Comparing two algorithms...")
+
     if length(a.sequence) != length(b.sequence)
         println(tab, "\tA has ", length(a.sequence), " elements while B has ", length(b.sequence), "!")
     else
@@ -631,6 +639,41 @@ function test_compare(a::MJ.MarkovAlgorithm, b::MJ.MarkovAlgorithm, tab::String 
             test_compare(oa, ob, "$tab\t\t")
         end
     end
+
+    if (length(a.pragmas_chronological) != length(b.pragmas_chronological)) ||
+       (length(a.pragmas_map) != length(b.pragmas_map))
+    #begin
+       println(tab, "\tPragmas don't line up! A has ",
+                    length(a.pragmas_chronological), "/", length(a.pragmas_map),
+                    " and B has ", length(b.pragmas_chronological), "/", length(b.pragmas_map))
+    else
+        for ((pan, pai), (pbn, pbi), i) in zip(a.pragmas_chronological, b.pragmas_chronological, 1:length(a.pragmas_chronological))
+            if (pan, pai) != (pbn, pbi)
+                println(tab, "\tPragma ", i, " is different! A is ",
+                             (pan, pai), " vs B is ", (pbn, pbi))
+            end
+        end
+        for (a_name, a_elements) in a.pragmas_map
+            !haskey(b.pragmas_map, a_name) && continue # Would already have been logged above
+            b_elements = b.pragmas_map[a_name]
+            if length(a_elements) != length(b_elements)
+                println(tab, "\tPragmas under ", a_name, " don't line up!",
+                             "A has ", length(a_elements), "entries while B has ", length(b_elements),
+                             ":\n", tab, "\t\tA=", a_elements,
+                             "\n", tab, "\t\tB=", b_elements)
+            else
+                for (a_entry, b_entry, entry_i) in zip(a_elements, b_elements, 1:length(a_elements))
+                    if a_entry != b_entry
+                        println(tab, "\tPragma[", a_name, "][", entry_i, "] doesn't line up! ",
+                                     "A has ", a_entry, " vs B has ", b_entry)
+                    end
+                end
+            end
+        end
+    end
+
+    # Note: 'add_ons' is a runtime parameter and not worth printing here.
+
     return nothing
 end
 test_compare(a::MJ.AbstractMarkovOp, b::MJ.AbstractMarkovOp, tab::String) = println(tab, "Mismatched/Unsupported types!")
@@ -805,7 +848,7 @@ end
           test_compare(BIG_TEST, BIG_TEST_ANSWER),
           "INVALID result from `@markovjunior`! ",
             "Detailed printout is above this line -- A is the actual, B is the expected")
-const BIG_TEST_2 = MJ.parse_markovjunior(MJ.dsl_string(BIG_TEST))
+const BIG_TEST_2 = MJ.markov_algo_parse(MJ.dsl_string(BIG_TEST))
 @bp_check(BIG_TEST_2 == BIG_TEST_ANSWER,
           test_compare(BIG_TEST_2, BIG_TEST_ANSWER),
           "INCORRECT result from `dsl_string()`! ",

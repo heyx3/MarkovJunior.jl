@@ -16,8 +16,8 @@ dsl_string(ma::MarkovAlgorithm) = string(
     "begin
     ",
     iter_join(
-        ("@pragma $name $(iter_join(args, " ")...)"
-                for (name, args) in ma.pragmas),
+        (:( @pragma $name $(ma.pragmas_map[name][idx]...) )
+                for (name, idx) in ma.pragmas_chronological),
         "\n    "
     )...,
     "
@@ -72,9 +72,9 @@ Called once for every group of biases, for every type of bias in that group.
 The intent is to allow new biases to add constraints on how they are used
   (e.g. throw error if more than one of themselves).
 
-The group is understood to be an in-order accumulation of every group within `inputs.bias_stack`,
-  where each sub-group is an inherited set of biases (e.g. nested sequences each with a bias section).
-Note that you cannot modify the bias groups.
+This new group is implicitly stored as an in-order accumulation of every sub-group within `inputs.bias_stack`,
+  each being an inherited set of biases (e.g. nested sequences that each have a bias section).
+Note that you must not modify the bias groups; only validate their contents!
 "
 check_markovjunior_biases(type::Type, inputs::MacroParserInputs) = nothing
 
@@ -84,11 +84,11 @@ check_markovjunior_biases(type::Type, inputs::MacroParserInputs) = nothing
 
 "Generates a markov algorithm using our DSL"
 macro markovjunior(args...)
-    return parse_markovjunior(args)
+    return markov_algo_parse(args)
 end
 
 "Parses the arguments of a `@markovjunior` macro"
-function parse_markovjunior(_macro_args)::MarkovAlgorithm
+function markov_algo_parse(_macro_args)::MarkovAlgorithm
     macro_args = collect(Any, _macro_args) # Will delete them as they're processed
 
     # Decide on the initial fill value.
@@ -118,16 +118,19 @@ function parse_markovjunior(_macro_args)::MarkovAlgorithm
     inputs = MacroParserInputs(initial_fill, dims, get_something(dims, 1), Stack{Any}(16), Stack{Vector{AbstractMarkovBias}}(16))
     push!(inputs.op_stack_trace, "Main Sequence")
     main_sequence = Vector{AbstractMarkovOp}()
-    pragmas = Vector{Pair{Symbol, Vector{Any}}}()
+    pragmas_chronological = Vector{Pair{Symbol, Int}}()
+    pragmas_map = Dict{Symbol, Vector{Vector{Any}}}()
     for (i, a) in enumerate(macro_args)
         if a isa Expr && a.head == :block
             main_sequence = parse_markovjunior_sequence(inputs, a.args) do location, line
                 if @capture(line, @pragma prg__)
                     if (length(prg) < 1) || !isa(prg[1], Symbol)
                         raise_parse_error(line, inputs,
-                                       "@pragma statement must have a name, e.g. @pragma Viz")
+                                          "@pragma statement must have a name, e.g. @pragma Viz")
                     else
-                        push!(pragmas, prg[1]=>collect(Any, prg[2:end]))
+                        pm = get!(() -> Vector{Vector{Any}}(), pragmas_map, prg[1])
+                        push!(pm, collect(Any, prg[2:end]))
+                        push!(pragmas_chronological, prg[1] => length(pm))
                     end
                     return true
                 else
@@ -150,16 +153,18 @@ function parse_markovjunior(_macro_args)::MarkovAlgorithm
         end
     end
     return MarkovAlgorithm(initial_fill, inputs.fixed_dims, inputs.min_dims,
-                           main_sequence, pragmas, Dict{Symbol, Any}())
+                           main_sequence,
+                           pragmas_chronological, pragmas_map,
+                           Dict{Symbol, Any}())
 end
 "Tries to evaluate a `@markovjunior` macro, throwing an error if that's not what was parsed"
-function parse_markovjunior(syntax::Union{String, Expr})::MarkovAlgorithm
+function markov_algo_parse(syntax::Union{String, Expr})::MarkovAlgorithm
     if syntax isa String
-        return parse_markovjunior(Meta.parse(syntax))
+        return markov_algo_parse(Meta.parse(syntax))
     elseif !Base.isexpr(syntax, :macrocall) || (syntax.args[1] != Symbol("@markovjunior"))
         error("Expression wasn't a `@markovjunior` macro")
     else
-        return parse_markovjunior(Tuple(syntax.args[3:end]))
+        return markov_algo_parse(Tuple(syntax.args[3:end]))
     end
 end
 

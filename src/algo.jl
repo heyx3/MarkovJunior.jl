@@ -73,7 +73,7 @@ markov_allocator_release_array(allocator::AbstractMarkovAllocator, data::Abstrac
 markov_allocator_release_ordered_set(allocator::AbstractMarkovAllocator, s::OrderedSet) = nothing
 Base.close(::AbstractMarkovAllocator) = nothing
 
-"An allocator for MarkovJunior that just goes through the heap"
+"Allocates on the heap and lets Julia's GC take the array afterwards"
 struct MarkovAllocatorHeap <: AbstractMarkovAllocator end
 
 
@@ -101,15 +101,23 @@ struct MarkovAlgorithm
                        #   will be fixed_dimension if it exists
 
     sequence::Vector{AbstractMarkovOp}
-    pragmas::Vector{Pair{Symbol, Vector{Any}}} # Nonstandard commands/data meant to be parsed by the user of this package
-    add_ons::Dict{Symbol, Any} # Data associated with this algorithm after parsing (as opposed to pragmas which are parsed)
+
+    # Pragmas should be added to the top of the algorithm block,
+    #   and are stored here both chronologically and in a Dict lookup.
+    pragmas_chronological::Vector{Pair{Symbol, Int}} # Each key to its index -- `args = pragmas_map[key][value]`
+    pragmas_map::Dict{Symbol, Vector{Vector{Any}}} # Each key maps to a list of its arguments each time it was invoked, in chronological order
+
+    # "Add-ons" can be added by the user after parsing is finished,
+    #    to inject per-instance parameters.
+    add_ons::Dict{Symbol, Any}
 end
 Base.:(==)(a::MarkovAlgorithm, b::MarkovAlgorithm) = (
     a.initial_fill == b.initial_fill &&
     a.fixed_dimension == b.fixed_dimension &&
     a.min_dimension == b.min_dimension &&
     a.sequence == b.sequence &&
-    a.pragmas == b.pragmas &&
+    a.pragmas_chronological == b.pragmas_chronological &&
+    a.pragmas_map == b.pragmas_map &&
     a.add_ons == b.add_ons
 )
 
@@ -117,8 +125,12 @@ Base.:(==)(a::MarkovAlgorithm, b::MarkovAlgorithm) = (
 "Information about the algorithm state relevant to a Bias struct"
 struct MarkovBiasContext
     allocator::AbstractMarkovAllocator
-    pragmas::Vector{Pair{Symbol, Vector{Any}}} # Not a copy! The same instance in `MarkovAlgorithm`
-    add_ons::Dict{Symbol, Any} # Not a copy! The same instance in the `MarkovAlgorithm`
+
+    #NOTE: These collections are copies of the one in MarkovAlgorithm and should not be modified!
+    pragmas_chronological::Vector{Pair{Symbol, Int}}
+    pragmas_map::Dict{Symbol, Vector{Vector{Any}}}
+    add_ons::Dict{Symbol, Any}
+    data_store::Dict{Symbol, Any}
 end
 
 "
@@ -154,6 +166,7 @@ mutable struct MarkovAlgoState{N}
     op_context::MarkovOpContext # Inner sequences can modify this field
 
     rng::PRNG
+    data_store::Dict{Symbol, Any} # Place for Ops, Biases, etc to store persistent data
 
     buffer_iter_count::Base.RefValue{Optional{Int}}
 end
@@ -188,6 +201,7 @@ function markov_algo_start(algo::MarkovAlgorithm,
 
     rng = (seeds isa Real) ? PRNG(seeds) : PRNG(seeds...)
 
+    data_store = Dict{Symbol, Any}()
     state = MarkovAlgoState(
         Ref(grid), 0,
         0, nothing,
@@ -198,10 +212,11 @@ function markov_algo_start(algo::MarkovAlgorithm,
             end,
             MarkovBiasContext(
                 allocator,
-                algo.pragmas, algo.add_ons
+                algo.pragmas_chronological, algo.pragmas_map, algo.add_ons, data_store
             )
         ),
         rng,
+        data_store,
         Ref{Optional{Int}}()
     )
     @logic_logln("Started an algorithm run with seeds ", seeds)
@@ -247,7 +262,11 @@ function markov_algo_step(algo::MarkovAlgorithm, state::MarkovAlgoState, n_itera
             @logic_tab_in()
             if state.op_idx <= length(algo.sequence)
                 @logic_logln(typeof(algo.sequence[state.op_idx]))
-                state.op_state = markov_op_initialize(algo.sequence[state.op_idx], state.grid,
+                state.op_state = markov_op_initialize(algo.sequence[state.op_idx],
+                                                      markov_op_state_type(algo.sequence[state.op_idx],
+                                                                           typeof(state.grid[]),
+                                                                           state.rng, state.op_context),
+                                                      state.grid,
                                                       state.rng, state.op_context)
                 @logic_logln("Initial state:\n  ", state.op_state)
             else

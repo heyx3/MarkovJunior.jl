@@ -2,16 +2,34 @@
 #  AbstractMarkovOp interface
 
 "
+Gets the kind of object representing this op's state during execution;
+  it must be stable within one full run of the op but can otherwise vary based on the state of the algorithm.
+
+You can also treat this as a 'pre-initialize' step, but be aware
+  it may be called some time before the Op really starts (e.g. at the beginning of a `@sequence`).
+"
+markov_op_state_type(op::AbstractMarkovOp, ::Type{<:CellGrid{NDims}}, ::PRNG, ::MarkovOpContext) where {NDims} = markov_op_state_type(typeof(op), Val(NDims))
+markov_op_state_type(T::DataType, NDims::Val) = error("Not implemented for ", T, " in ", val_type(NDims), "D")
+
+"
 Initializes the given operation, and either returns some 'state' object
   or `nothing` if the op can't do anything.
+The state object must match the output of `markov_op_state_type()`,
+  which you can take as the second parameter.
 
 The grid is wrapped in a `Ref` so that it can be reallocated as desired,
   but by default this will call through to a non-`Ref` version.
 "
-markov_op_initialize(op::AbstractMarkovOp, grid::Ref{<:CellGrid}, rng::PRNG, context::MarkovOpContext)::Optional = markov_op_initialize(op, grid[], rng, context)
+markov_op_initialize(op::AbstractMarkovOp, expected_state_type::DataType,
+                     grid::Ref{<:CellGrid}, rng::PRNG, context::MarkovOpContext
+                    )::Optional{expected_state_type} = markov_op_initialize(op, expected_state_type, grid[], rng, context)
+markov_op_initialize(op::AbstractMarkovOp, expected_state_type::DataType,
+                     grid::CellGrid, rng::PRNG, context::MarkovOpContext
+                    )::Optional{expected_state_type} = markov_op_initialize(op, grid, rng, context)
 
 "
 Iterate on an operation N times and return either the new 'state' object, or `nothing` if the operation finished.
+The state object must be type-stable (the same type that was passed in).
 
 The `n_ticks_left` will be modified to remove however many ticks were performed;
   unless its value is `nothing` in which case the op will execute everything ASAP.
@@ -25,7 +43,7 @@ markov_op_iterate(op::AbstractMarkovOp, state,
                   grid::Ref{<:CellGrid}, rng::PRNG,
                   context::MarkovOpContext,
                   n_ticks_left::Ref{Optional{Int}}
-                 )::Optional = markov_op_iterate(op, state, grid[], rng, context, n_ticks_left)
+                 )::Optional{typeof(state)} = markov_op_iterate(op, state, grid[], rng, context, n_ticks_left)
 
 function markov_op_iterate(op::AbstractMarkovOp, state,
                            grid::CellGrid, rng::PRNG,
@@ -60,10 +78,28 @@ end
 ###############################
 #  AbstractMarkovBias interface
 
-"Initialize the bias and return some state object for it (by default, `nothing`)"
+"Required for type-stability; may be different per-instance; defaults to `Nothing`"
+function markov_bias_state_type(a::AbstractMarkovBias, ::Type{<:CellGrid{NDims}},
+                                ::PRNG, ::MarkovBiasContext
+                                )::Type where {NDims}
+    return markov_bias_state_type(typeof(a), Val(NDims))
+end
+markov_bias_state_type(T::Type{<:AbstractMarkovBias}, ::Val)::Type = markov_bias_state_type(T)
+markov_bias_state_type(::Type{<:AbstractMarkovBias}) = Nothing
+
+"
+Initialize the bias and return some state object for it (by default, `nothing`).
+You can optionally take the output of `markov_bias_state_type()` as the second parameter.
+"
+markov_bias_initialize(bias::AbstractMarkovBias, expected_state_type,
+                       grid::CellGrid, rng::PRNG,
+                       context::MarkovBiasContext
+                      )::expected_state_type = markov_bias_initialize(bias, grid, rng, context)
 markov_bias_initialize(bias::AbstractMarkovBias,
                        grid::CellGrid, rng::PRNG,
-                       context::MarkovBiasContext) = nothing
+                       context::MarkovBiasContext
+                      ) = nothing
+
 "
 Updates this bias after the given area of the grid has changed.
 Returns the new state object for this bias.
@@ -79,10 +115,6 @@ Cleans up this bias after it's done being used.
 Default: does nothing.
 "
 markov_bias_cleanup(bias::AbstractMarkovBias, bias_state) = nothing
-
-"Required for type-stability; may be different per-instance; defaults to `Nothing`"
-markov_bias_state_type(a::AbstractMarkovBias) = markov_bias_state_type(typeof(a))
-markov_bias_state_type(::Type{<:AbstractMarkovBias})::Type = Nothing
 
 "
 Calculates the desirability of a rewrite action, at this moment, in this grid.

@@ -10,11 +10,15 @@ end
 struct MarkovOpSequence_State
     repetitions_left::Union{SequenceRepeatModeTag, Int}
     current_op_idx::Int
-    current_op_state::Any
+    current_op_state::Any #TODO: Take advantage of markov_op_state_type() to make this type-stable
 end
 
-function markov_op_initialize(s::MarkovOpSequence, grid::CellGrid{N},
+markov_op_state_type(::Type{MarkovOpSequence}, ::Val{NDims}) where {NDims} = MarkovOpSequence_State
+function markov_op_initialize(s::MarkovOpSequence, expected_state_type::Type{MarkovOpSequence_State},
+                              grid_ref::Ref{<:CellGrid{N}},
                               rng::PRNG, context::MarkovOpContext) where {N}
+    grid = grid_ref[]
+
     # Set up the repetition counter.
     repetitions_left = if isnothing(s.threshold)
         0
@@ -45,13 +49,21 @@ function markov_op_initialize(s::MarkovOpSequence, grid::CellGrid{N},
         return nothing
     end
     op_idx = 1
-    op_initial_state = markov_op_initialize(s.ops[1], grid, rng, context)
+    op_initial_state = markov_op_initialize(
+        s.ops[1],
+        markov_op_state_type(s.ops[1], typeof(grid), rng, context),
+        grid, rng, context
+    )
     # Check if the first op failed to start (e.g. because it had no matches).
     # As long as we're not in repeat mode, we should keep moving forward until an op succeeds.
     if !isa(repetitions_left, SequenceRepeatModeTag)
         while isnothing(op_initial_state) && (op_idx < length(s.ops))
             op_idx += 1
-            op_initial_state = markov_op_initialize(s.ops[op_idx], grid, rng, context)
+            op_initial_state = markov_op_initialize(
+                s.ops[op_idx],
+                markov_op_state_type(s.ops[op_idx], typeof(grid), rng, context),
+                grid, rng, context
+            )
         end
     end
     if isnothing(op_initial_state)
@@ -117,7 +129,13 @@ function markov_op_iterate(s::MarkovOpSequence, state::MarkovOpSequence_State,
             state = MarkovOpSequence_State(
                 state.repetitions_left,
                 state.current_op_idx + 1,
-                markov_op_initialize(s.ops[state.current_op_idx + 1], grid, rng, context)
+                markov_op_initialize(
+                    s.ops[state.current_op_idx + 1],
+                    markov_op_state_type(s.ops[state.current_op_idx + 1],
+                                         typeof(grid[]),
+                                         rng, context),
+                    grid, rng, context
+                )
             )
             @logic_tab_out()
             if isnothing(state.current_op_state)
@@ -151,7 +169,12 @@ function markov_op_iterate(s::MarkovOpSequence, state::MarkovOpSequence_State,
                     else
                         error("Unhandled: ", typeof(state.repetitions_left))
                     end,
-                    1, markov_op_initialize(s.ops[1], grid, rng, context)
+                    1,
+                    markov_op_initialize(
+                        s.ops[1],
+                        markov_op_state_type(s.ops[1], typeof(grid[]), rng, context),
+                        grid, rng, context
+                    )
                 )
                 @logic_tab_out()
 
