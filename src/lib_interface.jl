@@ -1,4 +1,4 @@
-# The C-like API for this package.
+# The C API for this package.
 # Internal stuff is prefixed "lib_"
 # External stuff is prefixed "jmj_"
 
@@ -101,8 +101,9 @@ Base.@ccallable function jmj_algo_parse(c_str::Cstring, out_err_str::Ptr{Cchar},
 end
 Base.@ccallable function jmj_algo_close(id::Lib_ID)::Cvoid
     lib_remove_algorithm(id) || LIB_SUPPRESS_STDERR || println(stderr,
-        "No JMarkovJunior algorithm existed with the ID ", id, "! Nothing happened"
+        "JMarkovJunior: No algorithm existed with the ID ", id, "! Nothing changes"
     )
+    return nothing
 end
 
 Base.@ccallable function jmj_start(algo_id::Lib_ID,
@@ -146,7 +147,7 @@ Base.@ccallable function jmj_start(algo_id::Lib_ID,
     algo_state_id = lib_add_algo_state(algo_state)
     return algo_state_id
 end
-Base.@callable function jmj_is_finished(algo_id::Lib_ID, state_id::Lib_ID)::Cint
+Base.@ccallable function jmj_is_finished(algo_id::Lib_ID, state_id::Lib_ID)::Cint
     algo = lib_get_algorithm(algo_id)
     if isnothing(algo)
         LIB_SUPPRESS_STDERR || println(stderr, "JMarkovJunior: Unable to find MarkovJunior algorithm with ID ", algo_id, "!")
@@ -215,4 +216,10 @@ Base.@ccallable function jmj_grid(state_id::Lib_ID)::Ptr{Cuchar}
         return pointer(grid)
     end
     return finish(state)
+end
+Base.Base.@ccallable function jmj_destroy(state_id::Lib_ID)::Cvoid
+    lib_remove_algo_state(state_id) || LIB_SUPPRESS_STDERR || println(stderr,
+        "JMarkovJunior: No algo state existed with the ID ", state_id, "! Nothing changes"
+    )
+    return nothing
 end

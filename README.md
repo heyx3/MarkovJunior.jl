@@ -18,8 +18,6 @@ markovjunior_run_tool()
 
 *A YouTube video demo*
 
-## Description
-
 Lots of nice features have already been implemented:
 
 * A terse yet broadly-featured DSL
@@ -44,6 +42,25 @@ However there are real, if underexplored, benefits!
 
 If you have any thoughts on higher-dimensional tricks, share them in a Github Issue!
 
+## Usage
+
+A specific algorithm is represented by the [macro `@markovjunior`](docs/dsl.md).
+The output of this macro is a `MarkovAlgorithm`.
+
+If you have the macro as a string, call `markov_algo_parse(str)::MarkovAlgorithm`.
+Convert the algorithm back to a string with `markov_algo_to_string(algo)`,
+   but be aware that cosmetic details get lost in the translation.
+
+To start running an algorithm on a new grid, call `state = markov_algo_start(algo, (32, 32), 0xababcdef)`.
+The second argument is the grid size (as many dimensions as you want), and the third is the RNG seed(s).
+
+Iterate on the running algorithm with `markov_algo_step(algo, state)`.
+You can pass an iteration count as the third parameter to batch-run multiple steps.
+You can also call `markov_algo_finish(algo, state)` to immediately run to completion.
+
+Check on a running algorithm's state with `markov_algo_is_finished(algo, state)`.
+Get the grid being operated on with `markov_algo_grid(state)`.
+
 ## Scenes
 
 Different algorithm setups can be found in the *scenes/* folder.
@@ -52,23 +69,35 @@ They are heavily commented to help you learn.
 A small handful of them are still not converted to the v0.2 syntax,
   so don't be alarmed if they fail to run!
 
-## Build size
+## Optimizing the standalone builds
+
+**This section is for anyone who has problems integrating our released executable or DLL into a project.**
 
 Due to Julia's unique JIT architecture, it essentially needs a whole compiler inside its runtime.
-This means that the executabls and dll's tend to be much larger than is ideal,
-  and also do not play well with mobile.
+Due to our GUI tool, there are many sub-sub-dependencies compiled into the package.
+As a result the executable and dll are much larger than is ideal and also don't play well with mobile.
+Addtionally if you have any other Julia packages that you'd like to use,
+  you'd need to manage multiple copies of julia across multiple libraries!
 
-Fortunately it is possible to get around these problems once you decide you need to,
-  by building your own Julia package which has ours as a dependency.
+The way to get around these problems is to make a new Julia package,
+  taking ours and any others you want as dependencies,
+  then building a new library in the same way we build ours.
 
-* Cut out the GUI tool and its dependencies to greatly simplify the dependency tree.
-* Pre-parse all the MarkovAlgorithm instances you actually need to use, store them in your package,
-  and make sure they all get precompiled.
-* Make the build in a similar way to how this package does it, but with some parameter changes:
-  * Pass `filter_stdlibs=true`. If there are any runtime crashes due to missing libs,
-  add those libs as a direct dependency to your project.
+Such a package could also precompile particular use-cases for your project,
+  like pre-parsing all the specific algorithm instances you plan to run.
+This removes the JIT overhead of running each MarkovJunior algorithm for the first time,
+  and *that* opens up the door to a static only-AoT-compiled build
+  which is mobile-friendly!
+Unfortunately AoT Julia builds are still uncommon and a bit of an open problem AFAIK.
 
-This package has plans to reduce binary size in the future.
+If you don't need the GUI tool, cut it and its dependencies out to greatly simplify the dependency tree.
+In particular the `Bplus` dependency could be reduced to just `BplusCore`,
+  with one or two changes to our package source to accomodate.
+We have future plans to automate this.
+
+When building your library, I recommend passing `filter_stdlibs=true` in to PackageCompiler.jl
+  to shrink things even further; just look out for runtime crashes due to missing libs.
+They can be fixed by adding those libs as a direct dependency.
 
 ## Development
 
@@ -121,6 +150,17 @@ Unfortunately there's no way to do that through *PackageCompiler.jl*, so we use 
 If you build this project into an executable without `nvpatch` installed, you'll get a stern warning.
 Users of the GUI tool will have to force the discrete GPU themselves
     through Nvidia's Control Panel (or AMD's equivalent) to avoid errors on tool startup.
+
+### Linking with the dll: `GenLibFromDll`
+
+PackageCompiler can generate a DLL, [but not the .lib file](https://github.com/JuliaLang/PackageCompiler.jl/issues/687) needed to link it to our headers!
+Fortunately it is possible to *generate* a .lib by examining what's exposed in the dll and working backwards.
+So, after compilation we use a tool which does exactly this: [GenLibFromDll](https://github.com/KHeresy/GenLibFromDll).
+A specific version is directly embedded in this repo under the *scripts/* folder, to prevent link rot.
+
+`GenLibFromDll` depends on Visual Studio Build Tools, so you need those installed.
+If you don't have them (or are building for a different OS) you'll get a descriptive error message,
+  warning you that there is no easy way for users to link with the DLL.
 
 ### Testing
 
