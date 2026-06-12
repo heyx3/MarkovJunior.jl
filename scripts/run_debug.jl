@@ -13,4 +13,4 @@ end
 if "-logmd" in ARGS
     MarkovJunior.log_md_symmetry_logic() = true
 end
-markovjunior_run_tool()
+markovjunior_run_gui()

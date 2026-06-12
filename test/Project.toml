@@ -1,0 +1,4 @@
+[deps]
+Bplus = "c71c5366-3533-40c3-bcf3-6383cd1eb1eb"
+MarkovJunior = "1327bbcd-95f5-4c5d-be2a-0189b406575c"
+Suppressor = "fd094767-a336-5f1f-9728-57cf17d0bbfb"

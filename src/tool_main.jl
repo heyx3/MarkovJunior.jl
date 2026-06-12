@@ -1,4 +1,4 @@
-function markovjunior_run_tool()
+function markovjunior_run_gui()::Cint
     @game_loop begin
         INIT(
             v2i(1210, 800), "Markov Junior Playground",
@@ -66,11 +66,10 @@ function markovjunior_run_tool()
         end
     end
 end
-
-"The entry point when building as an app (through *PackageCompiler.jl*)"
-function julia_main()::Cint
+"The entry-point for standalone executables"
+function markovjunior_run_gui_main()::Cint
     try
-        markovjunior_run_tool()
+        markovjunior_run_gui()
         return 0
     catch e
         showerror(stderr, e, catch_backtrace())

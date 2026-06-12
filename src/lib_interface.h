@@ -21,16 +21,18 @@ JMJ_API void shutdown_julia(int retcode);
 JMJ_API void jmj_set_suppress_stderr(int b);
 JMJ_API int jmj_get_suppress_stderr();
 
-//Parses the given UTF-8 text as a @markovjunior algorithm.
-//If it succeeded, returns its ID (a positive sequential integer).
-//Otherwise, writes into your error string buffer (also UTF-8) and returns 0.
+//Parses the given UTF-8 null-terminated text as a @markovjunior algorithm.
+//If it succeeded, returns its ID (a nonzero `JmjID`).
+//Otherwise writes into your error string buffer (also UTF-8 null-terminated) and returns
+//    its length as a negative number.
 //
-//If you don't provide an error string buffer, the error is printed to stderr instead.
+//If you don't provide an error string buffer, it returns 0 and the error is printed to stderr instead.
 //
 //When you're done using the parsed instance, you should call jmj_close_algo().
-JMJ_API JmjID jmj_algo_parse(const char* algoStr, char* outErrStr, int errStrBufSize);
+JMJ_API long long jmj_algo_parse(const char* algoStr, char* outErrStr, int errStrBufBytes);
 //Destroys an algorithm that you created with 'jmj_algo_parse()'.
-JMJ_API void jmj_algo_close(JmjID algoID);
+//Returns whether the function succeeded (i.e. the ID exists).
+JMJ_API int jmj_algo_close(JmjID algoID);
 
 //Starts running an instance of the given algorithm,
 //    on a grid of the given size,
@@ -43,21 +45,29 @@ JMJ_API JmjID jmj_start(JmjID algoID,
                         int nSeedBytes, const unsigned char* seedBytes);
 //Cleans up the given algorithm state, whether it was done running or not.
 //This also invalidates the grid memory ('jmj_grid()').
-JMJ_API void jmj_destroy(JmjID stateID);
+//Returns whether the function succeeded (i.e. the ID exists).
+JMJ_API int jmj_destroy(JmjID algoID, JmjID stateID);
 
 
 //Runs some number of ticks of the given algorithm instance,
 //    and returns whether it finished.
-JMJ_API int jmj_step(JmjID algoID, JmjID stateID, int count);
+//Optionally writes a bool flag indicating whether this function encountered an error.
+JMJ_API int jmj_step(JmjID algoID, JmjID stateID, int count, int* outWasError);
 //Runs the algorithm until it finishes.
 //Beware of infinite loops!
-JMJ_API void jmj_finish(JmjID algoID, JmjID stateID);
+//Optionally writes a bool flag indicating whether this function encountered an error.
+JMJ_API void jmj_finish(JmjID algoID, JmjID stateID, int* outWasError);
 //Checks whether an algorithm instance has finished running.
-JMJ_API int jmj_is_finished(JmjID algoID, JmjID stateI);
+//Optionally writes a bool flag indicating whether this function encountered an error.
+JMJ_API int jmj_is_finished(JmjID algoID, JmjID stateI, int* outWasError);
 
 //Retrieves the grid that the given instance is operating on.
+//If you provide a size array, then this also writes its size per-axis.
+//
 //This memory is only safe until the next tick, as some algorithm ops will reallocate the grid!
-JMJ_API const unsigned char* jmj_grid(JmjID stateID);
+//Returns null if the state ID wasn't valid.
+JMJ_API const unsigned char* jmj_grid(JmjID stateID, int* outNDims,
+                                      int* outSize, int sizeCapacity);
 
 
 #ifdef __cplusplus

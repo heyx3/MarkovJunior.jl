@@ -185,9 +185,10 @@ end
 ##################
 #  Interface
 
+"Seeds may be a single bitstype or an enumeration of them"
 function markov_algo_start(algo::MarkovAlgorithm,
                            initial_size::Union{Tuple{Vararg{Integer}}, VecT{<:Integer}},
-                           seeds::Union{Real, Tuple{Vararg{Real}}, Vec} = rand(UInt32)
+                           @nospecialize(seeds = rand(UInt32))
                            ;
                            allocator::AbstractMarkovAllocator = MarkovAllocatorHeap()
                           )::MarkovAlgoState

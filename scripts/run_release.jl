@@ -3,4 +3,4 @@ Pkg.activate(joinpath(@__FILE__, "../.."))
 println(".")
 
 using MarkovJunior
-markovjunior_run_tool()
+markovjunior_run_gui()

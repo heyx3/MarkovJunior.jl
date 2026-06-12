@@ -1,7 +1,7 @@
 "
 A reimplementation of [https://github.com/mxgmn/MarkovJunior](mxgmn/MarkovJunior).
 
-To run the GUI editor/player, simply call `markovjunior_run_tool()`.
+To run the GUI editor/player, simply call `markovjunior_run_gui()`.
 
 
 # Algorithm Definition
@@ -47,19 +47,19 @@ To define a new `AbstractMarkovBias`, implement the following
 # GUI runner Tool
 
 Normally an OpenGL GUI tool is also available to test/debug the algorithm,
-  which you can run with `markovjunior_run_tool()`.
+  which you can run with `markovjunior_run_gui()`.
 
 To eliminate this tool and its assets and the use of folders at `pwd()`,
   set the environment variable `JMJ_BUILD_WITH_TOOL` to 0.
 "
 module MarkovJunior
 
-using Random, Setfield, Profile, Printf
+using Random, Setfield, Profile, Printf, Sockets
 const System = Base.Sys
 
 using MacroTools, NamedTupleTools, ConcurrentUtilities
 using OrderedCollections, StaticArrays, DataStructures, Combinatorics
-using StructTypes, JSON3
+using StructTypes, JSON3, ArgParse
 using GLFW, CImGui, CSyntax
 
 using Bplus; @using_bplus
@@ -95,10 +95,12 @@ if BUILT_WITH_TOOL
     include("tool_render_3D.jl")
     include("tool_gui.jl")
     include("tool_main.jl")
-    export markovjunior_run_tool
+    export markovjunior_run_gui
 end
 
 # Library:
 include("lib_interface.jl")
+include("ipc_interface.jl")
+export markovjunior_run_ipc
 
 end # module

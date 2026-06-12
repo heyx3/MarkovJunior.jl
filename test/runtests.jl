@@ -1,13 +1,19 @@
 # Make sure the test is always running in the same directory and within the same project.
 using Pkg
-const MAIN_PROJECT_DIR = joinpath(@__DIR__, "..")
-cd(MAIN_PROJECT_DIR)
-Pkg.activate(".")
+Pkg.activate(@__DIR__)
+insert!(LOAD_PATH, 1, joinpath(@__DIR__, ".."))
+
+using Sockets, UUIDs
+using Suppressor # Capture IPC server's stderr
 
 using MarkovJunior; const MJ = MarkovJunior
 MJ.markovjunior_asserts_enabled() = true
 
 using Bplus; @using_bplus
+@bp_check(Bplus.BplusCore === MJ.Bplus.BplusCore,
+          "Test project isn't using the same version of B+")
+
+###################################################
 
 
 const DEFAULT_PRIORITY = MJ.MarkovRewritePriority_Everything()
@@ -1100,6 +1106,7 @@ test_all_md_symmetries(2, 2, MJ.RewriteRule_MD_Symmetry_Definition(
 
 # External tests:
 include("add_ons.jl")
+include("ipc.jl")
 
 
 println("\n\nTests passed!\n")

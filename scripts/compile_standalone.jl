@@ -6,7 +6,12 @@
 
 println()
 
-using Pkg, PackageCompiler
+using Pkg
+Pkg.activate(joinpath(@__DIR__, ".."))
+insert!(LOAD_PATH, 1, @__DIR__)
+
+using Printf, PackageCompiler
+using MarkovJunior; const MJ = MarkovJunior
 
 # Figure out what kind of thing we're building.
 if ("-exe" in ARGS) + ("-dll" in ARGS) != 1
@@ -49,7 +54,10 @@ if MODE == :exe
     create_app(PROJECT_DIR, OUTPUT_DIR,
         force=true,
         include_transitive_dependencies=false,
-        executables=[ "JMarkovJunior" => "julia_main" ]
+        executables=[
+            "JMarkovJunior_GuiTool" => "markovjunior_run_gui_main",
+            "JMarkovJunior_IPC" => "markovjunior_run_ipc_main"
+        ]
     )
 elseif MODE == :dll
     create_library(PROJECT_DIR, OUTPUT_DIR,
@@ -65,7 +73,7 @@ println()
 println()
 
 # Copy our files to the build.
-println("Copying project files to buld...")
+println("Copying project files to build...")
 const COPY_DEST = per_mode(joinpath(OUTPUT_DIR, "bin"), joinpath(OUTPUT_DIR, "gui_tool_files"))
 mkpath(COPY_DEST)
 for c_path in COPY_TO_BUILD_PROJECT_RELATIVE
@@ -77,17 +85,116 @@ for c_path in COPY_TO_BUILD_PROJECT_RELATIVE
 end
 println()
 
-# The preferred way to tell graphics drivers to prefer discrete GPU's
-#    is to export certain symbols in the executable.
-# Unfortunately PackageCompiler.jl doesn't have a way to do that yet,
-#    so we need to use an external tool.
+# Generate headers containing project constants.
+println("Generating general headers...")
+const INCLUDE_DIR = joinpath(OUTPUT_DIR, "include")
+const CONSTS_FILE_NAME = "jmj_consts"
+const HEADER_GUARD_NAME_1 = "JMARKOVJUNIOR_CONSTS_H"
+const BASIC_ALGO_ESC = escape_string("""@markovjunior begin
+    @rewrite 1 b=>w
+    @rewrite wbb=>wgw
+    @rewrite g=>w
+end""")
+mkpath(INCLUDE_DIR)
+open(joinpath(INCLUDE_DIR, "$CONSTS_FILE_NAME.h"), "w") do file
+    print(file, """
+    #ifndef $HEADER_GUARD_NAME_1
+    #define $HEADER_GUARD_NAME_1
+
+    #define JMJ_N_GRID_VALUES $(MJ.N_CELL_TYPES)
+
+    //The color for each possible grid value, as RGB triplets.
+    static const float JMJ_GRID_COLORS[][3] = {
+    $(map(MJ.CELL_TYPES) do c
+        separator = (c.code == MJ.N_CELL_TYPES - 1) ? "" : ","
+        return "\t{ $(@sprintf("%.2f", c.color.x))f, $(@sprintf("%.2f", c.color.y))f, $(@sprintf("%.2f", c.color.z))f }$separator\n"
+    end...)
+    };
+
+    //The char representing each possible grid value.
+    #define JMJ_GRID_CHARS "$(map(c -> c.char, MJ.CELL_TYPES)...)"
+
+    //The full name of each possible grid value.
+    static const char* const JMJ_GRID_NAMES[] = {
+    $(map(MJ.CELL_TYPES) do c
+        separator = (c.code == MJ.N_CELL_TYPES - 1) ? "" : ","
+        return "\t\"$(escape_string(c.name))\"$separator\n"
+    end...)
+    };
+
+    //A simple maze-generator algorithm that works in any number of dimensions, useful to verify your IPC code.
+    #define JMJ_BASIC_MAZE "$BASIC_ALGO_ESC"
+
+    #endif
+    """)
+end
+open(joinpath(INCLUDE_DIR, "$CONSTS_FILE_NAME.hpp"), "w") do file
+    print(file, """
+    #ifndef $HEADER_GUARD_NAME_1
+    #define $HEADER_GUARD_NAME_1
+
+    #include <cstdint>
+    #include <array>
+    #include <string_view>
+
+    namespace jmj {
+        constexpr uint8_t NGridValues $(MJ.N_CELL_TYPES)
+
+        inline constexpr std::array<std::array<float, 3>, NGridValues> GridColors = {
+        $(map(MJ.CELL_TYPES) do c
+            separator = (c.code == MJ.N_CELL_TYPES - 1) ? "" : ","
+            return "\t{ $(@sprintf("%.2f", c.color.x))f, $(@sprintf("%.2f", c.color.y))f, $(@sprintf("%.2f", c.color.z))f }$separator\n\t"
+        end...)
+        };
+
+        inline constexpr std::string_view GridChars = "$(map(c->c.char, MJ.CELL_TYPES)...)";
+
+        inline constexpr std::array<std::string_view, NGridValues> GridNames = {
+        $(map(MJ.CELL_TYPES) do c
+            separator = (c.code == MJ.N_CELL_TYPES - 1) ? "" : ","
+            return "\t\"$(escape_string(c.name))\"$separator\n"
+        end)
+        };
+
+        //A simple maze-generator algorithm that works in any number of dimensions, useful to verify your IPC code.
+        inline constexpr std::string_view BasicMaze = "$BASIC_ALGO_ESC";
+    }
+
+    #endif
+    """)
+end
+open(joinpath(INCLUDE_DIR, "$CONSTS_FILE_NAME.json"), "w") do file
+    print(file, """{
+        "n_grid_values": $(MJ.N_CELL_TYPES),
+        "grid_colors": [
+        $(map(MJ.CELL_TYPES) do c
+            separator = (c.code == MJ.N_CELL_TYPES - 1) ? "" : ","
+            return "\t[ $(c.color.x), $(c.color.y), $(c.color.z) ]$separator\n"
+        end...)
+        ],
+        "grid_chars": "$(map(c -> c.char, MJ.CELL_TYPES))",
+        "grid_names" [
+        $(map(MJ.CELL_TYPES) do c
+            separator = (c.code == MJ.N_CELL_TYPES - 1) ? "" : ","
+            return "\t\"$(escape_string(c.name))\"$separator\n"
+        end...)
+        ],
+        "basic_maze": "$BASIC_ALGO_ESC"
+    }""")
+end
+
 if MODE == :exe
+
+    # The preferred way to tell graphics drivers to prefer discrete GPU's
+    #    is to export certain symbols in the executable.
+    # Unfortunately PackageCompiler.jl doesn't have a way to do that yet,
+    #    so we need to use an external tool.
     println("Using `nvpatch` to hint to graphics drivers to use discrete cards.")
     if isnothing(Sys.which("nvpatch"))
         @error "Unable to use `nvpatch` as it's not installed! Users will have to manually force discrete GPU in NVidia Control Panel (and AMD equivalent)"
     else
         println("If the file can't be patched, it's really bad luck and you need to jiggle the code until it compiles differently.")
-        for f_name in [ "JMarkovJunior.exe", "Julia.exe" ]
+        for f_name in [ "JMarkovJunior_GuiTool.exe", "Julia.exe" ]
             f_path = joinpath(OUTPUT_DIR, "bin", f_name)
             cmd = `nvpatch --enable "$f_path"`
             print("\t", cmd, " .")
@@ -96,6 +203,56 @@ if MODE == :exe
         end
     end
     println()
+
+    # Generate headers containing important constants for the IPC server.
+    println("Generating IPC headers...")
+    const HEADER_GUARD_NAME_2 = "JMARKOVJUNIOR_IPC_H"
+    const NAMED_PIPE_ESCAPED = escape_string(MJ.IPC_PIPE_PATH)
+    open(joinpath(INCLUDE_DIR, "jmj_ipc.h"), "w") do file
+        print(file, """
+        #ifndef $HEADER_GUARD_NAME_2
+        #define $HEADER_GUARD_NAME_2
+
+        #define JMJ_IPC_NAMED_PIPE "$NAMED_PIPE_ESCAPED"
+        #define JMJ_IPC_DEFAULT_MAX_GRID_BYTES $(MJ.IPC_DEFAULT_MAX_GRID_BYTE_SIZE)
+        #define JMJ_IPC_DEFAULT_MAX_CLIENT_NAME $(MJ.IPC_DEFAULT_MAX_CLIENT_NAME_BYTES)
+        #define JMJ_IPC_STDOUT_START_CODE $(MJ.IPC_MAIN_START_CODE)
+        #define JMJ_IPC_STDOUT_STOP_CODE $(MJ.IPC_MAIN_STOP_CODE)
+
+        #endif
+        """)
+    end
+    open(joinpath(INCLUDE_DIR, "jmj_ipc.hpp"), "w") do file
+        print(file, """
+        #ifndef $HEADER_GUARD_NAME
+        #define $HEADER_GUARD_NAME
+
+        #include <string_view>
+        #include <array>
+
+        namespace jmj { namespace ipc {
+            //Note: the null-terminator *is* there, but the string_view does not include it
+            inline constexpr std::string_view NamedPipe = "$NAMED_PIPE_ESCAPED";
+
+            constexpr size_t DefaultMaxGridBytes = $(MJ.IPC_DEFAULT_MAX_GRID_BYTE_SIZE);
+            constexpr size_t DefaultMaxClientName = $(MJ.IPC_DEFAULT_MAX_CLIENT_NAME_BYTES);
+
+            constexpr uint32_t StdoutStartCode = $(MJ.IPC_MAIN_START_CODE);
+            constexpr uint32_t StdoutStopCode = $(MJ.IPC_MAIN_STOP_CODE);
+        } }
+
+        #endif
+        """)
+    end
+    open(joinpath(INCLUDE_DIR, "jmj_ipc.json"), "w") do file
+        print(file, """{
+            "named_pipe": "$NAMED_PIPE_ESCAPED",
+            "default_max_grid_bytes": $(MJ.IPC_DEFAULT_MAX_GRID_BYTE_SIZE),
+            "default_max_client_name": $(MJ.IPC_DEFAULT_MAX_CLIENT_NAME_BYTES),
+            "stdout_start_code": $(MJ.IPC_MAIN_START_CODE),
+            "stdout_stop_code": $(MJ.IPC_MAIN_STOP_CODE)
+        }""")
+    end
 end
 
 # PackageCompiler.jl doesn't create a lib file for us to link into the dll,

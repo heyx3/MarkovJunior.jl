@@ -4,6 +4,7 @@ authors = ["William Mishra-Manning <manning.w27@gmail.com>"]
 version = "0.3.0"
 
 [deps]
+ArgParse = "c7e460c6-2fb9-53a9-8c5b-16f535851c63"
 Bplus = "c71c5366-3533-40c3-bcf3-6383cd1eb1eb"
 CImGui = "5d785b6c-b76f-510e-a07c-3070796c7e87"
 CSyntax = "ea656a56-6ca6-5dda-bba5-7b6963a5f74c"
@@ -24,10 +25,12 @@ Printf = "de0858da-6303-5e67-8744-51eddeeeb8d7"
 Profile = "9abbd945-dff8-562f-b5e8-e1ebf5ef1b79"
 Random = "9a3f8284-a2c9-5f02-9a11-845980a1fd5c"
 Setfield = "efcf1570-3423-57d1-acb7-fd33fddbac46"
+Sockets = "6462fe0b-24de-5631-8697-dd941f90decc"
 StaticArrays = "90137ffa-7385-5640-81b9-e52037218182"
 StructTypes = "856f2bd8-1eba-4b0a-8007-ebc267875bd4"
 
 [compat]
+ArgParse = "1.2.0"
 Bplus = "0.3.2"
 CImGui = "1.82.0"
 CSyntax = "0.4.1"
@@ -47,6 +50,7 @@ Printf = "1.11.0"
 Profile = "1.11.0"
 Random = "1.11.0"
 Setfield = "1.1.2"
+Sockets = "1.11.0"
 StaticArrays = "1.9.16"
 StructTypes = "1.11.0"
 julia = "1.11"

@@ -8,7 +8,7 @@ end
 "The number of possible cell types is limited, so that some operations can be optimized into bit math"
 const N_CELL_TYPES = 16
 
-const CELL_TYPES::NTuple{16, CellType} = tuple(
+const CELL_TYPES::NTuple{N_CELL_TYPES, CellType} = tuple(
     CellType(0, "Black",   'b', v3f(0, 0, 0)),
     CellType(1, "Gray",    'g', v3f(0.5, 0.5, 0.5)),
     CellType(2, "White",   'w', v3f(1, 1, 1)),
