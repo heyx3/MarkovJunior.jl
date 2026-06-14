@@ -337,8 +337,8 @@ function markovjunior_run_ipc(blocking::Bool
 end
 
 function markovjunior_run_ipc_main()::Cint
-    arg_table = ArgParseSettings()
-    @add_arg_table! arg_table begin
+    arg_settings = ArgParseSettings()
+    @add_arg_table! arg_settings begin
         "--max-grid", "-g"
             help = "The maximum number of bytes allowed for a single grid; default $(IPC_DEFAULT_MAX_GRID_BYTE_SIZE)"
             arg_type = Int
@@ -354,6 +354,7 @@ function markovjunior_run_ipc_main()::Cint
             help = "An alternative name for the named-pipe that other processes talk to (valid syntax depends on your OS)"
             default = IPC_PIPE_PATH
     end
+    arg_table = parse_args(ARGS, arg_settings)
 
     try
         markovjunior_run_ipc(

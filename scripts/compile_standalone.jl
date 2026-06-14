@@ -89,7 +89,7 @@ println()
 println("Generating general headers...")
 const INCLUDE_DIR = joinpath(OUTPUT_DIR, "include")
 const CONSTS_FILE_NAME = "jmj_consts"
-const HEADER_GUARD_NAME_1 = "JMARKOVJUNIOR_CONSTS_H"
+const HEADER_GUARD_NAME_1 = "JMARKOVJUNIOR_GENERATED_CONSTS_H"
 const BASIC_ALGO_ESC = escape_string("""@markovjunior begin
     @rewrite 1 b=>w
     @rewrite wbb=>wgw
@@ -138,14 +138,14 @@ open(joinpath(INCLUDE_DIR, "$CONSTS_FILE_NAME.hpp"), "w") do file
     #include <string_view>
 
     namespace jmj {
-        constexpr uint8_t NGridValues $(MJ.N_CELL_TYPES)
+        constexpr uint8_t NGridValues = $(MJ.N_CELL_TYPES);
 
-        inline constexpr std::array<std::array<float, 3>, NGridValues> GridColors = {
+        inline constexpr std::array<std::array<float, 3>, NGridValues> GridColors = {{
         $(map(MJ.CELL_TYPES) do c
             separator = (c.code == MJ.N_CELL_TYPES - 1) ? "" : ","
             return "\t{ $(@sprintf("%.2f", c.color.x))f, $(@sprintf("%.2f", c.color.y))f, $(@sprintf("%.2f", c.color.z))f }$separator\n\t"
         end...)
-        };
+        }};
 
         inline constexpr std::string_view GridChars = "$(map(c->c.char, MJ.CELL_TYPES)...)";
 
@@ -153,7 +153,7 @@ open(joinpath(INCLUDE_DIR, "$CONSTS_FILE_NAME.hpp"), "w") do file
         $(map(MJ.CELL_TYPES) do c
             separator = (c.code == MJ.N_CELL_TYPES - 1) ? "" : ","
             return "\t\"$(escape_string(c.name))\"$separator\n"
-        end)
+        end...)
         };
 
         //A simple maze-generator algorithm that works in any number of dimensions, useful to verify your IPC code.
@@ -173,7 +173,7 @@ open(joinpath(INCLUDE_DIR, "$CONSTS_FILE_NAME.json"), "w") do file
         end...)
         ],
         "grid_chars": "$(map(c -> c.char, MJ.CELL_TYPES))",
-        "grid_names" [
+        "grid_names": [
         $(map(MJ.CELL_TYPES) do c
             separator = (c.code == MJ.N_CELL_TYPES - 1) ? "" : ","
             return "\t\"$(escape_string(c.name))\"$separator\n"
@@ -206,7 +206,7 @@ if MODE == :exe
 
     # Generate headers containing important constants for the IPC server.
     println("Generating IPC headers...")
-    const HEADER_GUARD_NAME_2 = "JMARKOVJUNIOR_IPC_H"
+    const HEADER_GUARD_NAME_2 = "JMARKOVJUNIOR_IPC_GENERATED_H"
     const NAMED_PIPE_ESCAPED = escape_string(MJ.IPC_PIPE_PATH)
     open(joinpath(INCLUDE_DIR, "jmj_ipc.h"), "w") do file
         print(file, """
@@ -224,8 +224,8 @@ if MODE == :exe
     end
     open(joinpath(INCLUDE_DIR, "jmj_ipc.hpp"), "w") do file
         print(file, """
-        #ifndef $HEADER_GUARD_NAME
-        #define $HEADER_GUARD_NAME
+        #ifndef $HEADER_GUARD_NAME_2
+        #define $HEADER_GUARD_NAME_2
 
         #include <string_view>
         #include <array>
