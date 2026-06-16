@@ -71,8 +71,10 @@ function lib_error_handler(e, out_c_str::Ptr{Cchar}, c_str_buffer_size::Integer,
         return 0
     else
         err_str = sprint(showerror, e)
+        err_str_bytes = codeunits(err_str)
+        n_err_str_bytes = length(err_str_bytes)
 
-        # Edge-case: user gave us basically no memory to write the error message.
+        # If the user gave us basically no memory, write a minimal error string.
         if c_str_buffer_size < 4
             if c_str_buffer_size > 0
                 unsafe_store!(out_c_str, Cchar('\0'), 1)
@@ -80,10 +82,10 @@ function lib_error_handler(e, out_c_str::Ptr{Cchar}, c_str_buffer_size::Integer,
             else
                 return 0
             end
-        # If the error is too long, cut it off with an ellipsis.
-        elseif length(err_str) > c_str_buffer_size - 1
-            for (c, i) in zip(err_str, 1:(c_str_buffer_size - 4))
-                unsafe_store!(out_c_str, Cchar(c), i)
+        # Otherwise, if the error is too long, cut it off with an ellipsis.
+        elseif n_err_str_bytes + 1 > c_str_buffer_size
+            GC.@preserve err_str_bytes begin
+                unsafe_copyto!(out_c_str, err_str_bytes, c_str_buffer_size - 4)
             end
             unsafe_store!(out_c_str, Cchar('.'),  c_str_buffer_size - 3)
             unsafe_store!(out_c_str, Cchar('.'),  c_str_buffer_size - 2)
@@ -92,10 +94,10 @@ function lib_error_handler(e, out_c_str::Ptr{Cchar}, c_str_buffer_size::Integer,
             return c_str_buffer_size
         # Otherwise, write the full error.
         else
-            for (i, c) in enumerate(err_str)
-                unsafe_store!(out_c_str, Cchar(c), i)
+            GC.@preserve err_str_bytes begin
+                unsafe_copyto!(out_c_str, pointer(reinterpret(Cchar, err_str_bytes)), n_err_str_bytes)
             end
-            unsafe_store!(out_c_str, Cchar('\0'), length(err_str) + 1)
+            unsafe_store!(out_c_str, zero(Cchar), n_err_str_bytes + 1)
             return length(err_str) + 1
         end
     end

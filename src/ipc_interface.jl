@@ -35,42 +35,16 @@ const IPC_HANDLERS = tuple(
 
     # 1: jmj_algo_parse
     (channel, client_name::String, max_grid_byte_size::Int) -> begin
-        str_len = read(channel, UInt32)
-        str_bytes = read(channel, str_len)
-        # Auto-append a null terminator if necessary.
-        if !iszero(str_bytes[end])
-            push!(str_bytes, zero(UInt8))
-        end
-
-        err_str_buffer = Vector{Cchar}(undef, 1024)
-
-        result = GC.@preserve str_bytes err_str_buffer begin
-            jmj_algo_parse(convert(Cstring, pointer(str_bytes)),
-                           pointer(err_str_buffer), convert(Cint, length(err_str_buffer)))
-        end
-
-        if result < 1
-            write(channel, zero(UInt8))
-            # Note that the error string includes a null terminator
-            #    because we called through the C API.
-            err_len = -result
-            write(channel, convert(UInt32, err_len))
-            write(channel, @view(err_str_buffer[1:err_len]))
-        else
-            write(channel, one(UInt8))
-            write(channel, convert(UInt32, result))
-        end
+        
 
         return nothing
     end,
     # 2: jmj_algo_close
     (channel, client_name::String, max_grid_byte_size::Int) -> begin
-        algo_id = read(channel, UInt32)
-        result = jmj_algo_close(convert(Lib_ID, algo_id))
-        write(channel, convert(UInt8, result))
-
+       
         return nothing
     end,
+
 
     # 3: jmj_start
     (channel, client_name::String, max_grid_byte_size::Int) -> begin
@@ -146,6 +120,7 @@ const IPC_HANDLERS = tuple(
     (channel, client_name::String, max_grid_byte_size::Int) -> begin
         algo_id = read(channel, UInt32)
         state_id = read(channel, UInt32)
+        #TODO: Write the success flag before starting so clients don't have to block until the next message
         was_error = let was_error = Ref{Cint}()
             GC.@preserve was_error begin
                 jmj_finish(convert(Lib_ID, algo_id), convert(Lib_ID, state_id),
@@ -214,11 +189,65 @@ const IPC_HANDLERS = tuple(
     # You can optionally disable this message when starting the server.
 )
 
-function ipc_client_loop(client_name, channel, server, max_grid_byte_size)
+"Internal macro to help with debug logging."
+macro ipc_debug_log(args...)
+    return :(
+        $(esc(:DebugMode)) && println(stderr,
+            $(esc(:client_name)), ": ",
+            $(esc.(args)...)
+        )
+    )
+end
+
+const IPC_ERR_MSG_CUTOFF = UInt8[ codeunits("...")..., zero(UInt8) ]
+
+function ipc_client_loop(client_name, channel, server, max_grid_byte_size, ::Val{DebugMode}) where {DebugMode}
     try
         while true
             msg_idx = read(channel, UInt32)
-            if msg_idx == length(IPC_HANDLERS) + 1
+            if msg_idx == 1 # jmj_algo_parse
+                @ipc_debug_log "jmj_algo_parse()..."
+                str_len = read(channel, UInt32)
+                @ipc_debug_log "    algo is " str_len " bytes"
+                str_bytes = read(channel, str_len)
+                # Auto-append a null terminator if necessary.
+                if !iszero(str_bytes[end])
+                    @ipc_debug_log "    received with no null-terminator; appending"
+                    push!(str_bytes, zero(UInt8))
+                end
+
+                err_str_buffer = Vector{Cchar}(undef, 1024)
+
+                result = GC.@preserve str_bytes err_str_buffer begin
+                    println(stderr, "#DEBUG: <<", pointer(str_bytes), " ", unsafe_string(pointer(reinterpret(Cchar, str_bytes))),
+                            "\n>>\n")
+                    jmj_algo_parse(convert(Cstring, pointer(reinterpret(Cchar, str_bytes))),
+                                   pointer(err_str_buffer), convert(Cint, length(err_str_buffer)))
+                end
+                @ipc_debug_log "    result: " result
+
+                if result < 1
+                    write(channel, zero(UInt8))
+                    # Note that the error string includes a null terminator
+                    #    because we called through the C API.
+                    err_len = -result
+                    @ipc_debug_log "        That means we have an error string of " err_len " bytes:"
+                    @ipc_debug_log "            " String(reinterpret(UInt8, @view(err_str_buffer[1:err_len])))
+                    write(channel, convert(UInt32, err_len))
+                    write(channel, @view(err_str_buffer[1:err_len]))
+                else
+                    write(channel, one(UInt8))
+                    write(channel, convert(UInt32, result))
+                end
+            elseif msg_idx == 2 # jmj_algo_close
+                @ipc_debug_log "jmj_algo_close()..."
+                algo_id = read(channel, UInt32)
+                @ipc_debug_log "    Algo " algo_id
+                result = jmj_algo_close(convert(Lib_ID, algo_id))
+                @ipc_debug_log "    result: " result
+                write(channel, convert(UInt8, result))
+            #TODO: Rest, then add logging
+            elseif msg_idx == length(IPC_HANDLERS) + 1
                 if isnothing(server)
                     println(stderr, "Client \"", client_name, "\" asked to kill the server thread but that's not allowed.")
                     write(channel, zero(UInt8))
@@ -272,13 +301,14 @@ It has the following optional keyword arguments:
 * `server_is_ready_callback = () -> ...` to react to the moment the server is ready to accept clients on the named pipe.
 This happens relatively quickly and is always invoked on the calling thread, before this function returns.
 "
-function markovjunior_run_ipc(blocking::Bool
+function markovjunior_run_ipc(blocking::Bool, ::Val{DebugMode}
                               ;
                               max_grid_byte_size::Int=IPC_DEFAULT_MAX_GRID_BYTE_SIZE,
                               max_client_name_byte_size::Int=IPC_DEFAULT_MAX_CLIENT_NAME_BYTES,
                               allow_kill_message::Bool = false,
                               pipe_path::String = IPC_PIPE_PATH,
-                              server_is_ready_callback = () -> println(stderr, "\tNow open to clients!"))
+                              server_is_ready_callback = () -> println(stderr, "\tNow open to clients!")
+                             ) where {DebugMode}
     println(stderr, "Offering JMarkovJunior at ", pipe_path)
     server = listen(pipe_path)
     server_is_ready_callback()
@@ -324,8 +354,9 @@ function markovjunior_run_ipc(blocking::Bool
         exists(client_name) && Threads.@spawn(ipc_client_loop(
             $client_name, $channel,
             $allow_kill_message ? server : nothing,
-            max_grid_byte_size)
-        )
+            max_grid_byte_size,
+            Val(DebugMode)
+        ))
     end
     if blocking
         server_loop()
@@ -350,6 +381,13 @@ function markovjunior_run_ipc_main()::Cint
         "--allow-kill-msg", "-k"
             help = "If true, any client may send a special message to kill the server thread (preventing new clients)"
             action = :store_true
+        "--timeout", "-t"
+            help = "Server gives up and dies after this many seconds of zero client activity"
+            arg_type = Float32
+            default = +Inf
+        "--debug", "-d"
+            help = "Verbose logging of server logic to pinpoint crashes"
+            action = :store_true
         "pipe_path"
             help = "An alternative name for the named-pipe that other processes talk to (valid syntax depends on your OS)"
             default = IPC_PIPE_PATH
@@ -358,7 +396,7 @@ function markovjunior_run_ipc_main()::Cint
 
     try
         markovjunior_run_ipc(
-            true,
+            true, Val(arg_table["debug"]::Bool),
             allow_kill_message = arg_table["allow-kill-msg"],
             max_grid_byte_size = arg_table["max-grid"],
             max_client_name_byte_size = arg_table["max-client-name"],
@@ -371,11 +409,13 @@ function markovjunior_run_ipc_main()::Cint
         )
         println(stderr)
         write(stdout, IPC_MAIN_STOP_CODE)
+        println(stderr, "Just wrote the stop code")
         println(stderr)
         return 0
     catch e
         showerror(stderr, e, catch_backtrace())
         write(stdout, IPC_MAIN_STOP_CODE)
+        println(stderr, "Just wrote the stop code")
         return 1
     end
 end
