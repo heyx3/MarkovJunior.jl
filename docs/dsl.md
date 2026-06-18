@@ -25,6 +25,13 @@ If using the former we have a few inner expressions you *must* wrap in parenthes
 
 > ***Important note**: Julia uses 1-based indices, and so does our library! For example, the first axis is 1 and not 0.*
 
+## Grid pixels 
+
+Each pixel is a 1-byte uint storing a bitmapped color.
+Types/names of colors are specified directly in the codebase.
+
+Each color also has a single-char name which is used in this DSL, for example `R` stands for Red.
+
 ## Parameters
 
 By default the grid starts with all pixels black, but you can change this initial color.
