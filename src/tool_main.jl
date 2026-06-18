@@ -1,4 +1,4 @@
-function markovjunior_run_gui()::Cint
+function markovjunior_run_gui()
     @game_loop begin
         INIT(
             v2i(1210, 800), "Markov Junior Playground",
@@ -65,6 +65,7 @@ function markovjunior_run_gui()::Cint
             close(gui)
         end
     end
+    return nothing
 end
 "The entry-point for standalone executables"
 function markovjunior_run_gui_main()::Cint

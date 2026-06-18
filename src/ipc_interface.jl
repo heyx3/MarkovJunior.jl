@@ -23,171 +23,8 @@ const IPC_DEFAULT_MAX_CLIENT_NAME_BYTES::Int = 1024
 const IPC_MAIN_START_CODE = UInt32(42)
 const IPC_MAIN_STOP_CODE = UInt32(999)
 
-#TODO: Add a timeout for finish operations to prevent the whole service from collapsing under load
-#TODO: Make each specific client-connection more concrete. It should remember the size of each grid so we can remove the 8D cap, and store the full set of their algorithms+states so it can auto-clean them up when the connection closes.
+#TODO: Client connections should remember the size of each grid so we can remove the 8D cap, and store the full set of their algorithms+states so it can auto-clean them up when the connection closes.
 
-"
-An array of functions that clients can call in our IPC protocol.
-The protocol is described in the project readme, puposefully not duplicated in our doc-strings.
-"
-const IPC_HANDLERS = tuple(
-    # The "suppress stderr" flags aren't supported as there's no point -- this is its own process
-
-    # 1: jmj_algo_parse
-    (channel, client_name::String, max_grid_byte_size::Int) -> begin
-        
-
-        return nothing
-    end,
-    # 2: jmj_algo_close
-    (channel, client_name::String, max_grid_byte_size::Int) -> begin
-       
-        return nothing
-    end,
-
-
-    # 3: jmj_start
-    (channel, client_name::String, max_grid_byte_size::Int) -> begin
-        algo_id = read(channel, UInt32)
-
-        n_dims = read(channel, UInt32)
-        size = Vector{UInt32}(undef, n_dims)
-        read!(channel, size)
-        size = reinterpret(Cint, size)
-
-        n_seed_bytes = read(channel, UInt32)
-        seed_bytes = read(channel, n_seed_bytes)
-
-        if n_dims > IPC_MAX_DIMS
-            println(stderr, "Client \"", client_name, "\" requested a ", n_dims, "D grid which is currently not allowed")
-            write(channel, zero(UInt8))
-            return nothing
-        elseif prod(convert.(Ref(Int), size)) > max_grid_byte_size
-            println(stderr, "Client \"", client_name, "\" requested too large a grid (", prod(size), ") and the request will fail")
-            write(channel, zero(UInt8))
-            return nothing
-        end
-
-        result = GC.@preserve size seed_bytes begin
-            jmj_start(convert(Lib_ID, algo_id),
-                      convert(Cint, n_dims), pointer(size),
-                      convert(Cint, n_seed_bytes), pointer(seed_bytes))
-        end
-
-        if iszero(result)
-            write(channel, zero(UInt8))
-        else
-            write(channel, one(UInt8))
-            write(channel, convert(UInt32, result))
-        end
-
-        return nothing
-    end,
-    # 4: jmj_destroy
-    (channel, client_name::String, max_grid_byte_size::Int) -> begin
-        algo_id = read(channel, UInt32)
-        state_id = read(channel, UInt32)
-        result = jmj_destroy(convert(Lib_ID, algo_id), convert(Lib_ID, state_id))
-        write(channel, convert(UInt8, result))
-
-        return nothing
-    end,
-
-    # 5: jmj_step
-    (channel, client_name::String, max_grid_byte_size::Int) -> begin
-        algo_id = read(channel, UInt32)
-        state_id = read(channel, UInt32)
-        count = read(channel, UInt32)
-        (result, was_error) = let was_error = Ref{Cint}()
-            r = GC.@preserve was_error begin
-                jmj_step(convert(Lib_ID, algo_id), convert(Lib_ID, state_id),
-                         convert(Cint, count),
-                         Base.unsafe_convert(Ptr{Cint}, was_error))
-            end
-            (r, was_error[])
-        end
-
-        if was_error == 1
-            write(channel, zero(UInt8))
-        else
-            write(channel, one(UInt8))
-            write(channel, convert(UInt8, result))
-        end
-
-        return nothing
-    end,
-    # 6: jmj_finish
-    (channel, client_name::String, max_grid_byte_size::Int) -> begin
-        algo_id = read(channel, UInt32)
-        state_id = read(channel, UInt32)
-        #TODO: Write the success flag before starting so clients don't have to block until the next message
-        was_error = let was_error = Ref{Cint}()
-            GC.@preserve was_error begin
-                jmj_finish(convert(Lib_ID, algo_id), convert(Lib_ID, state_id),
-                           Base.unsafe_convert(Ptr{Cint}, was_error))
-            end
-            was_error[]
-        end
-
-        if was_error == 1
-            write(channel, zero(UInt8))
-        else
-            write(channel, one(UInt8))
-        end
-
-        return nothing
-    end,
-    # 7: jmj_is_finished
-    (channel, client_name::String, max_grid_byte_size::Int) -> begin
-        algo_id = read(channel, UInt32)
-        state_id = read(channel, UInt32)
-        (result, was_error) = let was_error = Ref{Cint}()
-            r = GC.@preserve was_error begin
-                jmj_is_finished(convert(Lib_ID, algo_id), convert(Lib_ID, state_id),
-                                Base.unsafe_convert(Ptr{Cint}, was_error))
-            end
-            (r, was_error[])
-        end
-
-        if was_error == 1
-            write(channel, zero(UInt8))
-        else
-            write(channel, one(UInt8))
-            write(channel, convert(UInt8, result))
-        end
-
-        return nothing
-    end,
-
-    # 8: jmj_grid
-    (channel, client_name::String, max_grid_byte_size::Int) -> begin
-        state_id = read(channel, UInt32)
-
-        let dims_buf = Ref{Cint}(),
-            size_buf = Ref{NTuple{IPC_MAX_DIMS, Cint}}()
-          grid_ptr = GC.@preserve dims_buf size_buf begin
-              jmj_grid(convert(Lib_ID, state_id),
-                       Base.unsafe_convert(Ptr{Cint}, dims_buf),
-                       Base.unsafe_convert(Ptr{Cint}, size_buf),
-                       IPC_MAX_DIMS)
-          end
-          if grid_ptr == C_NULL
-              write(channel, zero(UInt8))
-          else
-              write(channel, one(UInt8))
-              write(channel, convert(UInt32, dims_buf[]))
-              for i in 1:dims_buf[]
-                  write(channel, convert(UInt32, size_buf[][i]))
-              end
-              unsafe_write(channel, grid_ptr, prod(size_buf[][i] for i in 1:dims_buf[]))
-          end
-        end
-    end
-
-    # 9: special "kill the server thread" message that has no official handler.
-    # This call helps one program take complete ownership of this service's lifetime.
-    # You can optionally disable this message when starting the server.
-)
 
 "Internal macro to help with debug logging."
 macro ipc_debug_log(args...)
@@ -212,15 +49,13 @@ function ipc_client_loop(client_name, channel, server, max_grid_byte_size, ::Val
                 str_bytes = read(channel, str_len)
                 # Auto-append a null terminator if necessary.
                 if !iszero(str_bytes[end])
-                    @ipc_debug_log "    received with no null-terminator; appending"
+                    @ipc_debug_log "    received with no null-terminator; appending it."
                     push!(str_bytes, zero(UInt8))
                 end
 
                 err_str_buffer = Vector{Cchar}(undef, 1024)
 
                 result = GC.@preserve str_bytes err_str_buffer begin
-                    println(stderr, "#DEBUG: <<", pointer(str_bytes), " ", unsafe_string(pointer(reinterpret(Cchar, str_bytes))),
-                            "\n>>\n")
                     jmj_algo_parse(convert(Cstring, pointer(reinterpret(Cchar, str_bytes))),
                                    pointer(err_str_buffer), convert(Cint, length(err_str_buffer)))
                 end
@@ -246,8 +81,170 @@ function ipc_client_loop(client_name, channel, server, max_grid_byte_size, ::Val
                 result = jmj_algo_close(convert(Lib_ID, algo_id))
                 @ipc_debug_log "    result: " result
                 write(channel, convert(UInt8, result))
-            #TODO: Rest, then add logging
-            elseif msg_idx == length(IPC_HANDLERS) + 1
+            elseif msg_idx == 3 # jmj_start
+                @ipc_debug_log "jmj_start()..."
+
+                algo_id = read(channel, UInt32)
+                @ipc_debug_log "    Algo " algo_id
+
+                n_dims = read(channel, UInt32)
+                size = Vector{UInt32}(undef, n_dims)
+                @ipc_debug_log "    Dims " n_dims
+                read!(channel, size)
+                @ipc_debug_log "    Size " Tuple(size)
+                size = reinterpret(Cint, size)
+
+                n_seed_bytes = read(channel, UInt32)
+                @ipc_debug_log "    Seed bytes " n_seed_bytes
+                seed_bytes = read(channel, n_seed_bytes)
+                @ipc_debug_log "    Seed: " Tuple(seed_bytes)
+
+                if n_dims > IPC_MAX_DIMS
+                    println(stderr, "Client \"", client_name, "\" requested a ", n_dims, "D grid which is currently not allowed")
+                    write(channel, zero(UInt8))
+                    return nothing
+                elseif prod(convert.(Ref(Int), size)) > max_grid_byte_size
+                    println(stderr, "Client \"", client_name, "\" requested too large a grid (", prod(size), ") and the request will fail")
+                    write(channel, zero(UInt8))
+                    return nothing
+                end
+
+                result = GC.@preserve size seed_bytes begin
+                    jmj_start(convert(Lib_ID, algo_id),
+                            convert(Cint, n_dims), pointer(size),
+                            convert(Cint, n_seed_bytes), pointer(seed_bytes))
+                end
+
+                if iszero(result)
+                    write(channel, zero(UInt8))
+                    @ipc_debug_log "    wrote failure code"
+                else
+                    write(channel, one(UInt8))
+                    @ipc_debug_log "    wrote success code; result is " result
+                    write(channel, convert(UInt32, result))
+                end
+            elseif msg_idx == 4 # jmj_destroy
+                @ipc_debug_log "jmj_destroy()..."
+                algo_id = read(channel, UInt32)
+                state_id = read(channel, UInt32)
+                @ipc_debug_log "    Algo=" algo_id "   State=" state_id
+                result = jmj_destroy(convert(Lib_ID, algo_id), convert(Lib_ID, state_id))
+                @ipc_debug_log "    Result=" result
+                write(channel, convert(UInt8, result))
+            elseif msg_idx == 5 # jmj_step
+                @ipc_debug_log "jmj_step()..."
+                algo_id = read(channel, UInt32)
+                @ipc_debug_log "    algo " algo_id
+                state_id = read(channel, UInt32)
+                @ipc_debug_log "    state " state_id
+                count = read(channel, UInt32)
+                @ipc_debug_log "    step count " count
+
+                (result, was_error) = let was_error = Ref{Cint}()
+                    r = GC.@preserve was_error begin
+                        jmj_step(convert(Lib_ID, algo_id), convert(Lib_ID, state_id),
+                                convert(Cint, count),
+                                Base.unsafe_convert(Ptr{Cint}, was_error))
+                    end
+                    (r, was_error[])
+                end
+
+                if was_error == 1
+                    @ipc_debug_log "    failed!"
+                    write(channel, zero(UInt8))
+                else
+                    @ipc_debug_log "    result: " result
+                    write(channel, one(UInt8))
+                    write(channel, convert(UInt8, result))
+                end
+            elseif msg_idx == 6 # jmj_finish
+                @ipc_debug_log "jmj_finish()..."
+                algo_id = read(channel, UInt32)
+                @ipc_debug_log "    Algo " algo_id
+                state_id = read(channel, UInt32)
+                @ipc_debug_log "    State " state_id
+
+                results = @timed let was_error = Ref{Cint}()
+                    GC.@preserve was_error begin
+                        jmj_finish(convert(Lib_ID, algo_id), convert(Lib_ID, state_id),
+                                Base.unsafe_convert(Ptr{Cint}, was_error))
+                    end
+                    was_error[]
+                end
+                was_error = results.value
+                @ipc_debug_log "    " sprint(io -> Base.time_print(io,
+                    # This is the internal Base code that prints @time.
+                    results.time*1e9,
+                    results.gcstats.allocd, results.gcstats.total_time, Base.gc_alloc_count(results.gcstats),
+                    results.lock_conflicts,
+                    results.compile_time*1e9, results.recompile_time*1e9,
+                    false
+                ))
+
+                if was_error == 1
+                    @ipc_debug_log "    failed!"
+                    write(channel, zero(UInt8))
+                else
+                    @ipc_debug_log "    succeeded"
+                    write(channel, one(UInt8))
+                end
+            elseif msg_idx == 7 # jmj_is_finished
+                @ipc_debug_log "jmj_is_finished()..."
+                algo_id = read(channel, UInt32)
+                @ipc_debug_log "    Algo " algo_id
+                state_id = read(channel, UInt32)
+                @ipc_debug_log "    State " state_id
+
+                (result, was_error) = let was_error = Ref{Cint}()
+                    r = GC.@preserve was_error begin
+                        jmj_is_finished(convert(Lib_ID, algo_id), convert(Lib_ID, state_id),
+                                        Base.unsafe_convert(Ptr{Cint}, was_error))
+                    end
+                    (r, was_error[])
+                end
+
+                if was_error == 1
+                    @ipc_debug_log "    failed!"
+                    write(channel, zero(UInt8))
+                else
+                    @ipc_debug_log "    succeeded! Result: " result
+                    write(channel, one(UInt8))
+                    write(channel, convert(UInt8, result))
+                end
+            elseif msg_idx == 8 # jmj_grid
+                @ipc_debug_log "jmj_grid()..."
+                state_id = read(channel, UInt32)
+                @ipc_debug_log "    State " state_id
+
+                let dims_buf = Ref{Cint}(),
+                    size_buf = Ref{NTuple{IPC_MAX_DIMS, Cint}}()
+                  grid_ptr = GC.@preserve dims_buf size_buf begin
+                        jmj_grid(convert(Lib_ID, state_id),
+                                Base.unsafe_convert(Ptr{Cint}, dims_buf),
+                                Base.unsafe_convert(Ptr{Cint}, size_buf),
+                                IPC_MAX_DIMS)
+                  end
+                  if grid_ptr == C_NULL
+                      @ipc_debug_log "    failed!"
+                      write(channel, zero(UInt8))
+                  else
+                      @ipc_debug_log "    succeeded!"
+                      write(channel, one(UInt8))
+
+                      @ipc_debug_log "    Dims " dims_buf[]
+                      write(channel, convert(UInt32, dims_buf[]))
+
+                      @ipc_debug_log "    Size " size_buf[][1:dims_buf[]]
+                      for i in 1:dims_buf[]
+                          write(channel, convert(UInt32, size_buf[][i]))
+                      end
+
+                      n_grid_bytes = prod(size_buf[][i] for i in 1:dims_buf[])
+                      @ipc_debug_log "   Grid bytes " n_grid_bytes
+                      unsafe_write(channel, grid_ptr, n_grid_bytes)
+                  end
+                end
+            elseif msg_idx == 9 # kill server thread
                 if isnothing(server)
                     println(stderr, "Client \"", client_name, "\" asked to kill the server thread but that's not allowed.")
                     write(channel, zero(UInt8))
@@ -259,13 +256,11 @@ function ipc_client_loop(client_name, channel, server, max_grid_byte_size, ::Val
                     println(stderr, "Client \"", client_name, "\" tried to kill the server but it's already dead")
                     write(channel, one(UInt8))
                 end
-            elseif (msg_idx < 1) || (msg_idx > length(IPC_HANDLERS))
+            else
                 println(stderr, "Client \"", client_name, "\" sent invalid message index ", msg_idx,
                                 "! Everything it does from now on is almost certainly garbage, ",
                                 " so we're closing the connection.")
                 break
-            else
-                IPC_HANDLERS[msg_idx](channel, client_name, max_grid_byte_size)
             end
         end
     catch e
