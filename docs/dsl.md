@@ -1,7 +1,7 @@
 # `@markovjunior` DSL syntax
 
 Below is a comprehensive reference for the syntax to define a MarkovJunior algorithm.
-If you're feeling overwhelmed, just read the example scenes and come back here for specific questions.
+If you're starting out, I recommend reading the example scenes and only coming here to answer specific questions.
 
 Our new Julia macro `@markovjunior [dims] [clear_value] begin ... end`
   evaluates into an instance of `MarkovAlgorithm`.
@@ -10,16 +10,27 @@ This represents a sequence of operations that generate a grid of colored pixels,
 You could also think of it as defining an *animation*,
   which transforms a blank grid into an image/scene.
 
-Turn a parsed algorithm back into a DSL string with `dsl_string(algo)`.
+You can turn a parsed algorithm back into a DSL string with `dsl_string(algo)`.
 However the result looks much worse than the original -- whitespace, comments and other niceties are lost!
 
-Keep in mind for convenience, Julia macros (code statements with the `@` symbol) can be written two ways:
-* Without parentheses and commas to make statements shorter, `@my_macro a b c`
-* With parentheses to make multiline statements easier, `@my_macro(a, b, c)`.
-If using the former, there are a few expressions you must keep in parentheses
-  which will be mentioned as they come up.
+## Notes about Julia
+
+For convenience, Julia allows macros (code statements with the `@` symbol) to be written two ways:
+
+* Without parentheses and commas, to make statements shorter: `@my_macro a b c`
+* With parentheses and commas, like a function call, to make multiline statements easier: `@my_macro(a, b, c)`.
+
+If using the former we have a few inner expressions you *must* wrap in parentheses,
+  which we will mention as they come up.
 
 > ***Important note**: Julia uses 1-based indices, and so does our library! For example, the first axis is 1 and not 0.*
+
+## Grid pixels 
+
+Each pixel is a 1-byte uint storing a bitmapped color.
+Types/names of colors are specified directly in the codebase.
+
+Each color also has a single-char name which is used in this DSL, for example `R` stands for Red.
 
 ## Parameters
 
