@@ -10,7 +10,7 @@ It can build into several things:
 
 > ***NOTE**: The IPC approach is strongly recommended over the DLL one!*
 
-A plugin to integrate with Unreal Engine 5 is ongoing.
+[A plugin to integrate with Unreal Engine 5 is ongoing](https://github.com/heyx3/JMarkovJunior_Unreal5Demo).
 
 ````julia
 # In the Julia REPL:
@@ -186,6 +186,7 @@ A small handful of them are still not converted to the v0.2 syntax,
 ## Optimizing the standalone builds
 
 **This section is for anyone who really wants to integrate the DLL release directly into a project.**
+**You should prefer the IPC executable instead.**
 
 Due to Julia's unique JIT architecture, it essentially needs a whole compiler inside its runtime.
 Due to our GUI tool, there are many sub-sub-dependencies compiled into the package.
