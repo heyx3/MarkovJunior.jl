@@ -571,7 +571,7 @@ function RewriteRule_MD_Orientations(rule_array::Array{RewriteCell_MD{NRuleDims}
         rule_permutations[permutation_i] = permuted_allocation
         # Copy in the permuted rule.
         # Certain kinds of cells (i.e. RewriteRuleCell_Lookup) require changes to match the permutation.
-        for inds::CartesianIndex{NRuleDims} in eachindex(permuted_view)
+        for inds::CartesianIndex{NGridDims} in eachindex(permuted_view)
             cell::RewriteCell_MD{NRuleDims} = permuted_view[inds]
             (cell_src, cell_dest) = cell
 
