@@ -102,26 +102,23 @@ function ipc_client_loop(client_name, channel, server, max_grid_byte_size, ::Val
                 if n_dims > IPC_MAX_DIMS
                     println(stderr, "Client \"", client_name, "\" requested a ", n_dims, "D grid which is currently not allowed")
                     write(channel, zero(UInt8))
-                    return nothing
                 elseif prod(convert.(Ref(Int), size)) > max_grid_byte_size
                     println(stderr, "Client \"", client_name, "\" requested too large a grid (", prod(size), ") and the request will fail")
                     write(channel, zero(UInt8))
-                    return nothing
-                end
-
-                result = GC.@preserve size seed_bytes begin
-                    jmj_start(convert(Lib_ID, algo_id),
-                            convert(Cint, n_dims), pointer(size),
-                            convert(Cint, n_seed_bytes), pointer(seed_bytes))
-                end
-
-                if iszero(result)
-                    write(channel, zero(UInt8))
-                    @ipc_debug_log "    wrote failure code"
                 else
-                    write(channel, one(UInt8))
-                    @ipc_debug_log "    wrote success code; result is " result
-                    write(channel, convert(UInt32, result))
+                    result = GC.@preserve size seed_bytes begin
+                        jmj_start(convert(Lib_ID, algo_id),
+                                convert(Cint, n_dims), pointer(size),
+                                convert(Cint, n_seed_bytes), pointer(seed_bytes))
+                    end
+                    if iszero(result)
+                        write(channel, zero(UInt8))
+                        @ipc_debug_log "    wrote failure code"
+                    else
+                        write(channel, one(UInt8))
+                        @ipc_debug_log "    wrote success code; result is " result
+                        write(channel, convert(UInt32, result))
+                    end
                 end
             elseif msg_idx == 4 # jmj_destroy
                 @ipc_debug_log "jmj_destroy()..."
@@ -357,7 +354,11 @@ function markovjunior_run_ipc(blocking::Bool, ::Val{DebugMode}
         server_loop()
         return nothing
     else
-        Threads.@spawn server_loop()
+        Threads.@spawn try
+            server_loop()
+        catch e
+            @error "IPC Server error!" exception=(e, catch_backtrace())
+        end
         return server
     end
 end
@@ -399,11 +400,13 @@ function markovjunior_run_ipc_main()::Cint
             server_is_ready_callback = () -> begin
                 print(stderr, "\tNow open to clients! ")
                 write(stdout, IPC_MAIN_START_CODE)
+                flush(stdout)
                 println(stderr)
             end
         )
         println(stderr)
         write(stdout, IPC_MAIN_STOP_CODE)
+        flush(stdout)
         println(stderr, "Just wrote the stop code")
         println(stderr)
         return 0

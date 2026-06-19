@@ -5,10 +5,19 @@
 
 (() -> begin # Wrap the test in a function to avoid global weirdness
 
-server = markovjunior_run_ipc(false, allow_kill_message=true)
+PIPE_PATH = if Sys.iswindows()
+    "\\\\.\\pipe\\jmj_ipc_unittest"
+else
+    "/tmp/jmj_ipc_unittest"
+end
+server = markovjunior_run_ipc(
+    false, Val(true),
+    allow_kill_message = true,
+    pipe_path = PIPE_PATH
+)
 sleep(5) #TODO: Some kind of signal to know that the server has started
 println("  (if you see this before the server says it's ready to accept clients, the test will fail due to race condition)")
-channel = connect(MarkovJunior.IPC_PIPE_PATH)
+channel = connect(PIPE_PATH)
 
 try # Even if below tests fail, make sure to close the client and kill the server
 
@@ -252,7 +261,9 @@ sleep(1)
 ipc_start(1, (6, 6), (1, 4.5),   0, false) # Failed due to algo ID
 ipc_start(2, ntuple(identity, 9), (1, 4.5),   0, false) # Failed due to 8D cap
 ipc_start(2, (4, ), (1, 4.5),  0, false) # Failed due to algo being 2D and grid being 1D
-ipc_start(2, ntuple(i -> 99999, 7), (1, 4.5),  0, false) # Failed due to memory cap)
+ipc_start(2, ntuple(i -> Int(ceil(sqrt(MJ.IPC_DEFAULT_MAX_GRID_BYTE_SIZE)) + 1), 2),
+          (1, 4.5),
+          0, false) # Failed due to memory cap
 ipc_start(2, (3, 12), (1, 4.5),    1, true)
 # Get the grid for the first time, and verify it.
 let g = ipc_grid(1, true)
@@ -309,13 +320,12 @@ end
 ipc_destroy(2, 2, true)
 ipc_destroy(2, 2, false)
 
-finally
-# End the server if it hasn't already.
-if isopen(channel)
-    write(channel, UInt32(9))
-    @bp_check(read(channel, UInt8) in 0:1, "Final shutdown returned garbage?")
-end
-# End the client connection cleanly.
 close(channel)
+catch e
+    # Wait a bit so the server thread can print its own stuff without interference.
+    sleep(2)
+    close(channel)
+    sleep(2)
+    rethrow()
 end
 end)()
