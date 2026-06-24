@@ -236,4 +236,93 @@ test_all_md_symmetries(2, 2, MJ.RewriteRule_MD_Symmetry_Definition(
     MJ.GridDir(2, 1)  MJ.GridDir(1, 1)
 ]))
 
+# Test RewriteRule_MD_Orientations.
+ori_ignored_fields(n_grid) = tuple(Vector{MJ.CellGrid{n_grid}}(), MJ.MarkovAllocatorHeap())
+NULL_GRID_TO_RULE = MJ.GridDir(-1, -1, true)
+# Note that your expected 'rule_permutation_cells_buffer' field can be left empty; we test its size internally.
+# We also don't test anything about the allocator.
+# orientations(::RewriteRule_MD_Orientations) is pretty bare-bones, so it's not tested either.
+function test_orientations(src_array::Array{<:NTuple{2, Any}, NRule},
+                           symmetry::MJ.RewriteRule_MD_Symmetry_Definition,
+                           n_grid::Integer,
+                           expected::MJ.RewriteRule_MD_Orientations) where {NRule}
+    sanitized_src_array = Array{MJ.RewriteCell_MD{NRule}, NRule}(undef, size(src_array))
+    for i in eachindex(src_array)
+        sanitize(cell) = if cell isa Integer
+            convert(UInt8, cell)
+        else
+            cell
+        end
+        sanitized_src_array[i] = sanitize.(src_array[i]::Tuple)
+    end
+
+    actual = MJ.RewriteRule_MD_Orientations(sanitized_src_array, symmetry, Val(n_grid), MJ.MarkovAllocatorHeap())
+    @bp_check(actual.rule_to_grid == expected.rule_to_grid,
+        "Error getting MD-orientations! Rule-to-grid incorrect.\nRule: ",
+          sprint(show, sanitized_src_array),
+          "\nSymmetry: ", sprint(show, symmetry),
+          "\nExpected: ", sprint(show, expected.rule_to_grid),
+          "\nActual: ", sprint(show, actual.rule_to_grid)
+    )
+    @bp_check(actual.grid_to_rule == expected.grid_to_rule,
+        "Error getting MD-orientations! Grid-to-rule incorrect.\nRule: ",
+          sprint(show, sanitized_src_array),
+          "\nSymmetry: ", sprint(show, symmetry),
+          "\nExpected: ", sprint(show, expected.grid_to_rule),
+          "\nActual: ", sprint(show, actual.grid_to_rule)
+    )
+    @bp_check(length(actual.rule_permutations) == length(expected.rule_permutations),
+        "Error getting MD-orientations! `rule_permutations` has a mismatch: ",
+          "expected ", length(expected.rule_permutations), " but got ", length(actual.rule_permutations)
+    )
+    @bp_check(actual.rule_permutations == expected.rule_permutations,
+        "Error getting MD-orientations! `rule_permutations` has a mismatch.\nRule: ",
+          sprint(show, sanitized_src_array),
+          "\nSymmetry: ", sprint(show, symmetry),
+          "\nExpected:\n\t", join(sprint.(Ref(show), expected.rule_permutations), "\n\t"),
+          "\nActual:\n\t", join(sprint.(Ref(show), actual.rule_permutations), "\n\t")
+    )
+    @bp_check(size.(actual.rule_permutation_cells_buffer) == size.(expected.rule_permutations),
+        "Error getting MD-orientations! `rule_permutation_cells_buffer` elements have the wrong sizes.",
+          "\nRule: ", sprint(show, sanitized_src_array),
+          "\nSymmetry: ", sprint(show, symmetry),
+          "\nExpected:\n\t", size.(expected.rule_permutation),
+          "\nActual:\n\t", size.(actual.rule_permutation_cells_buffer)
+    )
+end
+test_orientations(
+    permutedims([ # (make array X be Column instead of Row)
+        (2,4)  (3,6)
+        (4,8)  (5,10)
+    ]),
+    # Copied from the first test above (as of time of writing)
+    MJ.RewriteRule_MD_Symmetry_Definition(
+        [
+           # R-Axis | Permutations...
+            [ 1    2
+              2    -1
+            ] => nothing # <-- Tail symmetry
+        ],
+        # Chirality groups:
+        Vector{Set{Int}}()
+    ),
+    2,
+    # Expected:
+    MJ.RewriteRule_MD_Orientations(
+        # Expect only one permutation: [ 4 2 ;; 5 3 ]
+        1,
+        permutedims([ MJ.GridDir(2, 1)  MJ.GridDir(1, -1) ]),
+        permutedims([ MJ.GridDir(2, -1)   MJ.GridDir(1, 1) ]),
+
+        Array{MJ.RewriteCell_MD{2}, 2}[
+            collect(MJ.RewriteCell_MD{2}, permutedims([
+                (0x04, 0x08)  (0x02, 0x04)
+                (0x05, 0x0A)   (0x03, 0x06)
+            ]))
+        ],
+        ori_ignored_fields(2)...
+    )
+)
+println("#TODO: More tests")
+
 end)()

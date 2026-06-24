@@ -3,7 +3,7 @@
 
 using Pkg
 Pkg.activate(joinpath(@__FILE__, "../.."))
-println(".")
+println(stderr, ".")
 
 using MarkovJunior
 MarkovJunior.markovjunior_asserts_enabled() = true

@@ -485,8 +485,8 @@ struct RewriteRule_MD_Orientations{NGridDims}
 
     # Each column is an entry; each row is a rule axis; each element maps one rule axis to the grid.
     rule_to_grid::Matrix{GridDir}
-    # Each column is an entry from 'rule_to_grid';
-    #    each row is one grid axis, storing its optional mapping to the grid.
+    # Each column represents one column from 'rule_to_grid' (i.e. one orientation entry);
+    #    each row is one grid axis, storing its optional mapping to the rule axes.
     # If a value's axis is -1, no rule axis is oriented along here.
     # A value's sign means the same thing as the other table --
     #    the direction of rule along this grid axis.
@@ -554,12 +554,12 @@ function RewriteRule_MD_Orientations(rule_array::Array{RewriteCell_MD{NRuleDims}
                 i
             end
         end
-        permuted_view = PermutedDimsArray(rule_full_d, axis_permutation)
         @md_symm_logln("\t", permutation_i, ": ", ntuple(Val(NRuleDims)) do ar
             perm_rule_to_grid[ar].axis * perm_rule_to_grid[ar].sign
         end, " using permutedims ", axis_permutation, " (from grid side: ", ntuple(Val(NGridDims)) do ag
             perm_grid_to_rule[ag].axis * perm_grid_to_rule[ag].sign
         end, ")")
+        permuted_view = PermutedDimsArray(rule_full_d, axis_permutation)
         # Note that there is no lazy "flip axis" operator, so we wait to do that
         #   until after the permutation is copied into a new array.
 
@@ -1983,11 +1983,14 @@ function parse_markovjunior_rewrite_rule_strip(inputs::MacroParserInputs, loc, e
     end
 end
 
-"Note that Source (lhs) patterns will return a Set as a List, to preserve input order for later processing"
+"
+Note that Source (lhs) patterns will return a Set as a List, to preserve input order for later processing.
+The output element type is `Any` since it only loosely matches Source or Destination cell types.
+"
 function parse_markovjunior_rewrite_rule_md_side(inputs::MacroParserInputs,
                                                  loc, expr,
                                                  is_source::Bool
-                                                )::Array
+                                                )::Array{Any}
     with_parser_stacktrace(inputs,
                            is_source ?
                              "Left-hand side (multi-dimensional)" :
@@ -2047,7 +2050,7 @@ function parse_markovjunior_rewrite_rule_md_side(inputs::MacroParserInputs,
         #  ncat (3+D array) -- expr args are recursively (head=:ncat, args=[ dim, slice_exprs... ])
         #                        until getting to a 2D slice (head=:nrow, args=[ 1, row_exprs... ])
         #                        and each row is (head=:row, args=[ elements... ])
-        as_array = if Base.isexpr(expr, :hcat)
+        as_array::Array{Any} = collect(Any, if Base.isexpr(expr, :hcat)
             # This snippet would normally generate a Vector,
             #    so make it a 1-row Matrix with 'permutedims()'.
             permutedims(lookup_cell.(expr.args, 1:length(expr.args)))
@@ -2103,7 +2106,7 @@ function parse_markovjunior_rewrite_rule_md_side(inputs::MacroParserInputs,
             stack_arrays(expr, ())
         else
             error("Unexpected mode: ", expr)
-        end
+        end)
 
         # Swap the first two axes, so that column (X) is the first instead of the second.
         # Note that 'list' rewrite cells do not need to be updated,

@@ -283,7 +283,8 @@ If you don't have them (or are building for a different OS) you'll get a descrip
 
 ### Testing
 
-The biggest test in *test/runtests.jl* is focused on parsing,
-  while correctness is mostly checked by running all sample scenes in the GUI.
+Unit tests use the usual Julia convention of running *test/runtests.jl*.
+This script invokes multiple other test scripts in the same folder.
 
-However there are some other test files in that folder, which *runtests.jl* invokes.
+Not all functionality is tested through unit tests, as the sample scenes already use many basic features,
+  however certain featues are considered very important to unit-test.

@@ -11,7 +11,7 @@ else
     "/tmp/jmj_ipc_unittest"
 end
 server = markovjunior_run_ipc(
-    false, Val(true),
+    false, Val(false),
     allow_kill_message = true,
     pipe_path = PIPE_PATH
 )

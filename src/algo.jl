@@ -352,5 +352,5 @@ get_raw_threshold(th::ThresholdByLength, in::ThresholdInputs) = convert(Float32,
 function get_raw_threshold(th::ThresholdRange, in::ThresholdInputs)
     a::Float32 = get_raw_threshold(th.a, in)
     b::Float32 = get_raw_threshold(th.b, in)
-    return lerp(a, b, rand(rng, Float32))
+    return lerp(a, b, rand(in.rng, Float32))
 end
