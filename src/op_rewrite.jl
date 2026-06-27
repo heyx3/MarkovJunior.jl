@@ -547,17 +547,31 @@ function RewriteRule_MD_Orientations(rule_array::Array{RewriteCell_MD{NRuleDims}
             (1 for i in (ndims(rule_array)+1):NGridDims)...
         ))
         # Now shuffle the rule axes to follow the permutation.
+        #= Sample case:
+            rule is [ a, b, c ]
+            perm is (-3, )
+            rule_to_grid is [ -3 ]
+            grid_to_rule is [ 0 0 -1 0 ]
+            rule_full_d is [ a, b, c ;;;; ]
+            rule_full_permutation should be (2, 3, 1, 4)
+        =#
+        prev_singleton_rule_axis = Ref(ndims(rule_array))
         axis_permutation::NTuple{NGridDims, Int} = ntuple(Val(ndims(rule_full_d))) do i
             if perm_grid_to_rule[i].axis > 0
                 perm_grid_to_rule[i].axis
             else
-                i
+                prev_singleton_rule_axis[] += 1
+                prev_singleton_rule_axis[]
             end
         end
         @md_symm_logln("\t", permutation_i, ": ", ntuple(Val(NRuleDims)) do ar
             perm_rule_to_grid[ar].axis * perm_rule_to_grid[ar].sign
         end, " using permutedims ", axis_permutation, " (from grid side: ", ntuple(Val(NGridDims)) do ag
-            perm_grid_to_rule[ag].axis * perm_grid_to_rule[ag].sign
+            if perm_grid_to_rule[ag].axis < 1
+                0
+            else
+                perm_grid_to_rule[ag].axis * perm_grid_to_rule[ag].sign
+            end
         end, ")")
         permuted_view = PermutedDimsArray(rule_full_d, axis_permutation)
         # Note that there is no lazy "flip axis" operator, so we wait to do that

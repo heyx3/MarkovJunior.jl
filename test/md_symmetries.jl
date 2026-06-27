@@ -246,6 +246,11 @@ function test_orientations(src_array::Array{<:NTuple{2, Any}, NRule},
                            symmetry::MJ.RewriteRule_MD_Symmetry_Definition,
                            n_grid::Integer,
                            expected::MJ.RewriteRule_MD_Orientations) where {NRule}
+    # If debug logging is enabled, print a clear separation from the previous test.
+    if MJ.log_md_symmetry_logic()
+        println(stderr, "\n\n\n===== test_orientations() =====")
+    end
+
     sanitized_src_array = Array{MJ.RewriteCell_MD{NRule}, NRule}(undef, size(src_array))
     for i in eachindex(src_array)
         sanitize(cell) = if cell isa Integer
@@ -295,7 +300,6 @@ test_orientations(
         (2,4)  (3,6)
         (4,8)  (5,10)
     ]),
-    # Copied from the first test above (as of time of writing)
     MJ.RewriteRule_MD_Symmetry_Definition(
         [
            # R-Axis | Permutations...
@@ -321,6 +325,43 @@ test_orientations(
             ]))
         ],
         ori_ignored_fields(2)...
+    )
+)
+test_orientations(
+    [ (1,2), (3,4), (5,6) ],
+    MJ.RewriteRule_MD_Symmetry_Definition(
+        # The rule can only be applied in reverse on the X axis, but any way on axes Z and up.
+        [
+            [ 1   -1 ] => 3
+        ],
+        Vector{Set{Int}}()
+    ),
+    4,
+    MJ.RewriteRule_MD_Orientations(
+        # -X, -Z, +Z, -W, +W
+        5,
+        [ MJ.GridDir(1, -1)   MJ.GridDir(3, -1)   MJ.GridDir(3, 1)   MJ.GridDir(4, -1)   MJ.GridDir(4, 1) ],
+        permutedims([ # Each row here becomes a column (orientation enry) in the test data.
+            MJ.GridDir(1, -1)  NULL_GRID_TO_RULE  NULL_GRID_TO_RULE  NULL_GRID_TO_RULE
+            NULL_GRID_TO_RULE  NULL_GRID_TO_RULE  MJ.GridDir(1, -1)  NULL_GRID_TO_RULE
+            NULL_GRID_TO_RULE  NULL_GRID_TO_RULE  MJ.GridDir(1, 1)  NULL_GRID_TO_RULE
+            NULL_GRID_TO_RULE  NULL_GRID_TO_RULE  NULL_GRID_TO_RULE  MJ.GridDir(1, -1)
+            NULL_GRID_TO_RULE  NULL_GRID_TO_RULE  NULL_GRID_TO_RULE  MJ.GridDir(1, 1)
+        ]),
+
+        Array{MJ.RewriteCell_MD{4}, 4}[
+            collect.(Ref(MJ.RewriteCell_MD{4}), [
+                # -X
+                NTuple{2, UInt8}[ (5,6) ; (3,4) ; (1,2) ;;;; ],
+                # -Z, +Z
+                NTuple{2, UInt8}[ (5,6) ;;; (3,4) ;;; (1,2) ;;;; ],
+                NTuple{2, UInt8}[ (1,2) ;;; (3,4) ;;; (5,6) ;;;; ],
+                # -W, +W
+                NTuple{2, UInt8}[ (5,6) ;;;; (3,4) ;;;; (1,2) ],
+                NTuple{2, UInt8}[ (1,2) ;;;; (3,4) ;;;; (5,6) ]
+            ])...
+        ],
+        ori_ignored_fields(4)...
     )
 )
 println("#TODO: More tests")
