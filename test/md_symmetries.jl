@@ -296,15 +296,15 @@ function test_orientations(src_array::Array{<:NTuple{2, Any}, NRule},
     )
 end
 test_orientations(
-    permutedims([ # (make array X be Column instead of Row)
-        (2,4)  (3,6)
-        (4,8)  (5,10)
-    ]),
+    [  # (remember, first axis is Row)
+        (2,4)  (4,8)
+        (3, MJ.RewriteRuleCell_Lookup((1, 2)))  (5,10)
+    ],
     MJ.RewriteRule_MD_Symmetry_Definition(
         [
-           # R-Axis | Permutations...
-            [ 1    2
-              2    -1
+           # Rule-Axis | Permutations...
+            [ 1          2
+              2         -1
             ] => nothing # <-- Tail symmetry
         ],
         # Chirality groups:
@@ -315,20 +315,20 @@ test_orientations(
     MJ.RewriteRule_MD_Orientations(
         # Expect only one permutation: [ 4 2 ;; 5 3 ]
         1,
-        permutedims([ MJ.GridDir(2, 1)  MJ.GridDir(1, -1) ]),
+        permutedims([ MJ.GridDir(2, 1)    MJ.GridDir(1, -1) ]),
         permutedims([ MJ.GridDir(2, -1)   MJ.GridDir(1, 1) ]),
 
         Array{MJ.RewriteCell_MD{2}, 2}[
             collect(MJ.RewriteCell_MD{2}, permutedims([
                 (0x04, 0x08)  (0x02, 0x04)
-                (0x05, 0x0A)   (0x03, 0x06)
+                (0x05, 0x0A)   (0x03, MJ.RewriteRuleCell_Lookup((1, 1)))
             ]))
         ],
         ori_ignored_fields(2)...
     )
 )
 test_orientations(
-    [ (1,2), (3,4), (5,6) ],
+    [ (1,2), (3, MJ.RewriteRuleCell_Lookup((3, ))), (5,6) ],
     MJ.RewriteRule_MD_Symmetry_Definition(
         # The rule can only be applied in reverse on the X axis, but any way on axes Z and up.
         [
@@ -352,18 +352,72 @@ test_orientations(
         Array{MJ.RewriteCell_MD{4}, 4}[
             collect.(Ref(MJ.RewriteCell_MD{4}), [
                 # -X
-                NTuple{2, UInt8}[ (5,6) ; (3,4) ; (1,2) ;;;; ],
+                [ UInt8.((5,6)) ; (UInt8(3), MJ.RewriteRuleCell_Lookup((1, 1, 1, 1))) ; UInt8.((1,2)) ;;;; ],
                 # -Z, +Z
-                NTuple{2, UInt8}[ (5,6) ;;; (3,4) ;;; (1,2) ;;;; ],
-                NTuple{2, UInt8}[ (1,2) ;;; (3,4) ;;; (5,6) ;;;; ],
+                [ UInt8.((5,6)) ;;; (UInt8(3), MJ.RewriteRuleCell_Lookup((1, 1, 1, 1))) ;;; UInt8.((1,2)) ;;;; ],
+                [ UInt8.((1,2)) ;;; (UInt8(3), MJ.RewriteRuleCell_Lookup((1, 1, 3, 1))) ;;; UInt8.((5,6)) ;;;; ],
                 # -W, +W
-                NTuple{2, UInt8}[ (5,6) ;;;; (3,4) ;;;; (1,2) ],
-                NTuple{2, UInt8}[ (1,2) ;;;; (3,4) ;;;; (5,6) ]
+                [ UInt8.((5,6)) ;;;; (UInt8(3), MJ.RewriteRuleCell_Lookup((1, 1, 1, 1))) ;;;; UInt8.((1,2)) ],
+                [ UInt8.((1,2)) ;;;; (UInt8(3), MJ.RewriteRuleCell_Lookup((1, 1, 1, 3))) ;;;; UInt8.((5,6)) ]
             ])...
         ],
         ori_ignored_fields(4)...
     )
 )
-println("#TODO: More tests")
+test_orientations(
+    [
+        (1,2)    (MJ.RewriteRuleCell_Wildcard(), 4)    (5, MJ.RewriteRuleCell_Wildcard())
+        (MJ.RewriteRuleCell_Set(0x9, 0xa), MJ.RewriteRuleCell_List((0x7, 0x8)))  (11,12)  (13,14)
+    ],
+    MJ.RewriteRule_MD_Symmetry_Definition(
+        [
+            [ 1     1  -2  3
+              2     2   1  -1
+            ] => nothing
+        ],
+        Vector{Set{Int}}()
+    ),
+
+    3,
+    MJ.RewriteRule_MD_Orientations(
+        3,
+        [ MJ.GridDir(1, 1)    MJ.GridDir(2, -1)   MJ.GridDir(3, 1)
+          MJ.GridDir(2, 1)    MJ.GridDir(1, 1)    MJ.GridDir(1, -1)
+        ],
+        [
+            MJ.GridDir(1, 1)   MJ.GridDir(2, 1)    MJ.GridDir(2, -1)
+            MJ.GridDir(2, 1)   MJ.GridDir(1, -1)   NULL_GRID_TO_RULE
+            NULL_GRID_TO_RULE  NULL_GRID_TO_RULE   MJ.GridDir(1, 1)
+        ],
+
+        Array{MJ.RewriteCell_MD{3}, 3}[
+            collect.(Ref(MJ.RewriteCell_MD{3}), [
+                [
+                    (0x1, 0x2)    (MJ.RewriteRuleCell_Wildcard(), 0x4)    (0x5, MJ.RewriteRuleCell_Wildcard())
+                    (MJ.RewriteRuleCell_Set(0x9, 0xa), MJ.RewriteRuleCell_List((0x7, 0x8)))  (0xb, 0xc)  (0xd, 0xe)
+                    ;;;
+                ],
+                [
+                    (MJ.RewriteRuleCell_Set(0x9, 0xa), MJ.RewriteRuleCell_List((0x7, 0x8)))   (0x1, 0x2)
+                    (0xb, 0xc)   (MJ.RewriteRuleCell_Wildcard(), 0x4)
+                    (0xd, 0xe)   (0x5, MJ.RewriteRuleCell_Wildcard())
+                    ;;;
+                ],
+                [
+                    (0x5, MJ.RewriteRuleCell_Wildcard())
+                    (MJ.RewriteRuleCell_Wildcard(), 0x4)
+                    (0x1, 0x2)
+
+                    ;;;
+
+                    (0xd, 0xe)
+                    (0xb, 0xc)
+                    (MJ.RewriteRuleCell_Set(0x9, 0xa), MJ.RewriteRuleCell_List((0x7, 0x8)))
+                ]
+            ])...
+        ],
+        ori_ignored_fields(3)...
+    )
+)
 
 end)()

@@ -611,9 +611,8 @@ function RewriteRule_MD_Orientations(rule_array::Array{RewriteCell_MD{NRuleDims}
             else
                 cell_dest
             end
-            cell = (cell_src, cell_dest)
 
-            permuted_allocation[inds] = cell
+            permuted_allocation[inds] = (cell_src, cell_dest)
         end
         # Apply the flipping of some axes.
         for i_rule in 1:NRuleDims
