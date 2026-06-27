@@ -1,3 +1,39 @@
+function setup_gui_tool_inputs()
+    create_axis("CAM: forward", AxisInput([
+        ButtonAsAxis(GLFW.KEY_W),
+        ButtonAsAxis_Negative(GLFW.KEY_S)
+    ]))
+    create_axis("CAM: upward", AxisInput([
+        ButtonAsAxis(GLFW.KEY_E),
+        ButtonAsAxis_Negative(GLFW.KEY_Q)
+    ]))
+    create_axis("CAM: rightward", AxisInput([
+        ButtonAsAxis(GLFW.KEY_D),
+        ButtonAsAxis_Negative(GLFW.KEY_A)
+    ]))
+    create_axis("CAM: pitch", AxisInput(
+        MouseAxes.y, AxisModes.delta;
+        value_scale=-0.05
+    ))
+    create_axis("CAM: yaw", AxisInput(
+        MouseAxes.x, AxisModes.delta;
+        value_scale=0.05
+    ))
+end
+get_gui_tool_cam_input() = Cam3D_Input{Float32}(
+    controlling_rotation = gui_tool_imgui_denying_mouse_control(),
+    forward = get_axis("CAM: forward"),
+    right = get_axis("CAM: rightward"),
+    up = get_axis("CAM: upward"),
+    pitch = get_axis("CAM: pitch"),
+    yaw = get_axis("CAM: yaw")
+)
+
+gui_tool_imgui_denying_mouse_control()::Bool = let io = CImGui.GetIO()
+    unsafe_load(io.WantCaptureKeyboard) || unsafe_load(io.WantCaptureMouse)
+end
+
+
 function markovjunior_run_gui()
     @game_loop begin
         INIT(
@@ -9,7 +45,8 @@ function markovjunior_run_gui()
         )
 
         SETUP = begin
-            LOOP.max_fps = nothing
+            LOOP.max_fps = 165
+            LOOP.max_frame_duration = 0.1 # Prevent large camera movements during hitches
 
             # Put the Dear ImGUI config inside the locals directory.
             # We must store the path string in a variable so the underlying char array can't be GC-ed.
@@ -45,6 +82,8 @@ function markovjunior_run_gui()
                 get_editor_font_bytes(), [ 19 ]
             )[1]
             gui = GuiRunner(memory, gui_editor_font)
+
+            setup_gui_tool_inputs()
         end
 
         LOOP = begin
@@ -52,7 +91,7 @@ function markovjunior_run_gui()
                 break
             end
 
-            gui_main(gui, LOOP.delta_seconds)
+            gui_main(gui, LOOP.delta_seconds, get_gui_tool_cam_input())
             if (LOOP.frame_idx % 60) == 0
                 update_memory()
             end

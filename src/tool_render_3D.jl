@@ -402,6 +402,8 @@ else
     setfield!(fv, n, v)
 end
 
+
+
 "Resets this viewport's position to oversee a new grid of the given resolution"
 function on_new_grid!(viewport::FullViewport, new_grid_size::Vec3{<:Integer})
     viewport.cam = let c = viewport.cam

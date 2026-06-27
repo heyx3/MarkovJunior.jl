@@ -91,6 +91,7 @@ mutable struct GuiRunner
     }
     render_settings_are_open::Bool
     reset_render_settings_window::Bool
+    is_dragging_camera::Bool
 
     visualize_shadowmap_instead::Bool
     visualized_shadowmap::Texture
@@ -171,7 +172,7 @@ function GuiRunner(memory::GuiMemory,
         else
             error("Unhandled: ", memory.rendering_dim)
         end,
-        false, false,
+        false, false, false,
 
         false,
         begin
@@ -464,7 +465,7 @@ end
 gui_runner_is_finished(runner::GuiRunner)::Bool = isnothing(runner.algorithm_state) ||
                                                   markov_algo_is_finished(runner.algorithm, runner.algorithm_state)
 
-function gui_main(runner::GuiRunner, delta_seconds::Float32)
+function gui_main(runner::GuiRunner, delta_seconds::Float32, cam_input::Cam3D_Input{Float32})
     print_wnd_sizes::Bool = false && @markovjunior_debug(rand(Float32) < 0.01, false)
     pane_flags = |(
         CImGui.LibCImGui.ImGuiWindowFlags_HorizontalScrollbar,
@@ -481,6 +482,12 @@ function gui_main(runner::GuiRunner, delta_seconds::Float32)
     if runner.rendering[1] isa Val{3}
         (_, scene_3D, viewport_3D) = runner.rendering
 
+        if runner.is_dragging_camera
+            (viewport_3D.cam, viewport_3D.cam_settings) = cam_update(
+                viewport_3D.cam, viewport_3D.cam_settings,
+                cam_input, delta_seconds
+            )
+        end
         Render3D.tick_scene!(scene_3D, delta_seconds, runner.render_3D_assets)
         Render3D.render(runner.render_3D_assets, scene_3D, viewport_3D)
     end
@@ -629,14 +636,35 @@ function gui_main(runner::GuiRunner, delta_seconds::Float32)
             # Scale up/down to fit the content window.
             sz = v2f(content_size.x - 10, content_size.y - 300)
             v2f(i -> max(256.0f0, min(sz...)))
+            #TODO: Recreate the 3D viewport whenever the display size changes
         else
             error("Unhandled: ", typeof(runner.rendering))
         end
-        #TODO: Recreate the 3D viewport (if using 3D) to match the display size (if it changed)
+        img_cursor_pos = CImGui.GetCursorScreenPos();
         CImGui.Image(gui_tex_handle(display_tex),
                      convert(gVec2, img_size),
                      gVec2(0, flip_uv_y ? 1 : 0), gVec2(1, flip_uv_y ? 0 : 1),
                      gVec4(1, 1, 1, 1), gVec4(0, 0, 0, 0))
+        # Draw an invisible button over the image, and detect when the user click-drags it.
+        CImGui.SetCursorScreenPos(img_cursor_pos)
+        CImGui.InvisibleButton("RendererMouseCapture", convert(gVec2, img_size))
+        if CImGui.IsItemActive()
+            if !runner.is_dragging_camera
+                GLFW.SetInputMode(
+                    get_context().window, GLFW.CURSOR,
+                    GLFW.CURSOR_DISABLED
+                )
+                runner.is_dragging_camera = true
+            end
+        else
+            if runner.is_dragging_camera
+                GLFW.SetInputMode(
+                    get_context().window, GLFW.CURSOR,
+                    GLFW.CURSOR_NORMAL
+                )
+                runner.is_dragging_camera = false
+            end
+        end
 
         CImGui.Separator()
 
