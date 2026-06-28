@@ -54,7 +54,8 @@ Base.in(type::UInt8, set::CellTypeSet) = (set.bitfield & cell_type_to_bitmask(ty
 Base.hasfastin(::Type{CellTypeSet}) = true
 
 Base.IteratorSize(::Type{CellTypeSet}) = Base.HasLength()
-Base.length(s::CellTypeSet) = count(i->true, s)
+Base.length(s::CellTypeSet) = count_ones(s.bitfield)
+Base.isempty(s::CellTypeSet) = iszero(s.bitfield)
 
 function cell_set_index_of(s::CellTypeSet, value::UInt8)::Optional{Int}
     for (i, v) in enumerate(s)
@@ -81,7 +82,7 @@ function Base.setdiff(s::CellTypeSet, elements...)
     return s
 end
 function Base.intersect(s::CellTypeSet, elements...)
-    for iter in elements
+    return reduce(elements, init=s) do s,iter
         # Convert to our accelerated set type.
         iter_set::CellTypeSet = if iter isa CellTypeSet
             iter
@@ -99,8 +100,9 @@ function Base.intersect(s::CellTypeSet, elements...)
                 s = delete(s, type)
             end
         end
+
+        return s
     end
-    return s
 end
 function Base.union(s::CellTypeSet, elements...)
     for iter in elements

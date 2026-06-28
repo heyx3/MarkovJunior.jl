@@ -2,7 +2,7 @@ const GUI_LEGEND_DATA = map(enumerate(CELL_TYPES)) do (i,t)
     return (
         t.color,
         Float32(i)/Float32(length(CELL_TYPES)),
-        " - $(t.char)"
+        " - $(t.char)  $(i)"
     )
 end
 

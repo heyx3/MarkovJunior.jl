@@ -389,7 +389,7 @@ There are many ways to extend this behavior.
   a friendlier syntax is available: `field(A<-BC)`.
   Note that if a field is reversed, has paths, and is `soft`, then outside cells are rewritten *first*!
   * To flip the pathing so that only writes *outside* the path are allowed, pass `forbidden`:
-  `field(A->BC, forbidden)`.
+  `field(A->BC, forbidden)`. It is an error to use `forbidden` *and* flip the path.
 * A field that has paths, like `field(A->BC)`, can also be assigned an "anchor": `field(A->BC | DE)`.
   Cells are outside the pathing field if they don't have a connection to an anchor --
   in this case, to a `D` or `E` cell through `A`, `B`, and `C` cells.
