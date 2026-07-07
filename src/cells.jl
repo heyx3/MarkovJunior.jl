@@ -47,7 +47,7 @@ struct CellTypeSet <: Base.AbstractSet{UInt8}
 
     CellTypeSet(types::UInt8...) = CellTypeSet(types)
     CellTypeSet(types::Tuple{Vararg{UInt8}}) = new(reduce(|, map(cell_type_to_bitmask, types), init=UInt16(0)))
-    CellTypeSet(types::AbstractVector{UInt8}) = new(reduce(|, map(cell_type_to_bitmask, types), init=UInt16(0)))
+    CellTypeSet(types::AbstractArray{UInt8}) = new(reduce(|, map(cell_type_to_bitmask, types), init=UInt16(0)))
 end
 
 Base.in(type::UInt8, set::CellTypeSet) = (set.bitfield & cell_type_to_bitmask(type)) != 0
@@ -244,7 +244,7 @@ Base.print(io::IO, r::CellRegion) = print(io, "R{", r.b, "}")
 
 "
 Walks through every cell in a small contiguous line/area.
-Invokes your lambda with `cell_idx, local_idx`, where `local_idx` is either
+Invokes your lambda with `local_idx, cell_idx`, where `local_idx` is either
   `Int32` for strips (`CellLine` input) or `VecI` for multidimensional (`CellRegion` input).
 
 If you pass `true` then you can break the loop early by making your lambda return `true`,
@@ -253,16 +253,16 @@ If you pass `true` then you can break the loop early by making your lambda retur
 function for_each_cell(toDo, area::Union{CellLine{N}, CellRegion{N}},
                        ::Val{Breakable}
                       )::(Breakable ? Bool : Nothing) where {N, Breakable}
-    if area isa CellLine
-        for iz in zero(Int32):(line.length - one(Int32))
-            cell = line.start_cell
-            @set! cell[line.movement.axis] += (iz * line.movement.sign)
+    if area isa CellLine{N}
+        for iz in zero(Int32):(area.length - one(Int32))
+            cell = area.start_cell
+            @set! cell[area.movement.axis] += (iz * area.movement.sign)
             result = toDo(iz + one(Int32), cell)
             if Breakable && convert(Bool, result)
                 return true
             end
         end
-    elseif area isa CellRegion
+    elseif area isa CellRegion{N}
         for iv in area.b
             result = toDo(iv - min_inclusive(area.b) + one(Int32), iv)
             if Breakable && convert(Bool, result)

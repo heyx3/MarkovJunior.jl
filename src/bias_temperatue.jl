@@ -1,7 +1,7 @@
-"
+"""
 Add random desirability to each move.
 Useless on its own, but can randomize other biases which are normally deterministic.
-"
+"""
 struct MarkovBiasTemperature <: AbstractMarkovBias
     amount::Float32
 end

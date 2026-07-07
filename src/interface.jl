@@ -114,7 +114,7 @@ markov_bias_update(bias::AbstractMarkovBias, bias_state,
 Cleans up this bias after it's done being used.
 Default: does nothing.
 "
-markov_bias_cleanup(bias::AbstractMarkovBias, bias_state) = nothing
+markov_bias_cleanup(bias::AbstractMarkovBias, state, bias_context) = nothing
 
 "
 Calculates the desirability of a rewrite action, at this moment, in this grid.

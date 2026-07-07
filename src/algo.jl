@@ -62,15 +62,24 @@ Default behavior of its interface is to allocate things from the heap
    and let the GC handle them on release.
 "
 abstract type AbstractMarkovAllocator end
-markov_allocator_acquire_array(allocator::AbstractMarkovAllocator,
-                               size::Tuple{Vararg{Integer}},
-                               T::Type
-                              )::AbstractArray{T, length(size)} where {T} = Array{T, length(size)}(undef, size)
+"Pass an empty tuple for the size in order to get an empty 1D vector"
+function markov_allocator_acquire_array(allocator::AbstractMarkovAllocator,
+                                        size::Tuple{Vararg{Integer}},
+                                        ::Type{T}
+                                       )::AbstractArray{T, (isempty(size) ? 1 : length(size))} where {T}
+    if isempty(size)
+        return preallocated_vector(T, 128)
+    else
+        return Array{T, length(size)}(undef, size)
+    end
+end
 markov_allocator_acquire_ordered_set(allocator::AbstractMarkovAllocator,
                                      T::Type
                                     )::OrderedSet{T} = OrderedSet{T}()
+markov_allocator_acquire_set(allocator::AbstractMarkovAllocator, T::Type)::Set{T} = Set{T}()
 markov_allocator_release_array(allocator::AbstractMarkovAllocator, data::AbstractArray) = nothing
 markov_allocator_release_ordered_set(allocator::AbstractMarkovAllocator, s::OrderedSet) = nothing
+markov_allocator_release_set(allocator::AbstractMarkovAllocator, s::Set) = nothing
 Base.close(::AbstractMarkovAllocator) = nothing
 
 "Allocates on the heap and lets Julia's GC take the array afterwards"
@@ -197,7 +206,15 @@ function markov_algo_start(algo::MarkovAlgorithm,
               algo.fixed_dimension, "D algorithm")
     end
 
-    grid = markov_allocator_acquire_array(allocator, initial_size, UInt8)
+    grid = markov_allocator_acquire_array(
+        allocator,
+        if initial_size isa Vec
+            initial_size.data
+        else
+            initial_size
+        end,
+        UInt8
+    )
     fill!(grid, algo.initial_fill)
 
     rng = (seeds isa Real) ? PRNG(seeds) : PRNG(seeds...)
@@ -207,10 +224,7 @@ function markov_algo_start(algo::MarkovAlgorithm,
         Ref(grid), 0,
         0, nothing,
         MarkovOpContext(
-            let a = markov_allocator_acquire_array(allocator, tuple(16), AbstractMarkovBias)
-                empty!(a)
-                a
-            end,
+            markov_allocator_acquire_array(allocator, (), AbstractMarkovBias),
             MarkovBiasContext(
                 allocator,
                 algo.pragmas_chronological, algo.pragmas_map, algo.add_ons, data_store

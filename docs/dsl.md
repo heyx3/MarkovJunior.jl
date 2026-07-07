@@ -366,7 +366,7 @@ Weight modifiers must be specified after the mask (e.g. `%0.5  *3`)
 
 #### Bias: Field
 
-> *This is our equivalent of the original MarkovJunior's `<field>` node.*
+> *This is our answer to the original MarkovJunior's `<field>` node.*
 
 A bias of `field(A)` will first compute a **pathing field** outward from all `A` cells,
   storing integer distance from the nearest `A`.
@@ -385,19 +385,38 @@ There are many ways to extend this behavior.
   others are "outside" the pathing field and cannot be rewritten.
   * If you want outside cells to not be forbidden but merely have the lowest Bias,
   pass a `soft` parameter: `field(A->BC, soft)`.
+    * If using randomness (see below), you may want to change how severe the penalty is for outside cells: `field(A->BC, soft=3.5)`. The default is 2.
   * When flipping the bias of a field with paths, like `field(-A->BC)`,
   a friendlier syntax is available: `field(A<-BC)`.
-  Note that if a field is reversed, has paths, and is `soft`, then outside cells are rewritten *first*!
+  Note that if a field is reversed, has paths, and is `soft`, then outside cells are rewritten *first*! And the randomization penalty (e.g. `soft=3.5`) becomes a bonus.
   * To flip the pathing so that only writes *outside* the path are allowed, pass `forbidden`:
-  `field(A->BC, forbidden)`. It is an error to use `forbidden` *and* flip the path.
-* A field that has paths, like `field(A->BC)`, can also be assigned an "anchor": `field(A->BC | DE)`.
+  `field(A->BC, forbidden)`. Note that in this mode it makes no difference whether the path itself is flipped.
+* A field that has paths, like `field(A->BC)`, can also be assigned an "anchor": `field(A->BC & DE)`.
   Cells are outside the pathing field if they don't have a connection to an anchor --
   in this case, to a `D` or `E` cell through `A`, `B`, and `C` cells.
-* To switch from deterministic Bias to weighted-random, pass `randomness=x`.
-  The default is 0, which means that bias is always directly tied to the pathing field.
-  * Values from 0 to 1 mean that each potential rewrite's Bias becomes a weighted-random value
-   based on the pathing field, with the weights becoming more drastic near 0.
-  * Values above 1 make the weights less important, approaching uniform-random bias values.
+  * With anchors, the distinction between source and path cells becomes important:
+  an anchor connection doesn't pass through source cells unless they're also listed as path cells!
+* To switch from deterministic Bias to weighted-random, pass `randomness=x` (or `random` which is equivalent to `randomness=0.5`).
+  The value ranges from 0 to 1:
+  * 0 is "not random", the default behavior.
+  * 0.5 is linear weighted-randomness, where an option 3x farther along the path is 3x less likely to be chosen (or *more* likely if the path is flipped).
+  * 1 is uniform-randomness, where distance along the path does not matter (and neither does being off the path if `soft` is true).
+A value of exactly 1 is equivalent to disabling the bias.
+  * When `soft` is true, options off the path are considered to have half as much weight
+  as the worst options on the path.
+* To help mix this bias with others, pass `scale=x` (default is 1).
+Higher values make this bias more important.
+* The final bias value for one potential rewrite is an average
+of the individual biases for each affected pixel.
+You can change the combination logic by passing `combo=X`.
+These different modes are *roughly* normalized,
+  so the bias always has about the same magnitude range of 0 to max-path-length:
+  * `average` (**default**)
+  * `max`
+  * `min`
+  * `first` (the min pixel of the rewrite rule)
+  * `deviation` (the amount of variation between pixels in the rewrite)
+  * `diff` (max bias - min bias)
 
 #### Bias: Solve
 

@@ -57,8 +57,8 @@ module MarkovJunior
 using Random, Setfield, Profile, Printf, Sockets
 const System = Base.Sys
 
-using MacroTools, NamedTupleTools, ConcurrentUtilities
-using OrderedCollections, StaticArrays, DataStructures, Combinatorics
+using MacroTools, HybridStructs, NamedTupleTools, ConcurrentUtilities
+using OrderedCollections, StaticArrays, DataStructures, Statistics, Combinatorics
 using StructTypes, JSON3, ArgParse
 using GLFW, CImGui, CSyntax
 
@@ -82,6 +82,7 @@ include("op_rewrite.jl")
 include("op_draw_box.jl")
 include("op_sequence.jl")
 include("bias_temperatue.jl")
+include("bias_field.jl")
 export AbstractMarkovAllocator, AbstractMarkovBias, AbstractMarkovOp,
        MarkovAlgorithm, MarkovAlgoState, MarkovOpContext,
        markov_algo_grid, markov_algo_n_iterations,

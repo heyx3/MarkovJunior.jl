@@ -50,6 +50,7 @@ function test_compare(a::MJ.MarkovAlgorithm, b::MJ.MarkovAlgorithm, tab::String 
 
     return nothing
 end
+
 test_compare(a::MJ.AbstractMarkovOp, b::MJ.AbstractMarkovOp, tab::String) = println(tab, "Mismatched/Unsupported types!")
 function test_compare(a::MJ.MarkovOpSequence, b::MJ.MarkovOpSequence, tab::String)
     if a.threshold != b.threshold
@@ -70,13 +71,8 @@ function test_compare(a::MJ.MarkovOpSequence, b::MJ.MarkovOpSequence, tab::Strin
         println(tab, "A has ", length(a.biases), " biases, but B has ", length(b.biases), "!")
     else
         for (ba, bb, i) in zip(a.biases, b.biases, 1:length(a.biases))
-            println(tab, "Bias ", i, ", ", MJ.dsl_string(ba), "   (", MJ.dsl_string(bb), ")")
-            if ba != bb
-                println(tab, "\tMismatch!")
-            end
-        end
-        if a.biases != b.biases
-            println(tab, "Bias list Mismatch!")
+            println(tab, "Bias ", i)
+            test_compare(ba, bb, "$tab\t")
         end
     end
     if a != b
@@ -203,10 +199,8 @@ function test_compare(a::MJ.MarkovOpRewrite, b::MJ.MarkovOpRewrite, tab::String)
         println(tab, "A has ", length(a.biases), " biases, but B has ", length(b.biases), "!")
     else
         for (ba, bb, i) in zip(a.biases, b.biases, 1:length(a.biases))
-            println(tab, "Bias ", i, ", ", MJ.dsl_string(ba), "   (", MJ.dsl_string(bb), ")")
-            if ba != bb
-                println(tab, "\tMismatch!")
-            end
+            println(tab, "Bias ", i)
+            test_compare(ba, bb, "$tab\t")
         end
         if a.biases != b.biases
             println(tab, "Bias tuple Mismatch!")
@@ -216,6 +210,26 @@ function test_compare(a::MJ.MarkovOpRewrite, b::MJ.MarkovOpRewrite, tab::String)
         println(tab, "Fails to match via == operator!")
     end
     return nothing
+end
+
+function test_compare(a::MJ.AbstractMarkovBias, b::MJ.AbstractMarkovBias, tab::String)
+    if typeof(a) != typeof(b)
+        println(tab, "Mismatched/Unsupported types! A is ", typeof(a), " while B is ", typeof(b))
+    else
+        println(tab, "A \"", MJ.dsl_string(a), "\"   vs B \"", MJ.dsl_string(b), "\"")
+        for p_name in propertynames(a)
+            p_a = getproperty(a, p_name)
+            p_b = getproperty(b, p_name)
+            if p_a != p_b
+                println(tab, "Mismatched ", p_name, "! A has ", p_a, " while B has ", p_b)
+            end
+        end
+    end
+end
+function test_compare(a::MJ.MarkovBiasTemperature, b::MJ.MarkovBiasTemperature)
+    if a.amount != b.amount
+        println(tab, "Mismatched temperature! A is ", a.amount, " while B is ", b.amount)
+    end
 end
 
 
@@ -311,6 +325,31 @@ BIG_TEST = @markovjunior 3 'R' begin
             (2, z)[ (+(1), -(3)), (-(3), +(1)) ]
         ]
     )
+
+    # Next op is 30
+    @rewrite w=>b field(RG)
+    @rewrite w=>b field(-RG)
+    @rewrite w=>b field(RG->B)
+    @rewrite w=>b field(RG<-B)
+    @rewrite w=>b field(-RG->B)
+    # Next op is 35
+    @rewrite w=>b field(RG->BR & gw)
+    @rewrite w=>b field(RG<-BR & wb)
+    @rewrite w=>b field(-RG->BR & bgw)
+    # Next op is 38
+    @rewrite w=>b begin
+        temperature(5.0)
+        field(R -> GB & B,
+            live,
+            soft=2.01,
+            combo=diff
+        )
+        field(w -> b,
+            forbidden,
+            randomness=0.3,
+            scale=0.5
+        )
+    end
 end
 
 CELL_CODE = MJ.CELL_CODE_BY_CHAR
@@ -821,6 +860,212 @@ BIG_TEST_ANSWER = MJ.MarkovAlgorithm(
                 )
             )),
             nothing, ()
+        ),
+
+        # Next op is 30
+        MJ.MarkovOpRewrite(
+            DEFAULT_PRIORITY,
+            tuple(MJ.RewriteRule_Strip(tuple( (CELL_CODE['w'], CELL_CODE['b']) ),
+                                       nothing, 1.0f0,
+                                       MJ.GridDir[ MJ.GridDir(1, 1) ], nothing)),
+            nothing,
+            tuple(
+                MJ.MarkovBiasField(
+                    MJ.CellTypeSet("RG"),
+                    MJ.BiasFieldComboMode.average,
+
+                    false, false,
+
+                    MJ.CellTypeSet(), MJ.BiasFieldOutsideCellMode.normal,
+
+                    MJ.CellTypeSet(),
+
+                    0.0f0, 1.0f0, 2.0f0
+                )
+            )
+        ),
+        MJ.MarkovOpRewrite(
+            DEFAULT_PRIORITY,
+            tuple(MJ.RewriteRule_Strip(tuple( (CELL_CODE['w'], CELL_CODE['b']) ),
+                                       nothing, 1.0f0,
+                                       MJ.GridDir[ MJ.GridDir(1, 1) ], nothing)),
+            nothing,
+            tuple(
+                MJ.MarkovBiasField(
+                    MJ.CellTypeSet("RG"),
+                    MJ.BiasFieldComboMode.average,
+
+                    false, true,
+
+                    MJ.CellTypeSet(), MJ.BiasFieldOutsideCellMode.normal,
+
+                    MJ.CellTypeSet(),
+
+                    0.0f0, 1.0f0, 2.0f0
+                )
+            )
+        ),
+        MJ.MarkovOpRewrite(
+            DEFAULT_PRIORITY,
+            tuple(MJ.RewriteRule_Strip(tuple( (CELL_CODE['w'], CELL_CODE['b']) ),
+                                       nothing, 1.0f0,
+                                       MJ.GridDir[ MJ.GridDir(1, 1) ], nothing)),
+            nothing,
+            tuple(
+                MJ.MarkovBiasField(
+                    MJ.CellTypeSet("RG"),
+                    MJ.BiasFieldComboMode.average,
+
+                    false, false,
+
+                    MJ.CellTypeSet("B"), MJ.BiasFieldOutsideCellMode.normal,
+
+                    MJ.CellTypeSet(),
+
+                    0.0f0, 1.0f0, 2.0f0
+                )
+            )
+        ),
+        MJ.MarkovOpRewrite(
+            DEFAULT_PRIORITY,
+            tuple(MJ.RewriteRule_Strip(tuple( (CELL_CODE['w'], CELL_CODE['b']) ),
+                                       nothing, 1.0f0,
+                                       MJ.GridDir[ MJ.GridDir(1, 1) ], nothing)),
+            nothing,
+            tuple(
+                MJ.MarkovBiasField(
+                    MJ.CellTypeSet("RG"),
+                    MJ.BiasFieldComboMode.average,
+
+                    false, true,
+
+                    MJ.CellTypeSet("B"), MJ.BiasFieldOutsideCellMode.normal,
+
+                    MJ.CellTypeSet(),
+
+                    0.0f0, 1.0f0, 2.0f0
+                )
+            )
+        ),
+        MJ.MarkovOpRewrite(
+            DEFAULT_PRIORITY,
+            tuple(MJ.RewriteRule_Strip(tuple( (CELL_CODE['w'], CELL_CODE['b']) ),
+                                       nothing, 1.0f0,
+                                       MJ.GridDir[ MJ.GridDir(1, 1) ], nothing)),
+            nothing,
+            tuple(
+                MJ.MarkovBiasField(
+                    MJ.CellTypeSet("RG"),
+                    MJ.BiasFieldComboMode.average,
+
+                    false, true,
+
+                    MJ.CellTypeSet("B"), MJ.BiasFieldOutsideCellMode.normal,
+
+                    MJ.CellTypeSet(),
+
+                    0.0f0, 1.0f0, 2.0f0
+                )
+            )
+        ),
+        # Next op is 35
+        MJ.MarkovOpRewrite(
+            DEFAULT_PRIORITY,
+            tuple(MJ.RewriteRule_Strip(tuple( (CELL_CODE['w'], CELL_CODE['b']) ),
+                                       nothing, 1.0f0,
+                                       MJ.GridDir[ MJ.GridDir(1, 1) ], nothing)),
+            nothing,
+            tuple(
+                MJ.MarkovBiasField(
+                    MJ.CellTypeSet("RG"),
+                    MJ.BiasFieldComboMode.average,
+
+                    false, false,
+
+                    MJ.CellTypeSet("BR"), MJ.BiasFieldOutsideCellMode.normal,
+
+                    MJ.CellTypeSet("gw"),
+
+                    0.0f0, 1.0f0, 2.0f0
+                )
+            )
+        ),
+        MJ.MarkovOpRewrite(
+            DEFAULT_PRIORITY,
+            tuple(MJ.RewriteRule_Strip(tuple( (CELL_CODE['w'], CELL_CODE['b']) ),
+                                       nothing, 1.0f0,
+                                       MJ.GridDir[ MJ.GridDir(1, 1) ], nothing)),
+            nothing,
+            tuple(
+                MJ.MarkovBiasField(
+                    MJ.CellTypeSet("RG"),
+                    MJ.BiasFieldComboMode.average,
+
+                    false, true,
+
+                    MJ.CellTypeSet("BR"), MJ.BiasFieldOutsideCellMode.normal,
+
+                    MJ.CellTypeSet("wb"),
+
+                    0.0f0, 1.0f0, 2.0f0
+                )
+            )
+        ),
+        MJ.MarkovOpRewrite(
+            DEFAULT_PRIORITY,
+            tuple(MJ.RewriteRule_Strip(tuple( (CELL_CODE['w'], CELL_CODE['b']) ),
+                                       nothing, 1.0f0,
+                                       MJ.GridDir[ MJ.GridDir(1, 1) ], nothing)),
+            nothing,
+            tuple(
+                MJ.MarkovBiasField(
+                    MJ.CellTypeSet("RG"),
+                    MJ.BiasFieldComboMode.average,
+
+                    false, true,
+
+                    MJ.CellTypeSet("BR"), MJ.BiasFieldOutsideCellMode.normal,
+
+                    MJ.CellTypeSet("bgw"),
+
+                    0.0f0, 1.0f0, 2.0f0
+                )
+            )
+        ),
+        # Next op is 38
+        MJ.MarkovOpRewrite(
+            DEFAULT_PRIORITY,
+            tuple(MJ.RewriteRule_Strip(tuple( (CELL_CODE['w'], CELL_CODE['b']) ),
+                                       nothing, 1.0f0,
+                                       MJ.GridDir[ MJ.GridDir(1, 1) ], nothing)),
+            nothing,
+            tuple(
+                MJ.MarkovBiasTemperature(5.0),
+                MJ.MarkovBiasField(
+                    MJ.CellTypeSet("R"),
+                    MJ.BiasFieldComboMode.diff,
+
+                    true, false,
+
+                    MJ.CellTypeSet("GB"), MJ.BiasFieldOutsideCellMode.soft,
+
+                    MJ.CellTypeSet("B"),
+
+                    0.0f0, 1.0f0, convert(Float32, 2.01)
+                ),
+                MJ.MarkovBiasField(
+                    MJ.CellTypeSet("w"),
+                    MJ.BiasFieldComboMode.average,
+
+                    false, true,
+
+                    MJ.CellTypeSet("b"), MJ.BiasFieldOutsideCellMode.flippable,
+
+                    MJ.CellTypeSet(),
+
+                    0.3f0, 0.5f0, 2.0f0
+                )
+            )
         )
     ],
 

@@ -849,10 +849,9 @@ function RewriteCache(grid::CellGrid{NDims}, mask_grid::Optional{MaskGrid{NDims}
 
     applications = markov_allocator_acquire_array(
         context.allocator,
-        tuple(length(applications_tuple)),
+        (),
         OrderedSet{CachedRuleApplication{NDims}}
     )
-    empty!(applications)
     append!(applications, applications_tuple)
 
     return RewriteCache{NDims, NRules, typeof(grid), typeof(rules)}(
@@ -1297,7 +1296,7 @@ function markov_op_cancel(op::MarkovOpRewrite, s::MarkovOpRewrite_State,
                           context::MarkovOpContext)
     # We're freeing a lot of stuff here, so move the allocator to a type-stable context.
     function run(allocator::T) where {T<:AbstractMarkovAllocator}
-        foreach(markov_bias_cleanup, s.biases, s.bias_states)
+        foreach(markov_bias_cleanup, s.biases, s.bias_states, Iterators.repeated(context.bias_context))
         close_rewrite_cache(s.rewrite_cache, context)
 
         if exists(s.rewrite_cache.mask_grid)
