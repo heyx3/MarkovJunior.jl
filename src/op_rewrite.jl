@@ -1294,6 +1294,10 @@ end
 
 function markov_op_cancel(op::MarkovOpRewrite, s::MarkovOpRewrite_State,
                           context::MarkovOpContext)
+    # Remove our op's own biases from the global list.
+    n_total_biases = length(context.all_biases)
+    deleteat!(context.all_biases, (n_total_biases - length(op.biases) + 1) : n_total_biases)
+
     # We're freeing a lot of stuff here, so move the allocator to a type-stable context.
     function run(allocator::T) where {T<:AbstractMarkovAllocator}
         foreach(markov_bias_cleanup, s.biases, s.bias_states, Iterators.repeated(context.bias_context))

@@ -85,11 +85,11 @@ function rebuild_distance_field(field::MarkovBiasField,
                 axis = convert(Int32, _axis)
                 dir_bool = convert(Int32, _dir_bool)
 
-                dir_sign::Int32 = Int32.((-1, 1))[dir_bool]
+                dir_sign::Int32 = Int32.((-1, 1))[dir_bool + 1]
                 axis_pos::Int32 = v[axis] + dir_sign
                 v2::V = @set v[axis] = axis_pos
 
-                edge::Int32 = Int32.((1, size(grid, _axis)))[dir_bool]
+                edge::Int32 = Int32.((1, size(grid, _axis)))[dir_bool + 1]
                 within_edge::Bool = cmp(axis_pos, edge) != -1
 
                 # Check that the end is a path cell.
@@ -156,22 +156,24 @@ function rebuild_distance_field(field::MarkovBiasField,
                     cell_b = state.distance_field[v2]
                     is_invalid_b = (cell_b == typemax(UInt32))
 
-                    if fn_check_anchor(v2) && fn_check_path(v2)
-                        if !is_invalid_a && (is_invalid_b || (cell_a + one(UInt32) < cell_b))
-                            @logic_logln "\t\tPush " v.data "(" convert(Int, cell_a) ") to " v2.data
-                            field_changed = true
-                            cell_b = cell_a + one(UInt32)
+                    if fn_check_anchor(v2) && fn_check_path(v2) &&
+                        !is_invalid_a && (is_invalid_b || (cell_a + one(UInt32) < cell_b))
+                    #begin
+                        @logic_logln "\t\tPush " v.data "(" convert(Int, cell_a) ") to " v2.data
+                        field_changed = true
+                        cell_b = cell_a + one(UInt32)
 
-                            state.distance_field[v2] = cell_b
-                            max_value = max(max_value, cell_b)
-                        elseif !is_invalid_b && (is_invalid_a || (cell_b + one(UInt32) < cell_a))
-                            @logic_logln "\t\tPush " v2.data "(" convert(Int, cell_b) ") to " v.data
-                            field_changed = true
-                            cell_a = cell_b + one(UInt32)
+                        state.distance_field[v2] = cell_b
+                        max_value = max(max_value, cell_b)
+                    elseif fn_check_anchor(v) && fn_check_path(v) &&
+                            !is_invalid_b && (is_invalid_a || (cell_b + one(UInt32) < cell_a))
+                    #begin
+                        @logic_logln "\t\tPush " v2.data "(" convert(Int, cell_b) ") to " v.data
+                        field_changed = true
+                        cell_a = cell_b + one(UInt32)
 
-                            state.distance_field[v] = cell_a
-                            max_value = max(max_value, cell_a)
-                        end
+                        state.distance_field[v] = cell_a
+                        max_value = max(max_value, cell_a)
                     end
                 end
             end
@@ -373,23 +375,39 @@ function markov_bias_calculate(field::MarkovBiasField, state::MarkovBiasField_St
         # To get linear weighted randomness,
         #   in this setup where each rewrite move is considered in isolation,
         #   return pow(uniform_f, 1/weight).
-        # Bias is integer and can be 0, so here we use the exponent 1/(weight+1) instead.
+        # Bias is > 0, so here we use the exponent 1/(weight+1) instead.
         weight_curve = 1.0f0 / (bias + 1.0f0)
 
+        @logic_log "Randomzing field-bias of " bias " using curve " weight_curve " plus randomness " field.randomness
         # We want a smooth transition from nonrandom (enormously heavy weights, curve approaches +Inf),
         #    to linear weighted-random (curve is unchanged),
         #    to uniform-random (extremely light weights, curve approaches 0.0).
         # We already handled randomness <= 0 and >= 1, so here we can ignore extremes.
-        weight_curve = if field.randomness < 0.5f0
-            weight_curve / (field.randomness * 2.0f0)
+
+        # Empirically it seems randomness values below 0.2 cause numeric problems.
+        # Below that, we switch over to a different method equivalent to the Temperature bias.
+        RANDOMNESS_NUMERIC_FLOOR = 0.2f0
+        if field.randomness < RANDOMNESS_NUMERIC_FLOOR
+            max_temp = 5.0f0 * log(convert(Float32, sum(size(grid))))
+            temp_t = (field.randomness / RANDOMNESS_NUMERIC_FLOOR) * max_temp
+            @logic_log " ...  using temperature(" temp_t " * " max_temp ") to simulate heavy weights"
+            bias += rand(rng, Float32) * temp_t * max_temp
+            @logic_logln "  ... to get a final bias of " bias
         else
-            weight_curve * (1.0f0 - inv_lerp(0.5f0, 1.0f0, field.randomness))
+            weight_curve ^= if field.randomness < 0.5f0
+                @logic_log " ...  Towards weighted randomness"
+                1.0f0 / (field.randomness * 2.0f0)
+            else
+                @logic_log " ...  Towards uniform-randomness"
+                1.0f0 - inv_lerp(0.5f0, 1.0f0, field.randomness)
+            end
+
+            bias = rand(rng, Float32) ^ weight_curve
+
+            # Preserve the magnitude range of 0 - max_path_length.
+            bias *= state.largest_dist
+            @logic_logln "  ...  using a final curve of " weight_curve " to get bias of " bias
         end
-
-        bias = (rand(rng, Float32) ^ weight_curve)
-
-        # Preserve the magnitude range of 0 - max_path_length.
-        bias *= state.largest_dist
     end
 
     return bias * field.scale
