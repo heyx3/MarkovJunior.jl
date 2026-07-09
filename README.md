@@ -180,11 +180,8 @@ Note that multiple clients can receive success; it only fails if the server does
 
 ## Scenes
 
-Different algorithm setups can be found in the *scenes/* folder.
+Many algorithms can be found in the *scenes/* folder.
 They are heavily commented to help you learn.
-
-A small handful of them are still not converted to the v0.2 syntax,
-  so don't be alarmed if they fail to run!
 
 ## Optimizing the standalone builds
 

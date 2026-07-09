@@ -1,4 +1,6 @@
-@markovjunior begin
+@markovjunior 2 begin
+	#TODO: Make a variant that can be seeded by the outer edges, to create infinite terrain!
+
 	# Place seeds
     @rewrite (length/10) b=>w
 
