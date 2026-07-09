@@ -651,6 +651,9 @@ For example `-RGB` means to affect every pixel in the box except Red Green and B
 `+RGB` means to affect *no* pixels in the box except Red Green and Blue.
 * `[mask]` is an optional mask statement which randomly forbids some of the pixels in the same way as for [rewrite rules](#), for example `%0.75` forbids 25% of all pixels.
 
+By default this op will sometimes finish in a single tick, and sometimes spread itself out over several ticks.
+You can force it to always complete in a single tick by adding a pragma to the algorithm: `@pragma fast_fills`.
+
 Note that a 1D vector like `(5, )` has different behavior than a scalar like `5`
   when extrapolating to higher dimensions.
 The 1D vector lets every axis from 2 onward take up the entire grid,

@@ -161,9 +161,11 @@ function markov_op_iterate(b::MarkovOpDrawBox{NBox, TRule},
         end
     end
 
-    # If the user wants to finish asap, and we made it to the beginning of a row,
-    #    do a quick fill of the rest.
-    if isnothing(ticks_left[]) && (state.next_pixel.x == first(state.pixels).x)
+    # In some circumstances we want to finish quickly.
+    finish_quickly = isnothing(ticks_left[]) ||
+                     (first(state.pixels) == one(Vec{NGrid, Int32}) && last(state.pixels) == vsize(grid)) ||
+                     haskey(context.pragmas_map, :fast_fills)
+    if finish_quickly && (state.next_pixel == first(state.pixels))
         foreach(apply_at, first(state.pixels):last(state.pixels))
         markov_op_cancel(b, state, context)
         return nothing
