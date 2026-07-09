@@ -3,9 +3,11 @@
 * Add 3D view to the scene renderer
 * Support compilation to a GUI-tool exe, DLL, and IPC service exe.
 See *scripts/compile_standalone.jl*
-* Improve Ops syntax (see [DSL documentation](docs/dsl.md))
+* Add more features to existing Ops
+* Add `field()` Bias (see [DSL documentation](docs/dsl.md#bias-field))
 * Fix up the interface for custom extensions (see [*add_ons* documentation](docs/add_ons.md))
-* Various GUI/tool improvements
+* Add "reused" allocator and use it as the default
+* GUI improvements
 
 # v0.2
 

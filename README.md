@@ -136,10 +136,13 @@ They are numbered by the message's ID, for example you send `1` to initiate the 
    1. Write a 4-byte uint representing the algorithm's ID.
    2. Write a 4-byte uint representing the number of grid dimensions.
    3. For each grid dimension, write a 4-byte uint representing its resolution along that axis.
-   4. Write a 4-byte uint representing the number of bytes used to seed the RNG.
-   5. Write the bytes of the RNG seed.
-   6. Read the success flag.
-   7. If it succeeded, read a 4-byte uint representing the ID of the new algo state.
+   4. Read a success flag for whether a grid of that size is allowed. If not, skip the rest of this message.
+   5. Write a 1-byte uint bool for whether you are providing an initial grid state.
+   6. If you are, now write that grid state. This should have the same memory order as when you download a grid (see below).
+   7. Write a 4-byte uint representing the number of bytes used to seed the RNG.
+   8. Write the bytes of the RNG seed.
+   9. Read the success flag.
+   10. If it succeeded, read a 4-byte uint representing the ID of the new algo state.
 4. **Destroy an algorithm run**
    1. Write a 4-byte uint representing the algorithm's ID.
    2. Write a 4-byte uint representing the algo state's ID.
@@ -169,10 +172,10 @@ They are numbered by the message's ID, for example you send `1` to initiate the 
    5. Read the bytes of the grid.
   Each pixel is one byte so the total byte-count is the product of the grid's resolution along each axis.
   The first axis (X) is the innermost.
-9. **Stop accepting new clients to the service** (must tell the server to support this when starting up)
+1. **Stop accepting new clients to the service** (must tell the server to support this when starting up)
    1. Read the success flag.
 Note that multiple clients can receive success; it only fails if the server does not allow the message.
-   2. If running this service through the standalone executable,
+   1. If running this service through the standalone executable,
   then the process dies once all existing clients have disconnected.
 
 ## Scenes

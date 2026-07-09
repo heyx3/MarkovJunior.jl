@@ -51,6 +51,12 @@ Normally an OpenGL GUI tool is also available to test/debug the algorithm,
 
 To eliminate this tool and its assets and the use of folders at `pwd()`,
   set the environment variable `JMJ_BUILD_WITH_TOOL` to 0.
+
+# IPC runner Tool
+
+To let game engines and other tools use this library, run this package as its own process
+  executing `markovjunior_run_ipc(...)`.
+Then connect to its *named pipe* and implement the communication protocol outlined in the readme.
 "
 module MarkovJunior
 
@@ -75,6 +81,7 @@ const BUILT_WITH_TOOL = convert(Bool, get(ENV, "JMJ_BUILD_WITH_TOOL", 1))
 # Core library:
 include("utils.jl")
 include("cells.jl")
+include("allocator.jl")
 include("algo.jl")
 include("dsl.jl")
 include("interface.jl")

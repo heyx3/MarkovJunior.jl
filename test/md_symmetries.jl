@@ -1,5 +1,9 @@
-# Wrap the test in a lambda to avoid name collisions.
+# Wrap the tests in a lambda to avoid name collisions.
 (() -> begin
+# Run the test once for each kind of built-in allocator, starting with the simplest.
+for alloc in [ MJ.MarkovAllocatorHeap(), MJ.MarkovAllocatorHeapReused() ]
+
+println(stderr, "Running md_symmetries.jl tests with ", typeof(alloc), "...")
 
 # Test find_all_md_symmetries()
 function test_all_md_symmetries(n_rule_dims::Int, n_grid_dims::Int,
@@ -237,7 +241,7 @@ test_all_md_symmetries(2, 2, MJ.RewriteRule_MD_Symmetry_Definition(
 ]))
 
 # Test RewriteRule_MD_Orientations.
-ori_ignored_fields(n_grid) = tuple(Vector{MJ.CellGrid{n_grid}}(), MJ.MarkovAllocatorHeap())
+ori_ignored_fields(n_grid) = tuple(Vector{MJ.CellGridConcrete{n_grid}}(), alloc)
 NULL_GRID_TO_RULE = MJ.GridDir(-1, -1, true)
 # Note that your expected 'rule_permutation_cells_buffer' field can be left empty; we test its size internally.
 # We also don't test anything about the allocator.
@@ -261,7 +265,7 @@ function test_orientations(src_array::Array{<:NTuple{2, Any}, NRule},
         sanitized_src_array[i] = sanitize.(src_array[i]::Tuple)
     end
 
-    actual = MJ.RewriteRule_MD_Orientations(sanitized_src_array, symmetry, Val(n_grid), MJ.MarkovAllocatorHeap())
+    actual = MJ.RewriteRule_MD_Orientations(sanitized_src_array, symmetry, Val(n_grid), alloc)
     @bp_check(actual.rule_to_grid == expected.rule_to_grid,
         "Error getting MD-orientations! Rule-to-grid incorrect.\nRule: ",
           sprint(show, sanitized_src_array),
@@ -420,4 +424,5 @@ test_orientations(
     )
 )
 
+end
 end)()

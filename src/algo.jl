@@ -54,39 +54,6 @@ end
 
 
 ##################
-#  Allocators
-
-"
-Some kind of memory allocator, mainly used for the grids.
-Default behavior of its interface is to allocate things from the heap
-   and let the GC handle them on release.
-"
-abstract type AbstractMarkovAllocator end
-"Pass an empty tuple for the size in order to get an empty 1D vector"
-function markov_allocator_acquire_array(allocator::AbstractMarkovAllocator,
-                                        size::Tuple{Vararg{Integer}},
-                                        ::Type{T}
-                                       )::AbstractArray{T, (isempty(size) ? 1 : length(size))} where {T}
-    if isempty(size)
-        return preallocated_vector(T, 128)
-    else
-        return Array{T, length(size)}(undef, size)
-    end
-end
-markov_allocator_acquire_ordered_set(allocator::AbstractMarkovAllocator,
-                                     T::Type
-                                    )::OrderedSet{T} = OrderedSet{T}()
-markov_allocator_acquire_set(allocator::AbstractMarkovAllocator, T::Type)::Set{T} = Set{T}()
-markov_allocator_release_array(allocator::AbstractMarkovAllocator, data::AbstractArray) = nothing
-markov_allocator_release_ordered_set(allocator::AbstractMarkovAllocator, s::OrderedSet) = nothing
-markov_allocator_release_set(allocator::AbstractMarkovAllocator, s::Set) = nothing
-Base.close(::AbstractMarkovAllocator) = nothing
-
-"Allocates on the heap and lets Julia's GC take the array afterwards"
-struct MarkovAllocatorHeap <: AbstractMarkovAllocator end
-
-
-##################
 #  Types
 
 abstract type AbstractMarkovOp end
@@ -194,37 +161,48 @@ end
 ##################
 #  Interface
 
-"Seeds may be a single bitstype or an enumeration of them"
+"""
+Initial state may be a size (tuple or Vec), filled with the algorithm's default fill color,
+  or else an array that is copied from.
+
+Seeds may be a single bitstype or an enumeration of them.
+"""
 function markov_algo_start(algo::MarkovAlgorithm,
-                           initial_size::Union{Tuple{Vararg{Integer}}, VecT{<:Integer}},
+                           initial::Union{CellGrid, Tuple{Vararg{Integer}}, VecT{<:Integer}},
                            @nospecialize(seeds = rand(UInt32))
                            ;
-                           allocator::AbstractMarkovAllocator = MarkovAllocatorHeap()
+                           allocator::AbstractMarkovAllocator = MarkovAllocatorHeapReused()
                           )::MarkovAlgoState
+    initial_size::Tuple{Vararg{Int}} = if initial isa CellGrid
+        size(initial)
+    elseif initial isa Vec
+        convert.(Ref(Int), initial.data)
+    elseif initial isa Tuple
+        convert.(Ref(Int), initial)
+    else
+        error("Unhandled: ", typeof(initial))
+    end
+
     if exists(algo.fixed_dimension) && (length(initial_size) != algo.fixed_dimension)
         error("Can't start a ", length(initial_size), "D MarkovJunior run with a ",
               algo.fixed_dimension, "D algorithm")
     end
 
-    grid = markov_allocator_acquire_array(
-        allocator,
-        if initial_size isa Vec
-            initial_size.data
-        else
-            initial_size
-        end,
-        UInt8
-    )
-    fill!(grid, algo.initial_fill)
+    grid::CellGridConcrete{length(initial_size)} = markov_allocator_acquire_array(allocator, initial_size, UInt8)
+    if initial isa CellGrid
+        copyto!(grid, initial)
+    else
+        fill!(grid, algo.initial_fill)
+    end
 
-    rng = (seeds isa Real) ? PRNG(seeds) : PRNG(seeds...)
+    rng = (seeds isa Real) ? PRNG(seeds)    : PRNG(seeds...)
 
     data_store = Dict{Symbol, Any}()
     state = MarkovAlgoState(
         Ref(grid), 0,
         0, nothing,
         MarkovOpContext(
-            markov_allocator_acquire_array(allocator, (), AbstractMarkovBias),
+            markov_allocator_acquire_array(allocator, (), AbstractMarkovBias)::Vector{AbstractMarkovBias},
             MarkovBiasContext(
                 allocator,
                 algo.pragmas_chronological, algo.pragmas_map, algo.add_ons, data_store
@@ -308,6 +286,7 @@ function Base.close(s::MarkovAlgoState, owning_algo::MarkovAlgorithm)
     end
     markov_allocator_release_array(s.allocator, s.grid[])
     markov_allocator_release_array(s.allocator, s.op_context.all_biases)
+    #TODO: Release data_store? Or just pool it internally?
     @logic_tab_out()
     return nothing
 end

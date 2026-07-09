@@ -237,7 +237,7 @@ Returns a matrix where each column is an orientation -- mapping each rule axis (
 "
 function find_all_md_symmetries(def::RewriteRule_MD_Symmetry_Definition,
                                 n_rule_dims::Int, n_grid_dims::Int
-                               )::AbstractMatrix{GridDir}
+                               )::Matrix{GridDir}
     @md_symm_logln("Finding symmetries for definition with ",
                     n_rule_dims, " Rule dims and ", n_grid_dims, " Grid dims")
     md_symm_loggable_dirs(dirs) = Iterators.flatten(Iterators.map(dirs) do d::GridDir
@@ -498,7 +498,7 @@ struct RewriteRule_MD_Orientations{NGridDims}
     rule_permutations::Vector{Array{RewriteCell_MD{NGridDims}, NGridDims}}
     # For each rule permutation, this is an array of identical size,
     #    meant to be a buffer when applying rewrite rules.
-    rule_permutation_cells_buffer::Vector{CellGrid{NGridDims}}
+    rule_permutation_cells_buffer::Vector{CellGridConcrete{NGridDims}}
 
     allocator::AbstractMarkovAllocator
 end
@@ -530,10 +530,10 @@ function RewriteRule_MD_Orientations(rule_array::Array{RewriteCell_MD{NRuleDims}
 
     # Build the permuted rule matrices.
     PermArrayType = Array{RewriteCell_MD{NGridDims}, NGridDims}
-    rule_permutations = markov_allocator_acquire_array(allocator, (n_entries, ), PermArrayType)
-    rule_permutation_apply_buffers = markov_allocator_acquire_array(
+    rule_permutations::Vector{PermArrayType} = markov_allocator_acquire_array(allocator, (n_entries, ), PermArrayType)
+    rule_permutation_apply_buffers::Vector{CellGridConcrete{NGridDims}} = markov_allocator_acquire_array(
         allocator,
-        (n_entries, ), CellGrid{NGridDims}
+        (n_entries, ), CellGridConcrete{NGridDims}
     )
     @md_symm_logln("=-=-=-=-=-=-=-\nCrunching orientations for rule:\n", sprint(dump, rule_array),
                    "\n\trule_to_grid: ", sprint(dump, rule_to_grid),
@@ -578,7 +578,7 @@ function RewriteRule_MD_Orientations(rule_array::Array{RewriteCell_MD{NRuleDims}
         #   until after the permutation is copied into a new array.
 
         # Finally, generate a new non-lazy array to hold this permutation.
-        permuted_allocation = markov_allocator_acquire_array(
+        permuted_allocation::Array{RewriteCell_MD{NGridDims}, NGridDims} = markov_allocator_acquire_array(
             allocator,
             size(permuted_view), RewriteCell_MD{NGridDims}
         )
@@ -628,7 +628,7 @@ function RewriteRule_MD_Orientations(rule_array::Array{RewriteCell_MD{NRuleDims}
             allocator,
             size(permuted_allocation),
             UInt8
-        )
+        )::CellGridConcrete{NGridDims}
     end
 
     return RewriteRule_MD_Orientations{NGridDims}(
@@ -847,7 +847,7 @@ function RewriteCache(grid::CellGrid{NDims}, mask_grid::Optional{MaskGrid{NDims}
     @logic_logln("MD orientations per rule: ", map(o -> (isnothing(o) ? "N/A" : o.n_entries), md_orientations_tuple))
     @logic_tab_out()
 
-    applications = markov_allocator_acquire_array(
+    applications::Vector{OrderedSet{CachedRuleApplication{NDims}}} = markov_allocator_acquire_array(
         context.allocator,
         (),
         OrderedSet{CachedRuleApplication{NDims}}
@@ -882,7 +882,7 @@ function update_rewrite_cache!(cache::RewriteCache{NDims, NRules, TGrid, TRules}
                                   cache.grid, cache.mask_grid, mask, range_to_invalidate)
         else
             visit_rule_match_data(process_match,
-                                  rule::RewriteRule_MD{NDims},
+                                  rule::RewriteRule_MD,
                                   md_orientation_set::RewriteRule_MD_Orientations{NDims},
                                   cache.grid, cache.mask_grid, mask, range_to_invalidate)
         end
@@ -1036,7 +1036,7 @@ function markov_op_initialize(r::MarkovOpRewrite{<:NTuple{NRules, Any}, TBias, T
     mask_grid = if all(rule -> isnothing(rule.mask), r.rules)
         nothing
     else
-        a = markov_allocator_acquire_array(context.allocator, size(grid), Float32)
+        a::Array{Float32, NDims} = markov_allocator_acquire_array(context.allocator, size(grid), Float32)
         rand!(rng, a)
         a
     end
@@ -1057,16 +1057,20 @@ function markov_op_initialize(r::MarkovOpRewrite{<:NTuple{NRules, Any}, TBias, T
         length(ru.cells) for ru in r.rules if ru isa RewriteRule_Strip
     ); init=0)
 
-    out_state = TState(
-        threshold, cache,
-        biases, bias_states,
-        markov_allocator_acquire_array(context.allocator, tuple(128), RewritePotentialApplication{NDims}),
-        markov_allocator_acquire_array(context.allocator, tuple(NRules+1), Int),
-        RewriteGroupDesirability(),
-        markov_allocator_acquire_array(context.allocator, tuple(NRules), RewriteGroupDesirability),
-        markov_allocator_acquire_array(context.allocator, tuple(256), RewritePotentialApplication{NDims}),
-        markov_allocator_acquire_array(context.allocator, tuple(max(longest_1D_rule, 1)), UInt8)
-    )
+    # Dispatch on the allocator type before making a bunch of allocations.
+    function with_alloc(alloc::TAlloc) where {TAlloc}
+        return TState(
+            threshold, cache,
+            biases, bias_states,
+            markov_allocator_acquire_array(alloc, tuple(128), RewritePotentialApplication{NDims}),
+            markov_allocator_acquire_array(alloc, tuple(NRules+1), Int),
+            RewriteGroupDesirability(),
+            markov_allocator_acquire_array(alloc, tuple(NRules), RewriteGroupDesirability),
+            markov_allocator_acquire_array(alloc, tuple(256), RewritePotentialApplication{NDims}),
+            markov_allocator_acquire_array(alloc, tuple(max(longest_1D_rule, 1)), UInt8)
+        )
+    end
+    out_state = with_alloc(context.allocator)
     if all(isempty, cache.applications)
         @logic_logln("MarkovOpRewrite has no options at the start; canceling...")
         markov_op_cancel(r, out_state, context)

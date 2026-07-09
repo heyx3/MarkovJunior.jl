@@ -196,7 +196,7 @@ function markov_bias_initialize(f::MarkovBiasField, ::Type{TState},
                                ) where {NGrid, BHasPathCells, BHasAnchors,
                                         TState<:MarkovBiasField_State{NGrid, BHasPathCells, BHasAnchors}}
     # We have a lot to allocate, so dispatch on the allocator type.
-    function run_with_alloc(@specialize(alloc))
+    function run_with_alloc(alloc::TAlloc) where {TAlloc}
         V = Vec{NGrid, Int32}
         state = TState(
             markov_allocator_acquire_array(alloc, size(grid), UInt32),
@@ -223,7 +223,7 @@ function markov_bias_initialize(f::MarkovBiasField, ::Type{TState},
 end
 function markov_bias_cleanup(f::MarkovBiasField, s::MarkovBiasField_State, ctx::MarkovBiasContext)
     # We have a lot to release, so dispatch on the allocator type.
-    function run_with_alloc(@specialize(alloc))
+    function run_with_alloc(alloc::TAlloc) where {TAlloc}
         markov_allocator_release_array(alloc, s.distance_field)
         if exists(s.anchor_buffers)
             markov_allocator_release_array(alloc, s.anchor_buffers[1])

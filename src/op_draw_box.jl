@@ -128,7 +128,7 @@ function markov_op_initialize(b::MarkovOpDrawBox{NBox, TRule},
         mask_grid = if isnothing(b.mask)
             nothing
         else
-            a = markov_allocator_acquire_array(context.allocator, size(grid), Float32)
+            a::Array{Float32, NGrid} = markov_allocator_acquire_array(context.allocator, size(grid), Float32)
             rand!(rng, a)
             a
         end

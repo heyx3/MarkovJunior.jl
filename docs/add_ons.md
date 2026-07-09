@@ -62,20 +62,28 @@ This allocator is provided in the `context` object passed to your custom Op or B
 
 ````julia
 # Our custom Op needs to grab a new Int32 array at half the grid resolution.
-my_alloc = markov_allocator_acquire_array(context.allocator,
-                                          size(grid) .÷ 2,
-                                          Int32)
+# The allocator is type-unstable, so it's important to specify the type of the variable.
+my_alloc::Array{Int32, ndims(grid)} = markov_allocator_acquire_array(
+    context.allocator,
+    size(grid) .÷ 2, Int32
+)
+# If you're grabbing several allocations at once, dispatch on the allocator type to make this easier:
+function with_alloc(alloc::TAlloc) where {TAlloc}
+    # Now allocator calls are type-stable!
+    ...
+end
+with_alloc(context.allocator)
 ...
 # Our Op is finished with the array.
 markov_allocator_release_array(context.allocator, my_alloc)
 ````
 
-You can also allocate 'ordered sets', from the package *OrderedCollections.jl*,
+You can also allocate sets and 'ordered sets' (from the package *OrderedCollections.jl*),
   in a similar way but without providing a size.
 Each new allocated set is expected to already be empty.
 
 > *OrderedSets are important because all algorithm logic must be deterministic!*
-> *Avoid iterating through normal `Set` and `Dict` objects.*
+> *Don't ever iterate through normal `Set` and `Dict` objects.*
 
 ## Logging
 
