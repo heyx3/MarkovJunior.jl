@@ -83,30 +83,54 @@ function ipc_delete_algo(id::Integer, expect_success::Bool)::Nothing
     return nothing
 end
 function ipc_start(algo_id::Integer, grid_size::Tuple{Vararg{Integer}}, seeds,
+                   expect_size_allowed::Bool,
+                   initial_state::Optional{Array},
                    expected_state_id::Integer, expect_success::Bool
                   )::UInt32
     grid_size_u32 = convert.(Ref(UInt32), grid_size)
     seed_bytes::Vector{UInt8} = reinterpret_bytes_slow(seeds)
+    initial_state = if isnothing(initial_state)
+        nothing
+    else
+        reshape(convert.(Ref(UInt8), initial_state),
+                grid_size)
+    end
 
     write(channel, UInt32(3))
     write(channel, convert(UInt32, algo_id))
     write(channel, convert(UInt32, length(grid_size)))
     write(channel, grid_size_u32...)
-    write(channel, convert(UInt32, length(seed_bytes)))
-    write(channel, seed_bytes)
 
     err_code = read(channel, UInt8)
     if err_code == 1
-        @bp_check(expect_success, error("ipc_start succeeded when it shouldn't have!"))
-        state_id = read(channel, UInt32)
-        @bp_check(state_id == expected_state_id,
-                  "Expected state ID to be ", expected_state_id, " but got ", state_id)
-        return state_id
-    elseif err_code == 0
-        @bp_check(!expect_success, error("ipc_start failed!"))
-        return zero(UInt32)
+        @bp_check(expect_size_allowed, "Grid size ", grid_size, " not allowed")
+
+        if exists(initial_state)
+            write(channel, one(UInt8))
+            write(channel, initial_state)
+        else
+            write(channel, zero(UInt8))
+        end
+
+        write(channel, convert(UInt32, length(seed_bytes)))
+        write(channel, seed_bytes)
+
+        err_code = read(channel, UInt8)
+        if err_code == 1
+            @bp_check(expect_success, "ipc_start succeeded when it shouldn't have!")
+            state_id = read(channel, UInt32)
+            @bp_check(state_id == expected_state_id,
+                    "Expected state ID to be ", expected_state_id, " but got ", state_id)
+            return state_id
+        elseif err_code == 0
+            @bp_check(!expect_success, "ipc_start failed!")
+            return zero(UInt32)
+        else
+            error("Unexpected error code: ", err_code)
+        end
     else
-        error("Unexpected error code: ", err_code)
+        @bp_check(!expect_size_allowed, "Grid size ", grid_size, " should have been forbidden")
+        return zero(UInt32)
     end
 end
 function ipc_destroy(algo_id::Integer, state_id::Integer, expect_success::Bool)::Nothing
@@ -258,13 +282,14 @@ sleep(1)
 
 # Try starting the algorithm.
 # Also try some false starts.
-ipc_start(1, (6, 6), (1, 4.5),   0, false) # Failed due to algo ID
-ipc_start(2, ntuple(identity, 9), (1, 4.5),   0, false) # Failed due to 8D cap
-ipc_start(2, (4, ), (1, 4.5),  0, false) # Failed due to algo being 2D and grid being 1D
+ipc_start(1, (6, 6), (1, 4.5),   true, nothing,   0, false) # Failed due to algo ID
+ipc_start(2, ntuple(identity, 9), (1, 4.5),  false, nothing,   0, false) # Failed due to 8D cap
+ipc_start(2, (4, ), (1, 4.5),  true, nothing,  0, false) # Failed due to algo being 2D and grid being 1D
 ipc_start(2, ntuple(i -> Int(ceil(sqrt(MJ.IPC_DEFAULT_MAX_GRID_BYTE_SIZE)) + 1), 2),
           (1, 4.5),
+          false, nothing,
           0, false) # Failed due to memory cap
-ipc_start(2, (3, 12), (1, 4.5),    1, true)
+ipc_start(2, (3, 12), (1, 4.5),   true, nothing,    1, true)
 # Get the grid for the first time, and verify it.
 let g = ipc_grid(1, true)
     @bp_check(size(g) == (3, 12), "Grid is ", size(g))
@@ -306,8 +331,17 @@ ipc_destroy(2, 1, true)
 ipc_destroy(2, 1, false)
 ipc_grid(1, false)
 
-# Verify the "finish" message.
-ipc_start(2, (4, 2), (1, 4.5),    2, true)
+# Verify the "finish" message and ability to write an initial state.
+ipc_start(2, (4, 2), (1, 4.5),  true, [ 0, 1, 1, 0, 1, 0, 1, 0 ],    2, true)
+let grid = ipc_grid(2, true)
+    @bp_check(size(grid) == (4, 2), "Grid is ", size(grid))
+    @bp_check(grid == UInt8[
+        0 1
+        1 0
+        1 1
+        0 0
+    ], "Grid: ", grid)
+end
 ipc_finish(1, 2, false) # Failed due to algo ID
 ipc_finish(2, 1, false) # Failed due to state ID
 ipc_finish(2, 2, true)
@@ -315,7 +349,12 @@ ipc_is_finished(2, 2, true, true)
 ipc_grid(1, false)
 let grid = ipc_grid(2, true)
     @bp_check(size(grid) == (4, 2), "Grid is ", size(grid))
-    @bp_check(count(i->i==2, grid) == 8, "Grid: ", grid)
+    @bp_check(grid == UInt8[
+        2 1
+        1 2
+        1 1
+        2 2
+    ], "Grid: ", grid)
 end
 ipc_destroy(2, 2, true)
 ipc_destroy(2, 2, false)

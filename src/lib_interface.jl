@@ -130,7 +130,8 @@ end
 
 Base.@ccallable function jmj_start(algo_id::Lib_ID,
                                    n_dims::Cint, size::Ptr{Cint},
-                                   n_seed_bytes::Cint, seed_bytes::Ptr{UInt8})::Lib_ID
+                                   n_seed_bytes::Cint, seed_bytes::Ptr{UInt8},
+                                   optional_initial_state::Ptr{Cuchar})::Lib_ID
     # Validate and process size params.
     if n_dims < 1
         LIB_SUPPRESS_STDERR || println(stderr, "JMarkovJunior: Dimension must be at least 1; got ", n_dims)
@@ -140,6 +141,12 @@ Base.@ccallable function jmj_start(algo_id::Lib_ID,
     if any(size_tuple .< 1)
         LIB_SUPPRESS_STDERR || println(stderr, "JMarkovJunior: Size must be at least 1 along every axis; got ", size_tuple)
         return zero(Lib_ID)
+    end
+    # Either read the initial state or fall back to the algorithm's fill char.
+    initial_value = if optional_initial_state == C_NULL
+        size_tuple
+    else
+        unsafe_wrap(Array, optional_initial_state, size_tuple)
     end
 
     # Validate and retrieve the algorithm.
@@ -172,7 +179,7 @@ Base.@ccallable function jmj_start(algo_id::Lib_ID,
     end
 
     algo_state = try
-        markov_algo_start(algo, size_tuple, seeds)
+        markov_algo_start(algo, initial_value, seeds)
     catch e
         if !LIB_SUPPRESS_STDERR
             print(stderr, "JMarkovJunior: Failed to start algorithm! ")

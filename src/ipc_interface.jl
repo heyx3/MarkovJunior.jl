@@ -88,28 +88,40 @@ function ipc_client_loop(client_name, channel, server, max_grid_byte_size, ::Val
                 @ipc_debug_log "    Algo " algo_id
 
                 n_dims = read(channel, UInt32)
-                size = Vector{UInt32}(undef, n_dims)
+                a_size = Vector{UInt32}(undef, n_dims)
                 @ipc_debug_log "    Dims " n_dims
-                read!(channel, size)
-                @ipc_debug_log "    Size " Tuple(size)
-                size = reinterpret(Cint, size)
-
-                n_seed_bytes = read(channel, UInt32)
-                @ipc_debug_log "    Seed bytes " n_seed_bytes
-                seed_bytes = read(channel, n_seed_bytes)
-                @ipc_debug_log "    Seed: " Tuple(seed_bytes)
+                read!(channel, a_size)
+                @ipc_debug_log "    Size " Tuple(a_size)
+                a_size = reinterpret(Cint, a_size)
 
                 if n_dims > IPC_MAX_DIMS
                     println(stderr, "Client \"", client_name, "\" requested a ", n_dims, "D grid which is currently not allowed")
                     write(channel, zero(UInt8))
-                elseif prod(convert.(Ref(Int), size)) > max_grid_byte_size
-                    println(stderr, "Client \"", client_name, "\" requested too large a grid (", prod(size), ") and the request will fail")
+                elseif prod(convert.(Ref(Int), a_size)) > max_grid_byte_size
+                    println(stderr, "Client \"", client_name, "\" requested too large a grid (", prod(a_size), ") and the request will fail")
                     write(channel, zero(UInt8))
                 else
-                    result = GC.@preserve size seed_bytes begin
+                    write(channel, one(UInt8))
+
+                    initial_grid::Optional{Array{UInt8, convert(Int, n_dims)}} = if iszero(read(channel, UInt8))
+                        nothing
+                    else
+                        #TODO: Re-use an allocation for this
+                        a = Array{UInt8, convert(Int, n_dims)}(undef, a_size...)
+                        read!(channel, a)
+                        a
+                    end
+
+                    n_seed_bytes = read(channel, UInt32)
+                    @ipc_debug_log "    Seed bytes " n_seed_bytes
+                    seed_bytes = read(channel, n_seed_bytes)
+                    @ipc_debug_log "    Seed: " Tuple(seed_bytes)
+
+                    result = GC.@preserve a_size seed_bytes initial_grid begin
                         jmj_start(convert(Lib_ID, algo_id),
-                                convert(Cint, n_dims), pointer(size),
-                                convert(Cint, n_seed_bytes), pointer(seed_bytes))
+                                  convert(Cint, n_dims), pointer(a_size),
+                                  convert(Cint, n_seed_bytes), pointer(seed_bytes),
+                                  isnothing(initial_grid) ? Ptr{Cuchar}(C_NULL) : pointer(initial_grid))
                     end
                     if iszero(result)
                         write(channel, zero(UInt8))

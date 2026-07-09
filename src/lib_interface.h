@@ -38,11 +38,15 @@ JMJ_API int jmj_algo_close(JmjID algoID);
 //    on a grid of the given size,
 //    and optionally using the given seed (or a random one if no seed is provided).
 //
+//You may also provide a starting state, instead of the initial fill normally provided by the algorithm,
+//   otherwise pass null.
+//
 //Returns the ID of the new algorithm state (a positive sequential integer),
 //    or 0 if your arguments were invalid.
 JMJ_API JmjID jmj_start(JmjID algoID,
                         int nDims, const int* size,
-                        int nSeedBytes, const unsigned char* seedBytes);
+                        int nSeedBytes, const unsigned char* seedBytes,
+                        unsigned char* optionalInitialState);
 //Cleans up the given algorithm state, whether it was done running or not.
 //This also invalidates the grid memory ('jmj_grid()').
 //Returns whether the function succeeded (i.e. the ID exists).
