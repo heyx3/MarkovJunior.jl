@@ -101,11 +101,13 @@ float computeShadows(vec3 worldPos, vec3 worldLightDir,
     worldPos += (worldLightDir * shadowWorldBias);
 
     vec4 texel4 = worldToShadowTexel * vec4(worldPos, 1);
-    vec3 texel = texel4.xyz;// / texel4.w;
+    vec3 texel = texel4.xyz;
+    texel /= texel4.w;
     //texel.y = 1.0 - texel.y;
+    texel.z = 0.5 + (0.5 * texel.z);
 
-    //We calculate the shadowmap bounds to exactly cover the level bounds.
-    //If the position is outside the view of the shadow-map, then it is not in shadow.
+    //The shadowmap bounds exactly cover the level bounds.
+    //Therefore, if the position is outside the view of the shadow-map then it is not in shadow.
     if (any(lessThan(texel.xy, vec2(0))) || any(greaterThan(texel.xy, vec2(1))))
         return 1.0;
     float shadowMask = textureLod(shadowmap, texel, 0);
