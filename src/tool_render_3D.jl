@@ -376,7 +376,7 @@ function FullViewport(resolution::Vec2{<:Integer}, start_pos::Vec3)
         ),
         Cam3D_Settings{Float32}(),
 
-        0.01f0,
+        -0.1f0,
 
         view_color,
         Optional{Int}[ ],

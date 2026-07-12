@@ -104,7 +104,7 @@ float computeShadows(vec3 worldPos, vec3 worldLightDir,
     vec3 texel = texel4.xyz;
     texel /= texel4.w;
     //texel.y = 1.0 - texel.y;
-    texel.z = 0.5 + (0.5 * texel.z);
+    texel.z = 0.5 + (0.5 * texel.z);  //Convert the (-1,+1) depth into 0-1 depth map value
 
     //The shadowmap bounds exactly cover the level bounds.
     //Therefore, if the position is outside the view of the shadow-map then it is not in shadow.
