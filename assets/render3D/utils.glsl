@@ -1,7 +1,7 @@
 #define PI (3.1415926535897932384626433832795)
 #define PI2 (PI * 2.0)
 
-#define OSCILLATE(a, b, input) (mix((a), (b), 0.5 + (0.5 * sin(PI2 * (input)))))
+#define OSCILLATE(a, b, inp) (mix((a), (b), 0.5 + (0.5 * sin(PI2 * (inp)))))
 
 #define INV_LERP(a, b, x) (((x)-(a)) / ((b)-(a)))
 #define SATURATE(x) clamp(x, 0.0, 1.0)

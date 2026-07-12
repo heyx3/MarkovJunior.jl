@@ -12,6 +12,16 @@ const gVec4 = Bplus.GUI.gVec4
 "A color that indicates a GUI widget is debug-only"
 const GUI_DEBUG_COLOR = v3f(0.2, 0.2, 0.2)
 
+
+"C-friendly array of material name strings"
+const MATERIAL_NAMES_C_ARRAY_RUNTIME = map(i -> Ptr{UInt8}(C_NULL), Render3D.MATERIAL_NAMES)
+push!(RUN_ON_INIT, () -> begin
+    for (i, name) in enumerate(Render3D.MATERIAL_NAMES)
+        MATERIAL_NAMES_C_ARRAY_RUNTIME[i] = pointer(name)
+    end
+end)
+
+
 "User state that should persist between program runs; serializable to/from JSON"
 mutable struct GuiMemory
     #TODO: Window size/fullscreen
@@ -1027,16 +1037,58 @@ function gui_main(runner::GuiRunner, delta_seconds::Float32, cam_input::Cam3D_In
         print_wnd_sizes && println("Legend wnd: ", CImGui.GetWindowSize())
         CImGui.Separator(); CImGui.SameLine(30); CImGui.Text("Legend")
         gui_within_group() do
-            for (color, greyscale, text) in GUI_LEGEND_DATA
-                gui_draw_rect(
-                    GuiDrawCursorRelative(Box2Df(
-                        min=v2f(0, 0),
-                        size=v2f(15, 15)
-                    ), true),
-                    GuiDrawFilled(color)
-                )
-                CImGui.SameLine()
-                CImGui.Text(text)
+            # If rendering 3D, this is also where we edit each cell type's Material.
+            scene_materials = if runner.rendering[1] isa Val{3}
+                (runner.rendering[2]::Render3D.Scene).cell_materials
+            else
+                Iterators.repeated(nothing)
+            end
+
+            for (i, (color, greyscale, text), scene_material) in zip(1:N_CELL_TYPES, GUI_LEGEND_DATA, scene_materials)
+                gui_with_nested_id(i) do
+                    gui_draw_rect(
+                        GuiDrawCursorRelative(Box2Df(
+                            min=v2f(0, 0),
+                            size=v2f(15, 15)
+                        ), true),
+                        GuiDrawFilled(color)
+                    )
+                    CImGui.SameLine()
+                    CImGui.Text(text)
+
+                    if exists(scene_material)
+                        CImGui.Dummy(20, 1)
+                        CImGui.SameLine()
+                        gui_with_item_width(100) do
+                            @c CImGui.Combo("##Type", &scene_material.mode,
+                                            MATERIAL_NAMES_C_ARRAY_RUNTIME,
+                                            length(MATERIAL_NAMES_C_ARRAY_RUNTIME),
+                                            length(MATERIAL_NAMES_C_ARRAY_RUNTIME))
+                        end
+                        gui_with_item_width(50) do
+                            if scene_material.mode in tuple(Render3D.UBO_MATERIAL_DIELECTRIC, Render3D.UBO_MATERIAL_METAL)
+                                CImGui.SameLine(0, 10)
+                                @c CImGui.SliderFloat("Rough", &scene_material.roughness, 0, 1,
+                                                      "%.2f", LibCImGui.ImGuiSliderFlags_AlwaysClamp)
+                            end
+                        end
+                        gui_with_item_width(200) do
+                            if scene_material.mode in tuple(Render3D.UBO_MATERIAL_DIELECTRIC,
+                                                            Render3D.UBO_MATERIAL_METAL,
+                                                            Render3D.UBO_MATERIAL_GLASS,
+                                                            Render3D.UBO_MATERIAL_LIGHT_SOURCE)
+                            #begin
+                                CImGui.SameLine(0, 10)
+                                @c CImGui.ColorEdit3("##Albedo", &scene_material.albedo,
+                                                     LibCImGui.ImGuiColorEditFlags_HDR |
+                                                       #LibCImGui.ImGuiColorEditFlags_NoSidePreview |
+                                                       LibCImGui.ImGuiColorEditFlags_Float |
+                                                       LibCImGui.ImGuiColorEditFlags_InputRGB)
+                            end
+                        end
+                        CImGui.Dummy(1, 20)
+                    end
+                end
             end
         end
 

@@ -36,7 +36,7 @@ void main() {
     int cellValue = int(texelFetch(gridTex, gridCell, 0).r);
 
     //If this cell is meant to be empty, discard the primitive.
-    if (u_data.cell_air_lookup[cellValue])
+    if (u_data.cell_materials[cellValue].mode == CELL_MATERIAL_EMPTY)
     {
         #if !DEPTH_ONLY
             o_cellValue = cellValue;
@@ -113,57 +113,30 @@ in vec2 o_faceUV;
 void main() {
 #if !DEPTH_ONLY
 
-    //For now, look up color in a hard-coded table matching the 2D renderer.
-    vec3 pixelColorTable[] = {
-        vec3(0.05),
-        vec3(0.5),
-        vec3(0.95),
-
-        vec3(1, 0.05, 0.05),
-        vec3(0.05, 1, 0.05),
-        vec3(0.05, 0.05, 1),
-        vec3(1, 1, 0.05),
-        vec3(1, 0.05, 1),
-        vec3(0.05, 1, 1),
-
-        vec3(1, 0.5, 0.05),
-        vec3(1, 0.05, 0.5),
-
-        vec3(0.05, 0.5, 0.2),
-        vec3(0.05, 0.2, 0.5),
-        vec3(0.5, 0.2, 0.05),
-
-        vec3(1, 0.9, 0.8),
-        vec3(0.7, 0.85, 1)
-    };
-    vec3 albedo = pixelColorTable[o_cellValue];
-
-    //Make darker blocks metallic.
-    float metallic = step(max(albedo.x, max(albedo.y, albedo.z)), 0.3);
-
-    //Make roughness based on the pixel's integer value.
-    float roughness = mix(0.15, 1.0, float(o_cellValue) / 16.0);
-
     //Compute coordinate stuff.
     vec3 fragToCamera = u_data.cam_pos - o_gridPosF;
     float distToCamera = length(fragToCamera);
     vec3 dirTowardsCamera = fragToCamera / max(0.000001, distToCamera);
 
     //Compute lighting.
-    vec3 litColor = microfacetLighting(
-        o_normal, dirTowardsCamera,
-        -u_data.sun_dir, u_data.sun_color,
-        albedo, metallic, roughness
-    );
-    float shadowMask = computeShadows(
-        o_gridPosF,
-        u_data.sun_dir,
-        sampler2DShadow(u_data.sun_shadowmap),
-        u_data.sun_shadowmap_mat_world_to_texel,
-        u_data.shadowmap_world_bias
-    );
-
-    outColor = vec4(litColor * shadowMask, 1);
+    UboData_Material mat = u_data.cell_materials[o_cellValue];
+    if (!u_data.lighting_enabled || mat.mode == CELL_MATERIAL_LIGHT_SOURCE) {
+        outColor = vec4(mat.albedo, 1);
+    } else {
+        float shadowMask = computeShadows(
+            o_gridPosF,
+            u_data.sun_dir,
+            sampler2DShadow(u_data.sun_shadowmap),
+            u_data.sun_shadowmap_mat_world_to_texel,
+            u_data.shadowmap_world_bias
+        );
+        vec3 litColor = microfacetLighting(
+            o_normal, dirTowardsCamera,
+            -u_data.sun_dir, u_data.sun_color * shadowMask,
+            mat.albedo, (mat.mode == CELL_MATERIAL_DIELECTRIC) ? 0.0 : 1.0, mat.roughness
+        );
+        outColor = vec4(litColor, 1);
+    }
 
 #endif
 }

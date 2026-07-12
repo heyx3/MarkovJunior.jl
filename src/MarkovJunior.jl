@@ -67,6 +67,7 @@ using MacroTools, HybridStructs, NamedTupleTools, ConcurrentUtilities
 using OrderedCollections, StaticArrays, DataStructures, Statistics, Combinatorics
 using StructTypes, JSON3, ArgParse
 using GLFW, CImGui, CSyntax
+const LibCImGui = CImGui.LibCImGui
 
 using Bplus; @using_bplus
 

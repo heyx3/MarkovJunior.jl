@@ -2,12 +2,49 @@ module Render3D
 
 using Setfield, CSyntax
 using CImGui
-using Bplus
-@using_bplus
+using Bplus; @using_bplus
 
 using ..MarkovJunior: path_asset,
-                      CellTypeSet, N_CELL_TYPES,
+                      CellTypeSet, N_CELL_TYPES, CELL_TYPES,
                       CellGrid, CellGridConcrete
+
+"Definition of the Material data for one cell color"
+@std140 struct UboData_Material
+    mode::Int32 # see UBO_MATERIAL_[x] constants below
+    roughness::Float32
+    albedo::v3f
+end
+const UBO_MATERIAL_EMPTY = Int32(0)
+const UBO_MATERIAL_GLASS = Int32(1)
+const UBO_MATERIAL_DIELECTRIC = Int32(2)
+const UBO_MATERIAL_METAL = Int32(3)
+const UBO_MATERIAL_LIGHT_SOURCE = Int32(4)
+
+const DEFAULT_UBO_MATERIALS = let mats = StaticBlockArray{N_CELL_TYPES, UboData_Material}()
+    for i in 1:N_CELL_TYPES
+        mats[i].roughness = lerp(0.15f0, 1.0f0, convert(Float32, i) / 16.0)
+        mats[i].albedo = CELL_TYPES[i].color
+
+        mats[i].mode = if i === 1
+            UBO_MATERIAL_EMPTY
+        elseif i == 6
+            UBO_MATERIAL_GLASS
+        # Make darker blocks metallic.
+        elseif maximum(CELL_TYPES[i].color) < 0.3f0
+            UBO_MATERIAL_METAL
+        else
+            UBO_MATERIAL_DIELECTRIC
+        end
+    end
+    mats
+end
+const MATERIAL_NAMES::Vector{String} = [
+    "Empty space",
+    "Glass",
+    "Dielectric",
+    "Metal",
+    "Light Source"
+]
 
 
 "All the data available to shaders, in one UBO"
@@ -25,13 +62,28 @@ using ..MarkovJunior: path_asset,
 
     shadowmap_world_bias::Float32
 
-    cell_air_lookup::StaticBlockArray{N_CELL_TYPES, Bool}
+    cell_materials::StaticBlockArray{N_CELL_TYPES, UboData_Material}
+    lighting_enabled::Bool
 end
 const UBO_DATA_SHADER_SRC = """
+    struct UboData_Material {
+        $(glsl_decl(UboData_Material))
+    };
+    #define CELL_MATERIAL_EMPTY $(UBO_MATERIAL_EMPTY)
+    #define CELL_MATERIAL_GLASS $(UBO_MATERIAL_GLASS)
+    #define CELL_MATERIAL_DIELECTRIC $(UBO_MATERIAL_DIELECTRIC)
+    #define CELL_MATERIAL_METAL $(UBO_MATERIAL_METAL)
+    #define CELL_MATERIAL_LIGHT_SOURCE $(UBO_MATERIAL_LIGHT_SOURCE)
     layout(std140, binding=0) uniform UniformBlock {
         $(glsl_decl(UboData))
     } u_data;
 """
+function default_ubo_data()
+    ubo = UboData()
+    ubo.cell_materials = DEFAULT_UBO_MATERIALS
+    ubo.lighting_enabled = true
+    return ubo
+end
 
 
 ###########
@@ -107,11 +159,11 @@ function recompile_shaders!(a::App)
         $(read(path_asset("render3D/render_cubes.glsl"), String))
     """
     replace_shader(:render_cubes_depth, """
-        #define DEPTH_ONY 1
+        #define DEPTH_ONLY 1
         $shader_src_render_cubes
     """)
     replace_shader(:render_cubes_forward, """
-        #define DEPTH_ONY 0
+        #define DEPTH_ONLY 0
         $shader_src_render_cubes
     """)
 
@@ -194,7 +246,7 @@ function BasicViewport(resolution::Vec2{<:Integer}, start_pos::Vec3
 
         flip_face_culling,
 
-        UboData(), Buffer(true, UboData)
+        default_ubo_data(), Buffer(true, UboData)
     )
 end
 Base.close(v::BasicViewport) = close.((
@@ -208,11 +260,11 @@ mutable struct Scene
     grid_tex_3D::Texture
     grid_buffer_3D::CellGridConcrete{3}
 
-    air_cells::CellTypeSet
+    cell_materials::StaticBlockArray{N_CELL_TYPES, UboData_Material}
+
     sun_color_hdr::v3f
     sun_dir::v3f
     sun_dir_gui_buffer::Ref{Float32}
-    #TODO: Floor, Sky, Fog, Per-pixel Materials
 
     sun_pov::BasicViewport
     sun_shadowmap_viewproj::fmat4x4
@@ -235,7 +287,11 @@ function Scene(; sun_dir::v3f = norm(v3f(1, -1, -1)),
         ),
         fill(zero(UInt8), 1, 1, 1),
 
-        CellTypeSet('b'),
+        let sba = StaticBlockArray{N_CELL_TYPES, UboData_Material}()
+            copyto!(sba, DEFAULT_UBO_MATERIALS)
+            sba
+        end,
+
         sun_color, sun_dir,
         Ref{Float32}(0),
 
@@ -326,7 +382,7 @@ function tick_scene!(scene::Scene, delta_seconds::Float32, app::App)
     render(app, scene, scene.sun_pov)
 end
 
-"Runs some Dear ImGUI widgets to edit this scene's settings"
+"Runs some Dear ImGUI widgets to edit this scene's settings (not Materials; that's done elsewhere)"
 function scene_settings_gui!(scene::Scene)
     CImGui.Separator(); CImGui.SameLine(30); CImGui.Text("Sun")
     @c CImGui.ColorEdit3("Color##Sun", &scene.sun_color_hdr,
@@ -354,6 +410,7 @@ mutable struct FullViewport
     base::BasicViewport
     cam_settings::Cam3D_Settings{Float32}
 
+    lighting_enabled::Bool
     shadowmap_world_bias::Float32
 
     view_color::Texture
@@ -376,7 +433,7 @@ function FullViewport(resolution::Vec2{<:Integer}, start_pos::Vec3)
         ),
         Cam3D_Settings{Float32}(),
 
-        -0.1f0,
+        true,  -0.1f0,
 
         view_color,
         Optional{Int}[ ],
@@ -403,7 +460,6 @@ else
 end
 
 
-
 "Resets this viewport's position to oversee a new grid of the given resolution"
 function on_new_grid!(viewport::FullViewport, new_grid_size::Vec3{<:Integer})
     viewport.cam = let c = viewport.cam
@@ -417,6 +473,8 @@ end
 
 "Runs some Dear ImGUI widgets to edit this viewport's settings"
 function viewport_settings_gui!(viewport::FullViewport, scene::Scene)
+    @c CImGui.Checkbox("Lights/shadows", &viewport.lighting_enabled)
+
     CImGui.Separator(); CImGui.SameLine(30); CImGui.Text("Camera")
     viewport.cam = let c = viewport.cam
         p = c.pos
@@ -448,6 +506,12 @@ function render(app::App, scene::Scene, view::Union{BasicViewport, FullViewport}
     )
     view.render_buffer_cpu.sun_dir = scene.sun_dir
     view.render_buffer_cpu.sun_color = scene.sun_color_hdr
+    view.render_buffer_cpu.lighting_enabled = if view isa FullViewport
+        view.lighting_enabled
+    else
+        true
+    end
+    copyto!(view.render_buffer_cpu.cell_materials, scene.cell_materials)
     # If this viewport *is* the sun's shadowmap, use a dummy shadowmap here.
     sun_shadowmap_tex = if view == scene.sun_pov
         app.dummy_depth_tex
@@ -466,9 +530,6 @@ function render(app::App, scene::Scene, view::Union{BasicViewport, FullViewport}
         view.shadowmap_world_bias
     else
         0.0f0
-    end
-    for i in 1:N_CELL_TYPES
-        view.render_buffer_cpu.cell_air_lookup[i] = (i-1) in scene.air_cells
     end
 
     # Upload the UBO data.
