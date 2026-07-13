@@ -13,10 +13,10 @@ const gVec4 = Bplus.GUI.gVec4
 const GUI_DEBUG_COLOR = v3f(0.2, 0.2, 0.2)
 
 
-"C-friendly array of material name strings"
-const MATERIAL_NAMES_C_ARRAY_RUNTIME = map(i -> Ptr{UInt8}(C_NULL), Render3D.MATERIAL_NAMES)
+const MATERIAL_NAMES = [ string(m) for m in Render3D.UboMaterialMode.instances() ]
+const MATERIAL_NAMES_C_ARRAY_RUNTIME = [ Ptr{UInt8}(C_NULL) for _ in MATERIAL_NAMES ]
 push!(RUN_ON_INIT, () -> begin
-    for (i, name) in enumerate(Render3D.MATERIAL_NAMES)
+    for (i, name) in enumerate(MATERIAL_NAMES)
         MATERIAL_NAMES_C_ARRAY_RUNTIME[i] = pointer(name)
     end
 end)
@@ -28,6 +28,7 @@ mutable struct GuiMemory
 
     next_dimensionality::Int
     next_resolution::Vector{Int32}
+    legend_edits_materials::Bool
 
     current_scene_file_name::String
     current_scene_src::String
@@ -45,15 +46,16 @@ mutable struct GuiMemory
 
     render3D_sun_color::v3f
     render3D_sun_dir::v3f
+    render3D_ambient_light::v3f
 end
 GuiMemory() = GuiMemory(
-    2, [ 64, 64 ],
+    2, [ 64, 64 ], false,
     FALLBACK_SCENE_NAME, read(path_scene(FALLBACK_SCENE_NAME), String),
     "0x1234567890abcdef",
     "MyScene",
     false, false, 150, 10, 1000, 10,
     2,
-    v3f(1, 1, 1), vnorm(v3f(1, -1, -1))
+    v3f(1, 1, 1), vnorm(v3f(1, -1, -1)), v3f(0.05, 0.05, 0.05)
 )
 StructTypes.StructType(::Type{GuiMemory}) = StructTypes.Mutable()
 
@@ -177,7 +179,7 @@ function GuiRunner(memory::GuiMemory,
                     sun_dir=memory.render3D_sun_dir,
                     sun_color=memory.render3D_sun_color
                 ),
-                Render3D.FullViewport(v2i(1200, 1200), v3f(3, 3, 3))
+                Render3D.FullViewport(v2i(1200, 1200), v3f(3, 3, 3), memory.render3D_ambient_light)
             )
         else
             error("Unhandled: ", memory.rendering_dim)
@@ -512,6 +514,7 @@ function gui_main(runner::GuiRunner, delta_seconds::Float32, cam_input::Cam3D_In
             # Remember the current settings.
             runner.memory.render3D_sun_dir = runner.rendering[2].sun_dir
             runner.memory.render3D_sun_color = runner.rendering[2].sun_color_hdr
+            runner.memory.render3D_ambient_light = runner.rendering[3].ambient_light
         else
             error("Unhandled: ", typeof(runner.rendering))
         end
@@ -556,7 +559,7 @@ function gui_main(runner::GuiRunner, delta_seconds::Float32, cam_input::Cam3D_In
                         sun_dir = runner.memory.render3D_sun_dir,
                         sun_color = runner.memory.render3D_sun_color
                     ),
-                    Render3D.FullViewport(v2i(1200, 1200), v3f(3, 3, 3))
+                    Render3D.FullViewport(v2i(1200, 1200), v3f(3, 3, 3), runner.memory.ambient_light)
                 )
                 (_, scene::Render3D.Scene, viewport::Render3D.FullViewport) = runner.rendering
 
@@ -1036,9 +1039,13 @@ function gui_main(runner::GuiRunner, delta_seconds::Float32, cam_input::Cam3D_In
     gui_window("Legend", C_NULL, pane_flags) do
         print_wnd_sizes && println("Legend wnd: ", CImGui.GetWindowSize())
         CImGui.Separator(); CImGui.SameLine(30); CImGui.Text("Legend")
+        if runner.rendering[1] isa Val{3}
+            CImGui.SameLine(85)
+            @c CImGui.Checkbox("Edit Materials", &runner.memory.legend_edits_materials)
+        end
         gui_within_group() do
             # If rendering 3D, this is also where we edit each cell type's Material.
-            scene_materials = if runner.rendering[1] isa Val{3}
+            scene_materials = if (runner.rendering[1] isa Val{3}) && runner.memory.legend_edits_materials
                 (runner.rendering[2]::Render3D.Scene).cell_materials
             else
                 Iterators.repeated(nothing)
@@ -1066,18 +1073,19 @@ function gui_main(runner::GuiRunner, delta_seconds::Float32, cam_input::Cam3D_In
                                             length(MATERIAL_NAMES_C_ARRAY_RUNTIME))
                         end
                         gui_with_item_width(50) do
-                            if scene_material.mode in tuple(Render3D.UBO_MATERIAL_DIELECTRIC, Render3D.UBO_MATERIAL_METAL)
+                            if scene_material.mode in tuple(Render3D.UboMaterialMode.dielectric, Render3D.UboMaterialMode.metal, Render3D.UboMaterialMode.glass)
                                 CImGui.SameLine(0, 10)
                                 @c CImGui.SliderFloat("Rough", &scene_material.roughness, 0, 1,
                                                       "%.2f", LibCImGui.ImGuiSliderFlags_AlwaysClamp)
                             end
                         end
                         gui_with_item_width(200) do
-                            if scene_material.mode in tuple(Render3D.UBO_MATERIAL_DIELECTRIC,
-                                                            Render3D.UBO_MATERIAL_METAL,
-                                                            Render3D.UBO_MATERIAL_GLASS,
-                                                            Render3D.UBO_MATERIAL_LIGHT_SOURCE)
+                            if scene_material.mode in tuple(Render3D.UboMaterialMode.dielectric,
+                                                            Render3D.UboMaterialMode.metal,
+                                                            Render3D.UboMaterialMode.glass,
+                                                            Render3D.UboMaterialMode.light_source)
                             #begin
+                                CImGui.Dummy(20, 1)
                                 CImGui.SameLine(0, 10)
                                 @c CImGui.ColorEdit3("##Albedo", &scene_material.albedo,
                                                      LibCImGui.ImGuiColorEditFlags_HDR |
@@ -1086,7 +1094,7 @@ function gui_main(runner::GuiRunner, delta_seconds::Float32, cam_input::Cam3D_In
                                                        LibCImGui.ImGuiColorEditFlags_InputRGB)
                             end
                         end
-                        CImGui.Dummy(1, 20)
+                        CImGui.Dummy(1, 5)
                     end
                 end
             end

@@ -7,18 +7,32 @@ using Bplus; @using_bplus
 using ..MarkovJunior: path_asset,
                       CellTypeSet, N_CELL_TYPES, CELL_TYPES,
                       CellGrid, CellGridConcrete
+#
 
+
+@bp_enum(RenderPass,
+    depth_only, forward, transparent
+)
+const RENDER_PASS_SHADER_DEFS = string(
+    ("#define RENDER_PASS_$(uppercase(string(rp))) $(Int(rp))\n" for rp in RenderPass.instances())...
+)
+render_pass_shader_src(current_pass::E_RenderPass) = """
+    $RENDER_PASS_SHADER_DEFS
+    #define RENDER_PASS $(Int(current_pass))
+"""
+
+
+@bp_enum(UboMaterialMode::Int32,
+    empty, glass,
+    dielectric, metal,
+    light_source
+)
 "Definition of the Material data for one cell color"
 @std140 struct UboData_Material
-    mode::Int32 # see UBO_MATERIAL_[x] constants below
+    mode::E_UboMaterialMode
     roughness::Float32
     albedo::v3f
 end
-const UBO_MATERIAL_EMPTY = Int32(0)
-const UBO_MATERIAL_GLASS = Int32(1)
-const UBO_MATERIAL_DIELECTRIC = Int32(2)
-const UBO_MATERIAL_METAL = Int32(3)
-const UBO_MATERIAL_LIGHT_SOURCE = Int32(4)
 
 const DEFAULT_UBO_MATERIALS = let mats = StaticBlockArray{N_CELL_TYPES, UboData_Material}()
     for i in 1:N_CELL_TYPES
@@ -26,25 +40,18 @@ const DEFAULT_UBO_MATERIALS = let mats = StaticBlockArray{N_CELL_TYPES, UboData_
         mats[i].albedo = CELL_TYPES[i].color
 
         mats[i].mode = if i === 1
-            UBO_MATERIAL_EMPTY
+            UboMaterialMode.empty
         elseif i == 6
-            UBO_MATERIAL_GLASS
+            UboMaterialMode.glass
         # Make darker blocks metallic.
         elseif maximum(CELL_TYPES[i].color) < 0.3f0
-            UBO_MATERIAL_METAL
+            UboMaterialMode.metal
         else
-            UBO_MATERIAL_DIELECTRIC
+            UboMaterialMode.dielectric
         end
     end
     mats
 end
-const MATERIAL_NAMES::Vector{String} = [
-    "Empty space",
-    "Glass",
-    "Dielectric",
-    "Metal",
-    "Light Source"
-]
 
 
 "All the data available to shaders, in one UBO"
@@ -64,26 +71,20 @@ const MATERIAL_NAMES::Vector{String} = [
 
     cell_materials::StaticBlockArray{N_CELL_TYPES, UboData_Material}
     lighting_enabled::Bool
+    ambient_light::v3f
 end
 const UBO_DATA_SHADER_SRC = """
     struct UboData_Material {
         $(glsl_decl(UboData_Material))
     };
-    #define CELL_MATERIAL_EMPTY $(UBO_MATERIAL_EMPTY)
-    #define CELL_MATERIAL_GLASS $(UBO_MATERIAL_GLASS)
-    #define CELL_MATERIAL_DIELECTRIC $(UBO_MATERIAL_DIELECTRIC)
-    #define CELL_MATERIAL_METAL $(UBO_MATERIAL_METAL)
-    #define CELL_MATERIAL_LIGHT_SOURCE $(UBO_MATERIAL_LIGHT_SOURCE)
+    $((
+        "#define CELL_MATERIAL_$(uppercase(string(m))) $(Int32(m))\n"
+          for m in UboMaterialMode.instances()
+    )...)
     layout(std140, binding=0) uniform UniformBlock {
         $(glsl_decl(UboData))
     } u_data;
 """
-function default_ubo_data()
-    ubo = UboData()
-    ubo.cell_materials = DEFAULT_UBO_MATERIALS
-    ubo.lighting_enabled = true
-    return ubo
-end
 
 
 ###########
@@ -94,8 +95,7 @@ mutable struct App
     shader_src_utils::String
     shader_src_lighting::String
 
-    render_cubes_depth::Program
-    render_cubes_forward::Program
+    render_cube_passes::Dict{E_RenderPass, Program}
     visualize_depth_tex::Program
 
     dummy_depth_tex::Texture
@@ -116,7 +116,7 @@ function App()
     app = App(
         # Put in dummy shader data, then immediately call recompile_shaders!() below.
         "", "",
-        make_dummy_shader(), make_dummy_shader(),
+        Dict{E_RenderPass, Program}(),
         make_dummy_shader(),
         dummy_depth
     )
@@ -125,28 +125,34 @@ function App()
     return app
 end
 Base.close(a::App) = close.((
-    a.render_cubes_depth,
-    a.render_cubes_forward,
+    values(a.render_cube_passes)...,
     a.visualize_depth_tex,
     a.dummy_depth_tex
 ))
 
 function recompile_shaders!(a::App)
     # Only close the old ones if the new ones compile successfully.
-    function replace_shader(field::Symbol, new_src::String)
+    function replace_shader(field::Union{Symbol, E_RenderPass}, new_src::String)
         new_prog = try
             GL.bp_glsl_str(new_src)
         catch e
-            error("Failed to recompile app.", field, ": ", sprint(showerror, e))
+            error("Failed to recompile App shader ", field, ": ", sprint(showerror, e))
         end
-        close(getproperty(a, field))
-        setproperty!(a, field, new_prog)
+        if field isa Symbol
+            close(getproperty(a, field))
+            setproperty!(a, field, new_prog)
+        else
+            haskey(a.render_cube_passes, field) && close(a.render_cube_passes[field])
+            a.render_cube_passes[field] = new_prog
+        end
     end
 
     a.shader_src_utils = read(path_asset("render3D/utils.glsl"), String)
     a.shader_src_lighting = read(path_asset("render3D/lighting.glsl"), String)
 
-    shader_src_render_cubes = """
+    shader_src_render_cubes(pass::E_RenderPass) = """
+        #line 40000
+        $(render_pass_shader_src(pass))
         #line 10000
         $(a.shader_src_utils)
         #line 20000
@@ -158,14 +164,9 @@ function recompile_shaders!(a::App)
         #line 1
         $(read(path_asset("render3D/render_cubes.glsl"), String))
     """
-    replace_shader(:render_cubes_depth, """
-        #define DEPTH_ONLY 1
-        $shader_src_render_cubes
-    """)
-    replace_shader(:render_cubes_forward, """
-        #define DEPTH_ONLY 0
-        $shader_src_render_cubes
-    """)
+    for rp in RenderPass.instances()
+        replace_shader(rp, shader_src_render_cubes(rp))
+    end
 
     shader_src_viz_depth_tex = read(path_asset("render3D/render_depth_map.glsl"), String)
     shader_src_viz_depth_tex = replace(shader_src_viz_depth_tex,
@@ -246,7 +247,7 @@ function BasicViewport(resolution::Vec2{<:Integer}, start_pos::Vec3
 
         flip_face_culling,
 
-        default_ubo_data(), Buffer(true, UboData)
+        UboData(), Buffer(true, UboData)
     )
 end
 Base.close(v::BasicViewport) = close.((
@@ -411,13 +412,14 @@ mutable struct FullViewport
     cam_settings::Cam3D_Settings{Float32}
 
     lighting_enabled::Bool
+    ambient_light::v3f
     shadowmap_world_bias::Float32
 
     view_color::Texture
     view_target_outputs_depth_only::Vector{Optional{Int}}
     view_target_outputs_forward::Vector{Optional{Int}}
 end
-function FullViewport(resolution::Vec2{<:Integer}, start_pos::Vec3)
+function FullViewport(resolution::Vec2{<:Integer}, start_pos::Vec3, ambient_light::Vec3)
     view_color = Texture(
         SpecialFormats.rgb10_a2, resolution,
         sampler = TexSampler{2}(
@@ -433,7 +435,7 @@ function FullViewport(resolution::Vec2{<:Integer}, start_pos::Vec3)
         ),
         Cam3D_Settings{Float32}(),
 
-        true,  -0.1f0,
+        true, ambient_light, -0.1f0,
 
         view_color,
         Optional{Int}[ ],
@@ -474,6 +476,12 @@ end
 "Runs some Dear ImGUI widgets to edit this viewport's settings"
 function viewport_settings_gui!(viewport::FullViewport, scene::Scene)
     @c CImGui.Checkbox("Lights/shadows", &viewport.lighting_enabled)
+    if viewport.lighting_enabled
+        @c CImGui.ColorEdit3("Ambient Light", &viewport.ambient_light,
+                             CImGui.LibCImGui.ImGuiColorEditFlags_HDR |
+                               CImGui.LibCImGui.ImGuiColorEditFlags_Float |
+                               CImGui.LibCImGui.ImGuiColorEditFlags_InputRGB)
+    end
 
     CImGui.Separator(); CImGui.SameLine(30); CImGui.Text("Camera")
     viewport.cam = let c = viewport.cam
@@ -510,6 +518,11 @@ function render(app::App, scene::Scene, view::Union{BasicViewport, FullViewport}
         view.lighting_enabled
     else
         true
+    end
+    view.render_buffer_cpu.ambient_light = if view isa FullViewport
+        view.ambient_light
+    else
+        v3f(0, 0, 0)
     end
     copyto!(view.render_buffer_cpu.cell_materials, scene.cell_materials)
     # If this viewport *is* the sun's shadowmap, use a dummy shadowmap here.
@@ -556,7 +569,7 @@ function render(app::App, scene::Scene, view::Union{BasicViewport, FullViewport}
     end
     target_clear(view.view_target, @f32(1))
     render_mesh(
-        empty_mesh, app.render_cubes_depth,
+        empty_mesh, app.render_cube_passes[RenderPass.depth_only],
         shape=PrimitiveTypes.triangle,
         elements = IntervalU(
             min=1,
@@ -564,19 +577,21 @@ function render(app::App, scene::Scene, view::Union{BasicViewport, FullViewport}
         )
     )
 
-    # Do the forward pass.
+    # Do the color passes.
     if view isa FullViewport
         target_configure_fragment_outputs(view.view_target, view.view_target_outputs_forward)
         set_depth_test(ValueTests.less_than_or_equal)
         target_clear(view.view_target, v4f(0.7, 0.7, 1, 1))
         render_mesh(
-            empty_mesh, app.render_cubes_forward,
+            empty_mesh, app.render_cube_passes[RenderPass.forward],
             shape=PrimitiveTypes.triangle,
             elements = IntervalU(
                 min=1,
                 size=n_verts
             )
         )
+
+        #TODO: Transparent/glass passes
     end
 
     # Clean up.

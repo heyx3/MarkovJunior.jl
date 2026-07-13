@@ -37,7 +37,7 @@ float geometrySmith(float diffuseNormalAndCamera,
 //Implements a microfacet lighting model, using approximations for various factors
 //    (see the functions above).
 vec3 microfacetLighting(vec3 normal, vec3 towardsCameraN, vec3 towardsLightN,
-                        vec3 lightIrradiance,
+                        vec3 lightIrradiance, vec3 ambientLight,
                         vec3 albedo, float metallic, float roughness) {
     vec3 idealNormal = normalize(towardsLightN + towardsCameraN);
 
@@ -55,10 +55,10 @@ vec3 microfacetLighting(vec3 normal, vec3 towardsCameraN, vec3 towardsLightN,
           G = geometrySmith(normalClosenessToCamera, diffuseStrength, roughness);
 
     vec3 specular = F * (NDF * G / max(0.0001, 4.0 * normalClosenessToCamera * diffuseStrength));
-    vec3 totalLight = (((energyOfDiffuse / PI) * albedo) + specular) *
-                      lightIrradiance * diffuseStrength;
+    vec3 totalLocalLight = (((energyOfDiffuse / PI) * albedo) + specular) *
+                            lightIrradiance * diffuseStrength;
 
-    return totalLight;
+    return totalLocalLight + (albedo * ambientLight);
 }
 
 //Computes the amount of global height-fog between the camera and the fragment.

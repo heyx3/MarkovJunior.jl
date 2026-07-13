@@ -1,6 +1,13 @@
 //Cubes will be rendered by dispatching 36 vertices per grid cell
 //  and discarding ones for the cells which represent air.
 
+#if (RENDER_PASS == RENDER_PASS_FORWARD) || (RENDER_PASS == RENDER_PASS_TRANSPARENT)
+    #define DEPTH_ONLY 0
+#else
+    #define DEPTH_ONLY 1
+#endif
+
+
 #START_VERTEX
 
 #if !DEPTH_ONLY
@@ -34,9 +41,11 @@ void main() {
         (cubeIdx / (gridResolution.x * gridResolution.y)) % gridResolution.z
     );
     int cellValue = int(texelFetch(gridTex, gridCell, 0).r);
+    UboData_Material cellMat = u_data.cell_materials[cellValue];
 
     //If this cell is meant to be empty, discard the primitive.
-    if (u_data.cell_materials[cellValue].mode == CELL_MATERIAL_EMPTY)
+    if (cellMat.mode == CELL_MATERIAL_EMPTY ||
+        ((RENDER_PASS == RENDER_PASS_TRANSPARENT) != (cellMat.mode == CELL_MATERIAL_GLASS)))
     {
         #if !DEPTH_ONLY
             o_cellValue = cellValue;
@@ -45,6 +54,7 @@ void main() {
             o_gridPosF = vec3(0, 0, 0);
             o_normal = vec3(0, 0, 0);
         #endif
+
         gl_Position = vec4(MAKE_NAN32, MAKE_NAN32, MAKE_NAN32, -1);
         return;
     }
@@ -132,7 +142,7 @@ void main() {
         );
         vec3 litColor = microfacetLighting(
             o_normal, dirTowardsCamera,
-            -u_data.sun_dir, u_data.sun_color * shadowMask,
+            -u_data.sun_dir, u_data.sun_color * shadowMask, u_data.ambient_light,
             mat.albedo, (mat.mode == CELL_MATERIAL_DIELECTRIC) ? 0.0 : 1.0, mat.roughness
         );
         outColor = vec4(litColor, 1);
