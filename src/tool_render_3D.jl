@@ -423,6 +423,7 @@ mutable struct FullViewport
     view_color::Texture
     view_target_outputs_depth_only::Vector{Optional{Int}}
     view_target_outputs_forward::Vector{Optional{Int}}
+    view_target_outputs_transparent::Vector{Optional{Int}}
 end
 function FullViewport(resolution::Vec2{<:Integer}, start_pos::Vec3, ambient_light::Vec3)
     view_color = Texture(
@@ -444,6 +445,7 @@ function FullViewport(resolution::Vec2{<:Integer}, start_pos::Vec3, ambient_ligh
 
         view_color,
         Optional{Int}[ ],
+        Optional{Int}[ 1 ],
         Optional{Int}[ 1 ]
     )
 end
@@ -567,36 +569,59 @@ function render(app::App, scene::Scene, view::Union{BasicViewport, FullViewport}
     n_tris = n_faces * 2
     n_verts = n_tris * 3
     empty_mesh = service_BasicGraphics().empty_mesh
+    cubes_draw_call(pass::E_RenderPass) = render_mesh(
+        empty_mesh,
+        app.render_cube_passes[pass],
+        shape=PrimitiveTypes.triangle,
+        elements=IntervalU(min=1, size=n_verts)
+    )
 
     # Do the depth pre-pass.
     if view isa FullViewport
         target_configure_fragment_outputs(view.view_target, view.view_target_outputs_depth_only)
     end
+    set_render_state(RenderState(
+        depth_test = ValueTests.less_than,
+        cull_mode = view.flip_face_culling ? FaceCullModes.backwards : FaceCullModes.on,
+        depth_write = true,
+        viewport = Box2Di(min=one(v2i), size=convert(v2i, view.view_target.size)),
+        scissor = nothing
+    ))
     target_clear(view.view_target, @f32(1))
-    render_mesh(
-        empty_mesh, app.render_cube_passes[RenderPass.depth_only],
-        shape=PrimitiveTypes.triangle,
-        elements = IntervalU(
-            min=1,
-            size=n_verts
-        )
-    )
+    cubes_draw_call(RenderPass.depth_only)
 
     # Do the color passes.
     if view isa FullViewport
+        # Forward/opaque:
         target_configure_fragment_outputs(view.view_target, view.view_target_outputs_forward)
-        set_depth_test(ValueTests.less_than_or_equal)
+        set_render_state(RenderState(
+            blend_mode = (
+                rgb = make_blend_opaque(BlendStateRGB),
+                alpha = make_blend_opaque(BlendStateAlpha)
+            ),
+            depth_test = ValueTests.less_than_or_equal,
+            cull_mode = view.flip_face_culling ? FaceCullModes.backwards : FaceCullModes.on,
+            depth_write = true,
+            viewport = Box2Di(min=one(v2i), size=convert(v2i, view.view_target.size)),
+            scissor = nothing
+        ))
         target_clear(view.view_target, v4f(0.7, 0.7, 1, 1))
-        render_mesh(
-            empty_mesh, app.render_cube_passes[RenderPass.forward],
-            shape=PrimitiveTypes.triangle,
-            elements = IntervalU(
-                min=1,
-                size=n_verts
-            )
-        )
+        cubes_draw_call(RenderPass.forward)
 
-        #TODO: Transparent/glass passes
+        # Transparent:
+        target_configure_fragment_outputs(view.view_target, view.view_target_outputs_transparent)
+        set_render_state(RenderState(
+            blend_mode = (
+                rgb = make_blend_alpha(BlendStateRGB),
+                alpha = make_blend_additive(BlendStateAlpha)
+            ),
+            depth_test = ValueTests.less_than_or_equal,
+            cull_mode = view.flip_face_culling ? FaceCullModes.backwards : FaceCullModes.on,
+            depth_write = false,
+               viewport = Box2Di(min=one(v2i), size=convert(v2i, view.view_target.size)),
+               scissor = nothing
+        ))
+        cubes_draw_call(RenderPass.transparent)
     end
 
     # Clean up.
