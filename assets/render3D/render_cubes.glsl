@@ -130,9 +130,12 @@ void main() {
 
     //Compute lighting.
     UboData_Material mat = u_data.cell_materials[o_cellValue];
-    if (!u_data.lighting_enabled || mat.mode == CELL_MATERIAL_LIGHT_SOURCE) {
-        outColor = vec4(mat.albedo, 1);
-    } else {
+    if (!u_data.lighting_enabled || mat.mode == CELL_MATERIAL_LIGHT_SOURCE)
+    {
+        outColor = vec4(mat.albedo, mat.opacity);
+    }
+    else
+    {
         float shadowMask = computeShadows(
             o_gridPosF,
             u_data.sun_dir,
@@ -145,8 +148,9 @@ void main() {
             -u_data.sun_dir, u_data.sun_color * shadowMask, u_data.ambient_light,
             mat.albedo, (mat.mode == CELL_MATERIAL_DIELECTRIC) ? 0.0 : 1.0, mat.roughness
         );
-        outColor = vec4(litColor, 1);
+        outColor = vec4(litColor, mat.opacity);
     }
+
 
 #endif
 }

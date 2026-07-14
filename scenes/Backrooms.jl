@@ -21,12 +21,12 @@
 		_ _ _
 		_ E _
 		_ _ _
-	]
+	] \[ (x, y)[ (+x, +y) ] ]
 
 	# Pick some areas, flood-fill them, and remove everything else.
 	@rewrite (area/8000) E=>G
 	@rewrite GE => GG
-	@rewrite E => b
+	@fill 'b' +E
 
 	# Try to connect the two areas if they aren't already,
 	#   using another flood-fill to detect that.

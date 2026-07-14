@@ -18,9 +18,7 @@
 		gbbb => ggg{Gb} %0.4 \[+y]
 	end
 	@rewrite G => b
-
-	# Finalize colors.
-	@rewrite 0 g => S %0.7
+	@rewrite bg => bb  \[ +y ] # Remove drip that has no source
 
 	# Add walls around the edges.
 	@rewrite [bg]I => _S

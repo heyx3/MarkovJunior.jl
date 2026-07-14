@@ -33,7 +33,7 @@ StructTypes = "856f2bd8-1eba-4b0a-8007-ebc267875bd4"
 
 [compat]
 ArgParse = "1.2.0"
-Bplus = "0.3.3"
+Bplus = "0.4.0"
 CImGui = "1.82.0"
 CSyntax = "0.4.1"
 ColorTypes = "0.12.1"

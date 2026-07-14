@@ -559,7 +559,7 @@ function gui_main(runner::GuiRunner, delta_seconds::Float32, cam_input::Cam3D_In
                         sun_dir = runner.memory.render3D_sun_dir,
                         sun_color = runner.memory.render3D_sun_color
                     ),
-                    Render3D.FullViewport(v2i(1200, 1200), v3f(3, 3, 3), runner.memory.ambient_light)
+                    Render3D.FullViewport(v2i(1200, 1200), v3f(3, 3, 3), runner.memory.render3D_ambient_light)
                 )
                 (_, scene::Render3D.Scene, viewport::Render3D.FullViewport) = runner.rendering
 
@@ -1058,7 +1058,7 @@ function gui_main(runner::GuiRunner, delta_seconds::Float32, cam_input::Cam3D_In
                             min=v2f(0, 0),
                             size=v2f(15, 15)
                         ), true),
-                        GuiDrawFilled(color)
+                        GuiDrawColorFilled(color)
                     )
                     CImGui.SameLine()
                     CImGui.Text(text)
@@ -1076,6 +1076,13 @@ function gui_main(runner::GuiRunner, delta_seconds::Float32, cam_input::Cam3D_In
                             if scene_material.mode in tuple(Render3D.UboMaterialMode.dielectric, Render3D.UboMaterialMode.metal, Render3D.UboMaterialMode.glass)
                                 CImGui.SameLine(0, 10)
                                 @c CImGui.SliderFloat("Rough", &scene_material.roughness, 0, 1,
+                                                      "%.2f", LibCImGui.ImGuiSliderFlags_AlwaysClamp)
+                            end
+                        end
+                        gui_with_item_width(50) do
+                            if scene_material.mode in tuple(Render3D.UboMaterialMode.glass)
+                                CImGui.SameLine(0, 10)
+                                @c CImGui.SliderFloat("Alpha", &scene_material.opacity, 0, 1,
                                                       "%.2f", LibCImGui.ImGuiSliderFlags_AlwaysClamp)
                             end
                         end

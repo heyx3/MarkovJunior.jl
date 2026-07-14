@@ -31,6 +31,7 @@ render_pass_shader_src(current_pass::E_RenderPass) = """
 @std140 struct UboData_Material
     mode::E_UboMaterialMode
     roughness::Float32
+    opacity::Float32
     albedo::v3f
 end
 
@@ -39,8 +40,10 @@ const DEFAULT_UBO_MATERIALS = let mats = StaticBlockArray{N_CELL_TYPES, UboData_
         mats[i].roughness = lerp(0.15f0, 1.0f0, convert(Float32, i) / 16.0)
         mats[i].albedo = CELL_TYPES[i].color
 
+        # Make black be empty space.
         mats[i].mode = if i === 1
             UboMaterialMode.empty
+        # Make Blue be glass.
         elseif i == 6
             UboMaterialMode.glass
         # Make darker blocks metallic.
@@ -49,6 +52,8 @@ const DEFAULT_UBO_MATERIALS = let mats = StaticBlockArray{N_CELL_TYPES, UboData_
         else
             UboMaterialMode.dielectric
         end
+        
+        mats[i].opacity = (mats[i].mode == UboMaterialMode.glass) ? 0.25f0 : 1.0f0
     end
     mats
 end
