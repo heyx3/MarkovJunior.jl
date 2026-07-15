@@ -319,11 +319,11 @@ function parse_markovjunior_op(::Val{Symbol("@fill")},
 
     # Parse the space type.
     space = try
-        DrawBoxSpace.from(Val(exSpace))
+        DrawBoxSpace.from(exSpace)
     catch e
         raise_parse_error(loc, inputs,
-                       "Invald space! Got `", space, "`; expected one of `",
-                          string.(DrawBoxSpace.instances()), "`")
+                          "Invald space! Got `", exSpace, "`; expected one of `",
+                            string.(DrawBoxSpace.instances()), "`")
     end
 
     # Parse the space arguments.

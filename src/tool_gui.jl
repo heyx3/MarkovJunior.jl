@@ -12,7 +12,7 @@ const gVec4 = Bplus.GUI.gVec4
 "A color that indicates a GUI widget is debug-only"
 const GUI_DEBUG_COLOR = v3f(0.2, 0.2, 0.2)
 
-
+# Set up a Dear ImGUI dropdown for materials by name.
 const MATERIAL_NAMES = [ string(m) for m in Render3D.UboMaterialMode.instances() ]
 const MATERIAL_NAMES_C_ARRAY_RUNTIME = [ Ptr{UInt8}(C_NULL) for _ in MATERIAL_NAMES ]
 push!(RUN_ON_INIT, () -> begin
@@ -20,6 +20,111 @@ push!(RUN_ON_INIT, () -> begin
         MATERIAL_NAMES_C_ARRAY_RUNTIME[i] = pointer(name)
     end
 end)
+
+
+const CELL_MAT_PRAGMA = :GuiMaterial
+"""
+Interpret a pragma statement about cell materials, updating the given array of them.
+If something goes wrong, an error/warning is logged to stderr.
+"""
+function interpret_pragma_gui_material!(materials::AbstractVector{<:Render3D.UboData_Material}, p_args)
+    # Grab the first argument, the color being configured.
+    if isempty(p_args)
+        @error "No arguments given for @pragma $CELL_MAT_PRAGMA"
+        return nothing
+    end
+    cell_code = first(p_args)
+    # Parse the color.
+    if !isa(cell_code, Symbol)
+        @error "First argument to @pragma $CELL_MAT_PRAGMA must be a cell color (e.g. R, w, L)! Got $cell_code"
+        return nothing
+    elseif !haskey(CELL_CODE_BY_SYMBOL, cell_code)
+        @error "Unexpected cell color in `@pragma $CELL_MAT_PRAGMA $cell_code ...`! Expected one of $(Tuple(t.name for t in CELL_TYPES))"
+        return nothing
+    end
+    cell_i = CELL_CODE_BY_SYMBOL[cell_code] + 1
+    cell_mat = materials[cell_i]
+
+    # Grab the second argument, the material type.
+    MaterialEnum = Render3D.UboMaterialMode
+    if length(p_args) < 2
+        @error "No material type given for @pragma $CELL_MAT_PRAGMA $cell_code! Expected one of $(Tuple(string(m) for m in MaterialEnum.instances()))"
+        return nothing
+    end
+    material_mode_symbol = first(Iterators.drop(p_args, 1))
+    material_mode = MaterialEnum.from(material_mode_symbol)
+    if isnothing(material_mode)
+        @error "Invalid material type given for @pragma $CELL_MAT_PRAGMA $cell_code $material_mode_symbol! Expected one of $(Tuple(string(m) for m in MaterialEnum.instances()))"
+        return nothing
+    end
+    cell_mat.mode = material_mode
+
+    # Set up parsing of subsequent arguments.
+    msg_header() = "@pragma $CELL_MAT_PRAGMA $cell_code $material_mode_symbol"
+    mode_args = Iterators.drop(p_args, 2)
+    n_mode_args = count(_->true, mode_args)
+    function try_parse_scalar(idx::Int, name, default)::Float32
+        @bp_check(default isa Real)
+
+        raw = if n_mode_args < idx
+            @warn "$(msg_header()) is missing the '$name' parameter, which will default to $default"
+            default
+        else
+            first(Iterators.drop(mode_args, idx-1))
+        end
+
+        return if !isa(raw, Real)
+            @warn "$(msg_header()) parameter '$name' is not a number literal! It will default to $default"
+            convert(Float32, default)
+        else
+            convert(Float32, raw)
+        end
+    end
+    function try_parse_vector(idx::Int, name, default::Vec)::typeof(default)
+        raw = if n_mode_args < idx
+            @warn "$(msg_header()) is missing the '$name' parameter, which will default to $default"
+            default
+        else
+            first(Iterators.drop(mode_args, idx-1))
+        end
+
+        return if raw isa Real
+            # Broadcast literal values across all components.
+            typeof(default)(i->raw)
+        elseif Base.isexpr(raw, :tuple)
+            if any(x -> !isa(x, Real), raw.args)
+                @warn "$(msg_header()) has a garbled '$name' parameter, which will now default to $(default.data)"
+                default
+            else
+                typeof(default)(raw.args...)
+            end
+        else
+            @warn "$(msg_header()) has a garbled '$name' parameter, which will now default to $(default.data)"
+            default
+        end
+    end
+    if material_mode == MaterialEnum.empty
+        if n_mode_args > 0
+            @warn "@pragma $CELL_MAT_PRAGMA $cell_code $material_mode_symbol has unnecessary arguments which will be ignored"
+        end
+    elseif material_mode == MaterialEnum.glass
+        cell_mat.opacity = try_parse_scalar(1, "opacity", 0.25)
+        cell_mat.roughness = try_parse_scalar(2, "roughness", 0.25)
+        cell_mat.albedo = try_parse_vector(3, "albedo", v3f(1, 0, 1))
+    elseif material_mode == MaterialEnum.dielectric
+        cell_mat.roughness = try_parse_scalar(1, "roughness", 0.75)
+        cell_mat.albedo = try_parse_vector(2, "albedo", v3f(1, 0, 1))
+    elseif material_mode == MaterialEnum.metal
+        cell_mat.roughness = try_parse_scalar(1, "roughness", 0.1)
+        cell_mat.albedo = try_parse_vector(2, "albedo", v3f(1, 0, 1))
+    elseif material_mode == MaterialEnum.light_source
+        cell_mat.albedo = try_parse_vector(1, "albedo", v3f(4, 1, 4))
+    else
+        error("Unhandled case: ", material_mode)
+    end
+    
+    return nothing
+end
 
 
 "User state that should persist between program runs; serializable to/from JSON"
@@ -131,7 +236,7 @@ function GuiRunner(memory::GuiMemory,
         )
         markov_algo_parse(read(path_scene(FALLBACK_SCENE_NAME), String))
     end
-
+    
     app = Render3D.App()
     runner = GuiRunner(
         memory,
@@ -211,6 +316,7 @@ function GuiRunner(memory::GuiMemory,
     else
         error("Unhandled: ", typeof(runner.rendering))
     end
+    interpret_all_pragma_gui_materials(runner, parsed_algo)
     update_gui_runner_scenes!(runner)
 
     return runner
@@ -349,6 +455,17 @@ function update_gui_runner_render_3D(runner::GuiRunner, rerender_view::Bool)
     runner.rendering = (Val(3), scene, viewport)
 end
 
+function interpret_all_pragma_gui_materials(runner::GuiRunner, algo::MarkovAlgorithm)
+    if runner.rendering[1] isa Val{3}
+        materials = runner.rendering[2].cell_materials
+        if haskey(runner.algorithm.pragmas_map, CELL_MAT_PRAGMA)
+            for statement_args in runner.algorithm.pragmas_map[CELL_MAT_PRAGMA]
+                interpret_pragma_gui_material!(materials, statement_args)
+            end
+        end
+    end
+    return nothing
+end
 function reset_gui_runner_algo(runner::GuiRunner,
                                parse_new_seed::Bool, parse_new_algorithm::Bool, update_resolution::Bool,
                                allow_run_to_end::Bool)
@@ -366,7 +483,9 @@ function reset_gui_runner_algo(runner::GuiRunner,
 
         @markovjunior_assert(runner.memory.current_scene_src == string(runner.next_algorithm))
         runner.algorithm = try
-            markov_algo_parse(runner.memory.current_scene_src)
+            a = markov_algo_parse(runner.memory.current_scene_src)
+            interpret_all_pragma_gui_materials(runner, a) # We only want to do this if parsing succeeds
+            a
         catch e
             runner.algorithm_error_msg = string(
                 "Failed to parse: ", sprint(showerror, e),
@@ -422,7 +541,6 @@ function reset_gui_runner_algo(runner::GuiRunner,
     end
 
     # Configure rendering.
-    #TODO: Inspect @pragma statements in the algorithm for render hints, otherwise use fixed/min dimensions of the algo, otherwise use current renderer
     if runner.rendering[1] isa Val{2}
         (_, array, tex) = runner.rendering
         if size(runner.algorithm_state.grid[]) != size(array)

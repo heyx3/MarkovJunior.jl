@@ -575,6 +575,7 @@ function render(app::App, scene::Scene, view::Union{BasicViewport, FullViewport}
         shape=PrimitiveTypes.triangle,
         elements=IntervalU(min=1, size=n_verts)
     )
+    viewport_area = Box2Di(min=one(v2i), size=view.view_target.size)
 
     # Do the depth pre-pass.
     if view isa FullViewport
@@ -584,7 +585,7 @@ function render(app::App, scene::Scene, view::Union{BasicViewport, FullViewport}
         depth_test = ValueTests.less_than,
         cull_mode = view.flip_face_culling ? FaceCullModes.backwards : FaceCullModes.on,
         depth_write = true,
-        viewport = Box2Di(min=one(v2i), size=convert(v2i, view.view_target.size)),
+        viewport = viewport_area,
         scissor = nothing
     ))
     target_clear(view.view_target, @f32(1))
@@ -602,7 +603,7 @@ function render(app::App, scene::Scene, view::Union{BasicViewport, FullViewport}
             depth_test = ValueTests.less_than_or_equal,
             cull_mode = view.flip_face_culling ? FaceCullModes.backwards : FaceCullModes.on,
             depth_write = true,
-            viewport = Box2Di(min=one(v2i), size=convert(v2i, view.view_target.size)),
+            viewport = viewport_area,
             scissor = nothing
         ))
         target_clear(view.view_target, v4f(0.7, 0.7, 1, 1))
@@ -618,7 +619,7 @@ function render(app::App, scene::Scene, view::Union{BasicViewport, FullViewport}
             depth_test = ValueTests.less_than_or_equal,
             cull_mode = view.flip_face_culling ? FaceCullModes.backwards : FaceCullModes.on,
             depth_write = false,
-               viewport = Box2Di(min=one(v2i), size=convert(v2i, view.view_target.size)),
+               viewport = viewport_area,
                scissor = nothing
         ))
         cubes_draw_call(RenderPass.transparent)

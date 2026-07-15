@@ -74,6 +74,35 @@ For example:
 end
 ````
 
+## `@pragma`
+
+This is [one of the standard ways](add_ons.md) to add external data to an algorithm or set algorithm-wide settings
+**Note** that they are always specified at the top of the algorithm.
+If you want something more like a live feature that can change during algorithm runs,
+  implement a [custom Op](add_ons.md#custom-ops) that writes to [the live data-store](add_ons.md#data-store).
+
+Our built-in GUI tool checks pragmas for the 3D materials of different cell types:
+
+````julia
+# Red should be desaturated stained-glass.
+# The data format for glass is "opacity  roughness  albedo".
+@pragma GuiMaterial R glass 0.5  0.2  (1.0, 0.5, 0.5)
+# Blue should be empty space.
+@pragma GuiMaterial B empty_space
+
+# Green should be shiny, saturated plastic.
+# The data format for non-metallic opaque surfaces is "roughness  albedo".
+@pragma GuiMaterial G dielectric  0.2 (0.05, 1.0, 0.02)
+#  (metal has the same format as dielectric)
+
+# Yellow should be a bright light source.
+# The data format for light sources is just the emissive HDR color.
+@pragma GuiMaterial Y light_source  (5.0, 5.0, 1.0)
+````
+
+As another example, the `@fill` Op looks for `@pragma fast_fills`
+  and, if it finds it, will always finish itself in a single tick.
+
 ## `@rewrite`
 
 The primary operation in this algorithm is `@rewrite`, which executes one or more rewrite rules
