@@ -236,7 +236,7 @@ function GuiRunner(memory::GuiMemory,
         )
         markov_algo_parse(read(path_scene(FALLBACK_SCENE_NAME), String))
     end
-    
+
     app = Render3D.App()
     runner = GuiRunner(
         memory,
