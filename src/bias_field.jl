@@ -49,7 +49,7 @@ Base.convert(::Type{MarkovBiasField}, m::MarkovBiasField_Mutable) = MarkovBiasFi
 
 const TFieldBiasAnchorBuffers{NGrid} = Tuple{
     Array{Bool, NGrid},
-    FloodFillAllocations{Vec{NGrid, Int32}}
+    FloodFillAllocations{VecI{NGrid}, Set{VecI{NGrid}}, Vector{VecI{NGrid}}}
 }
 struct MarkovBiasField_State{NGrid, BHasPathCells, BHasAnchors,
                              TAnchorBuffers<:Optional{TFieldBiasAnchorBuffers{NGrid}}}
@@ -84,13 +84,14 @@ function rebuild_distance_field(field::MarkovBiasField,
             function try_side(_axis::Integer, _dir_bool::Integer)
                 axis = convert(Int32, _axis)
                 dir_bool = convert(Int32, _dir_bool)
+                dir_idx = dir_bool + one(Int32)
 
-                dir_sign::Int32 = Int32.((-1, 1))[dir_bool + 1]
+                dir_sign::Int32 = Int32.((-1, 1))[dir_idx]
                 axis_pos::Int32 = v[axis] + dir_sign
                 v2::V = @set v[axis] = axis_pos
 
-                edge::Int32 = Int32.((1, size(grid, _axis)))[dir_bool + 1]
-                within_edge::Bool = cmp(axis_pos, edge) != -1
+                edge::Int32 = Int32.((1, size(grid, _axis)))[dir_idx]
+                within_edge::Bool = cmp(axis_pos, edge) != dir_sign
 
                 # Check that the end is a path cell.
                 # Ignore the start! We're sometimes coming from a source/anchor cell, not a path one.

@@ -1,4 +1,6 @@
 @markovjunior begin
+	@pragma GuiMaterial B metal 0.2 (0.1, 0.1, 0.8)
+
 	# Place three seeds.
 	@rewrite 1 b => R
 	@rewrite 1 b => G
