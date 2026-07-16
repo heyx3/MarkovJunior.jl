@@ -36,12 +36,12 @@ struct MarkovAllocatorHeap <: AbstractMarkovAllocator end
 struct MarkovAllocatorHeapReused <: AbstractMarkovAllocator
     arrays::Dict{Tuple{DataType, Int}, Vector{<:Array}}
     ordered_sets::Dict{DataType, Vector{<:OrderedSet}}
-    sets::Dict{DataType, Set}
+    sets::Dict{DataType, Vector{<:Set}}
 end
 MarkovAllocatorHeapReused() = MarkovAllocatorHeapReused(
-    Dict{Tuple{DataType, Int}, Vector{Array}}(),
-    Dict{DataType, OrderedSet}(),
-    Dict{DataType, Set}()
+    Dict{Tuple{DataType, Int}, Vector{<:Array}}(),
+    Dict{DataType, Vector{<:OrderedSet}}(),
+    Dict{DataType, Vector{<:Set}}()
 )
 
 "Helper struct that exists to return a specific value for 'Base.length()'"
@@ -144,7 +144,7 @@ function markov_allocator_acquire_set(alloc::MarkovAllocatorHeapReused, ::Type{T
         alloc.sets, T
     )
     if isempty(existing)
-        return OrderedSet{T}()
+        return Set{T}()
     else
         @markovjunior_assert(isempty(existing[end]))
         return pop!(existing)

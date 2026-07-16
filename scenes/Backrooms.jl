@@ -1,49 +1,67 @@
-@markovjunior begin
-	# Generate a maze
-	@rewrite 1 b=>Y
-	@rewrite Ybb => YEY
-	@fill 'E' +Y
+@markovjunior 'I' begin
+	# Generate a regular old maze.
+	@rewrite 1 I=>Y
+	@rewrite YII => YEY
+	@rewrite Y => E
 
-	# Mangle the maze
-	@rewrite b=>E %(0.3:0.5)
+	# Mangle it
+	@rewrite I=>E %(0.3:0.5)
 
 	# Clean up the walls into something coherent.
 	@rewrite begin
 		PRIORITIZE(earliest)
-		bEb => bbb  %0.25 \[ x ]
-		bEb => bbb        \[ y ]
+		IEI => III  %0.25 \[ x ]
+		IEI => III        \[ y ]
 	end
 	@rewrite [
 		E E E
-		E b E
+		E I E
 		E E E
-	] => [
+	  ] => [
 		_ _ _
 		_ E _
 		_ _ _
-	] \[ (x, y)[ (+x, +y) ] ]
+	]	 \[ (x, y)[ (+x, +y) ] ]
 
-	# Pick some areas, flood-fill them, and remove everything else.
-	@rewrite (area/8000) E=>G
-	@rewrite GE => GG
-	@fill 'b' +E
+	# Ensure areas are well-connected.
+	#   1) Pick a home region
+	@rewrite 1 E=>M
+	@rewrite ME => MM
+	#   2) Keep connecting it to other regions
+	@sequence repeat begin
+		# The first op of a 'repeat' sequence determines whether it should quit.
+		# We want to quit when the whole map is connected.
+		@rewrite 1 E => T
+		@rewrite 1 T => E
 
-	# Try to connect the two areas if they aren't already,
-	#   using another flood-fill to detect that.
-	# If they're too far apart they'll just stay separate
-	#   (we need to implement a Path Op to 100% ensure connection).
-	#  1) flood-fill one area:
-	@rewrite 1 G=>R
-	@rewrite [RE]G => _E
-	@rewrite R => E
-	#  2) try to connect any paths between that and the other area:
-	@rewrite (area/2000) begin
-		PRIORITIZE(earliest)
-		GbbbbE => EEEEEE
-		GbbbE => EEEEE
-		GbbE => EEEE
-		GbE => EEE
+		# Grab any low-hanging fruit.
+		@rewrite 1 MIIIIIE => MMMMMME
+		@rewrite 1 MIIIIE => MMMMME
+		@rewrite 1 MIIIE => MMMME
+		@rewrite 1 MIIE => MMME
+		@rewrite 1 MIE => MME
+		@rewrite ME => MM
+
+		# Now try a loop-erased random walk along the boundary of the home region.
+		@rewrite 1 MI => MR
+		@rewrite (area/10) begin
+			PRIORITIZE(earliest)
+			 RE => LE  # Make it to a destination!
+			RIE => LEE # Make it to a destination!
+
+			OGB => IIR # Finish the loop-erasure
+			OGG => IIO # Continue the loop-erasure
+
+			RII => GGR # Continue the walk
+			RIG => OIB # Nowhere else to go; give up and start erasing
+		end
+		# If there's an L on the grid, then we got a new path and need to carve it out.
+		# Otherwise this search was a dud and needs to be deleted.
+		@rewrite L[ROBG] => LL
+		@rewrite [ROBG] => I
+		@rewrite M[LE] => MM
 	end
-	#  3) Clean up colors
-	@fill 'E' +G
+	# Give up on everything else.
+	@rewrite E=>I
+	@rewrite M=>E
 end
