@@ -1,21 +1,21 @@
-@markovjunior 'I' begin
+@markovjunior begin
 	# Generate a regular old maze.
-	@rewrite 1 I=>Y
-	@rewrite YII => YEY
+	@rewrite 1 b=>Y
+	@rewrite Ybb => YEY
 	@rewrite Y => E
 
 	# Mangle it
-	@rewrite I=>E %(0.3:0.5)
+	@rewrite b=>E %(0.3:0.5)
 
 	# Clean up the walls into something coherent.
 	@rewrite begin
 		PRIORITIZE(earliest)
-		IEI => III  %0.25 \[ x ]
-		IEI => III        \[ y ]
+		bEb => bbb  %0.25 \[ x ]
+		bEb => bbb        \[ y ]
 	end
 	@rewrite [
 		E E E
-		E I E
+		E b E
 		E E E
 	  ] => [
 		_ _ _
@@ -35,33 +35,42 @@
 		@rewrite 1 T => E
 
 		# Grab any low-hanging fruit.
-		@rewrite 1 MIIIIIE => MMMMMME
-		@rewrite 1 MIIIIE => MMMMME
-		@rewrite 1 MIIIE => MMMME
-		@rewrite 1 MIIE => MMME
-		@rewrite 1 MIE => MME
+		@rewrite 1 MbbbbbE => MMMMMME
+		@rewrite 1 MbbbbE => MMMMME
+		@rewrite 1 MbbbE => MMMME
+		@rewrite 1 MbbE => MMME
+		@rewrite 1 MbE => MME
 		@rewrite ME => MM
 
 		# Now try a loop-erased random walk along the boundary of the home region.
-		@rewrite 1 MI => MR
+		@rewrite 1 Mb => MR
 		@rewrite (area/10) begin
 			PRIORITIZE(earliest)
 			 RE => LE  # Make it to a destination!
-			RIE => LEE # Make it to a destination!
+			RbE => LEE # Make it to a destination!
 
-			OGB => IIR # Finish the loop-erasure
-			OGG => IIO # Continue the loop-erasure
+			OGB => bbR # Finish the loop-erasure
+			OGG => bbO # Continue the loop-erasure
 
-			RII => GGR # Continue the walk
-			RIG => OIB # Nowhere else to go; give up and start erasing
+			Rbb => GGR # Continue the walk
+			RbG => ObB # Nowhere else to go; give up and start erasing
 		end
 		# If there's an L on the grid, then we got a new path and need to carve it out.
 		# Otherwise this search was a dud and needs to be deleted.
 		@rewrite L[ROBG] => LL
-		@rewrite [ROBG] => I
+		@rewrite [ROBG] => b
 		@rewrite M[LE] => MM
 	end
-	# Give up on everything else.
-	@rewrite E=>I
-	@rewrite M=>E
+	# Finalize colors.
+	@rewrite M => E
+
+	# Add lights.
+	#=
+	@rewrite 1 E=>Y
+	@sequence repeat begin
+		@rewrite area/40 E=>L
+		@rewrite area/180 E=>Y
+	end field(LY->E)
+	@rewrite L=>E
+	=#
 end
