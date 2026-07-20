@@ -2029,9 +2029,9 @@ function parse_markovjunior_rewrite_rule_md_side(inputs::MacroParserInputs,
                 )
             end
         end
-        function lookup_cell(cell_expr, pos)::Union{RewriteRuleCellSource, RewriteRuleCellDest{<:Tuple{Vararg{Int}}}}
-            with_parser_stacktrace(inputs, "Cell $pos: `$cell_expr`") do
-                return if @capture(cell_expr, {a_Symbol})
+        function lookup_cell(cell_expr)
+            with_parser_stacktrace(inputs, "Cell `$cell_expr`") do
+                if @capture(cell_expr, {a_Symbol})
                     if is_source
                         raise_parse_error(loc, inputs,
                                           "Set syntax not allowed on the Source side -- use List syntax instead")
@@ -2039,9 +2039,10 @@ function parse_markovjunior_rewrite_rule_md_side(inputs::MacroParserInputs,
                         RewriteRuleCell_Set(string(a)...)
                     end
                 elseif @capture(cell_expr, [a_Symbol])
-                    RewriteRuleCell_List(Tuple(
+                    # 'UpTo' is an abstract array so we have to carefully hide it from Julia's own array logic.
+                    Some(RewriteRuleCell_List(Tuple(
                         lookup_char.(Iterators.map(identity, string(a)), Ref(false))
-                    ))
+                    )))
                 elseif cell_expr isa Symbol
                     cell_str = string(cell_expr)
                     if length(cell_str) != 1
@@ -2059,82 +2060,33 @@ function parse_markovjunior_rewrite_rule_md_side(inputs::MacroParserInputs,
                         RewriteRuleCell_Lookup(Tuple(a))
                     end
                 else
-                    raise_parse_error(loc, inputs, "Unsupported syntax! `", cell_expr, "`")
+                    raise_parse_error(loc, inputs, "Unsupported syntax!")
                 end
             end
         end
 
-        # There are three kinds of multi-dimensional array literals:
-        #  hcat (1D array) -- expr args are just the elements.
-        #  vcat (2D array) -- expr args are each (head=:row, args=[ (values in this row....) ])
-        #  ncat (3+D array) -- expr args are recursively (head=:ncat, args=[ dim, slice_exprs... ])
-        #                        until getting to a 2D slice (head=:nrow, args=[ 1, row_exprs... ])
-        #                        and each row is (head=:row, args=[ elements... ])
-        as_array::Array{Any} = collect(Any, if Base.isexpr(expr, :hcat)
-            # This snippet would normally generate a Vector,
-            #    so make it a 1-row Matrix with 'permutedims()'.
-            permutedims(lookup_cell.(expr.args, 1:length(expr.args)))
-        elseif Base.isexpr(expr, :vcat)
-            rows = (row_e -> row_e.args).(expr.args)
-            raw_matrix = stack(rows, dims=1)
-            lookup_cell.(raw_matrix, (c -> c.I).(CartesianIndices(raw_matrix)))
-        elseif Base.isexpr(expr, :ncat)
-            # Recursively stack rows, matrices, etc.
-            function stack_arrays(slice_expr, pos::Tuple{Vararg{Int}})
-                if Base.isexpr(slice_expr, :row)
-                    # Note that these position tuples will treat X as the first axis,
-                    #    which is fine as they're only used for logging errors to the user.
-                    poses = (i -> (i, pos...)).(1:length(slice_expr.args))
-                    return lookup_cell.(slice_expr.args, poses)
-                elseif Base.isexpr(slice_expr, :nrow)
-                    if isempty(slice_expr.args) || (slice_expr.args[1] != 1)
-                        raise_parse_error(loc, inputs,
-                            "Unexpected syntax format: :ncat/:nrow has ",
-                            if isempty(slice_expr.args)
-                                "no arguments"
-                            else
-                                "as its first argument `$(slice_expr.args[1])`"
-                            end
-                        )
-                    end
-                    elements = @view slice_expr.args[2:end]
-                    poses = (i -> (i, pos...)).(1:length(elements))
-                    return stack(stack_arrays.(elements, poses), dims=1)
-                elseif Base.isexpr(slice_expr, :ncat)
-                    if isempty(slice_expr.args) || !isa(slice_expr.args[1], Int)
-                        raise_parse_error(loc, inputs,
-                            "Unexpected syntax format: :ncat has ",
-                            if isempty(slice_expr.args)
-                                "no arguments"
-                            else
-                                "as its first argument `$(slice_expr.args[1])`"
-                            end
-                        )
-                    end
-                    elements = @view slice_expr.args[2:end]
-                    poses = (i -> (i, pos...)).(1:length(elements))
-                    return stack(stack_arrays.(elements, poses))
-                else
-                    raise_parse_error(loc, inputs,
-                      "Unexpected syntax within :ncat, at slice ", pos, " -- ",
-                      isa(slice_expr, Expr) ?
-                        ":$(slice_expr.head)" :
-                        "$(typeof(slice_expr))($slice_expr)"
-                    )
-                end
-            end
-            stack_arrays(expr, ())
+        # Manually parsing MD array literals is tricky.
+        # Instead we'll pre-parse each input then eval() the whole thing.
+        sanitized_array_expr(array_expr) = if any(Base.isexpr.(Ref(array_expr), (:ncat, :nrow)))
+            # The first argument of these expressions is some kind of integer.
+            Expr(array_expr.head, array_expr.args[1], Iterators.map(sanitized_array_expr, array_expr.args[2:end])...)
+        elseif any(Base.isexpr.(Ref(array_expr), (:hcat, :vcat, :row)))
+            # Each argument of these expressions is an inner slice of the array.
+            Expr(array_expr.head, Iterators.map(sanitized_array_expr, array_expr.args)...)
         else
-            error("Unexpected mode: ", expr)
-        end)
+            lookup_cell(array_expr)
+        end
+        sanitized_array::Array = eval(sanitized_array_expr(expr))
+        sanitized_array = collect(Any, sanitized_array)
+        sanitized_array .= (e -> (e isa Some) ? something(e) : e).(sanitized_array)
 
         # Swap the first two axes, so that column (X) is the first instead of the second.
         # Note that 'list' rewrite cells do not need to be updated,
         #    as they are written assuming X as the first axis.
         # Also note that 1D arrays here will actually be a 1xN matrix, which still should do this
-        as_array = permutedims(as_array, (2, 1, (3:ndims(as_array))...))
+        sanitized_array = permutedims(sanitized_array, (2, 1, (3:ndims(sanitized_array))...))
 
-        return as_array
+        return sanitized_array
     end
 end
 function parse_markovjunior_rewrite_rule_md_symmetry(inputs::MacroParserInputs,
