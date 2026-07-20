@@ -1,4 +1,4 @@
-@markovjunior 'I' begin
+@markovjunior 2 'I' begin
 	# Place cave seeds.
 	@fill 'R' uv(min=0.1, size=0)
 	@fill 'R' uv(min=0.5, size=0)

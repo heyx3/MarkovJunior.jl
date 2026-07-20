@@ -2,9 +2,9 @@
 	# Generate a regular old maze.
 	@rewrite 1 b=>Y
 	@rewrite Ybb => YEY
-	@rewrite Y => E
+	@fill 'E' +Y
 
-	# Mangle it
+	# Mangle it.
 	@rewrite b=>E %(0.3:0.5)
 
 	# Clean up the walls into something coherent.
@@ -62,7 +62,7 @@
 		@rewrite M[LE] => MM
 	end
 	# Finalize colors.
-	@rewrite M => E
+	@fill 'E' +M
 
 	# Add lights.
 	#=

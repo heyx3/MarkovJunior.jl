@@ -225,7 +225,7 @@ function parse_markovjunior_sequence(try_handle_line, inputs::MacroParserInputs,
         if try_handle_line(location, line)
             # Do nothing; the line was handled.
         elseif (line isa Expr) && (line.head == :macrocall)
-            push!(inputs.op_stack_trace, "Op $(i[]) `$(line.args[1])`")
+            push!(inputs.op_stack_trace, "Item $(i[]) `$(line.args[1])`")
             push!(output, parse_markovjunior_op(
                 Val(line.args[1]::Symbol), inputs,
                 line.args[2]::LineNumberNode,
