@@ -240,25 +240,6 @@ We use the standard Julia project *PackageCompiler.jl* to compile the three main
 The build pipeline is encapsulated in *scripts/compile_standalone.jl*.
 Simply run that script with either `-exe` or `-dll` (both exe's are produced at once).
 
-### FixedPointNumbers.jl workaround
-
-Due to a [bug with FixedPointNumbers.jl](https://github.com/JuliaMath/FixedPointNumbers.jl/issues/317)
-  -- possibly a [bug with PackageCompiler itself](https://github.com/JuliaLang/PackageCompiler.jl/issues/1092) --
-  the public version of that package can't be used with PackageCompiler.
-Instead, you need to [clone this fork](github.com/Kyjor/FixedPointNumbers.jl/tree/bugfix/remove-asserts-from-precompile),
-  at branch `bugfix/remove-asserts-from-precompile` (e.g. `git checkout bugfix/remove-asserts-from-precompile`),
-  and link it to this project:
-
-````julia
-# First add it to your global Julia environment:
-] activate
-] dev ../FixedPointNumbers.jl
-# Second add it to this project:
-] activate .
-] dev ../FixedPointNumbers.jj
-# Not sure why both of the above are needed, but they are.
-````
-
 ### `nvpatch` workaround
 
 In the GUI tool, due to the use of *Bplus.jl*, we need to run on discrete GPU's instead of integrated ones.
