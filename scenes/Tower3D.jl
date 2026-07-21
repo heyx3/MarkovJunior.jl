@@ -161,7 +161,7 @@
             _ _ _
             _ N _
             _ _ _
-        ]  %0.15 \[ (x, y)[ (+x, +y), (+y, +x), (x, -y), (-y, x) ] ]
+        ]  %0.15 \[ {x, y}, x[x, y], y[x, y] ]
         @rewrite [
             _    B    B    B
             [OB] O    O    B
@@ -172,7 +172,7 @@
             _ g g _
             _ _ g _
             _ _ _ _
-        ]  \[ (x, y)[ (+x, +y), (+y, +x), (x, -y), (-y, x) ] ]
+        ]  \[ {x, y}, x[x, y], y[x, y] ]
         # Finalize colors.
         @rewrite [OR] => b
         @rewrite B => E

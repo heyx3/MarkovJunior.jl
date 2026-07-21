@@ -46,6 +46,7 @@ However there are real, if underexplored, benefits:
 * You can add an extra axis to store multiple pixels of data behind each output pixel, like temp variables.
 * You could use it to foster logical connections between disparate areas of the grid,
   by connecting them through the extra dimensions.
+* You could keep a scratch space for one-off variables, such as counters or a state machine that drives the rest of the grid.
 
 If you have any thoughts on higher-dimensional tricks, share them in a Github Issue!
 
@@ -267,5 +268,4 @@ If you don't have them (or are building for a different OS) you'll get a descrip
 Unit tests use the usual Julia convention of running *test/runtests.jl*.
 This script invokes multiple other test scripts in the same folder.
 
-Not all functionality is tested through unit tests, as the sample scenes already use many basic features,
-  however certain featues are considered very important to unit-test.
+Most features are tested through the sample scenes, but some are important to unit-test first.

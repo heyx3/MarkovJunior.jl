@@ -82,7 +82,7 @@
             I    Y     Y     Y   I
             I    I     Y     I   I
 			I    I     I     I   I
-        ]  %0.02
+        ]  %0.02  \[ (x, y)[ (+x, +y) ] ]
 
         [
             I I I I I
@@ -96,7 +96,7 @@
             I    Y     Y     Y   I
             I    I     I     I   I
 			I    I     I     I   I
-        ]  %0.05
+        ]  %0.05  \[ (x, y)[ (+x, +y) ] ]
 
         [
             I I I
@@ -106,7 +106,7 @@
             _ _ _
             _ Y _
             _ _ _
-        ]  %0.07
+        ]  %0.07  \[ (x, y)[ (+x, +y) ] ]
     end
 
 	# Create a night sky.

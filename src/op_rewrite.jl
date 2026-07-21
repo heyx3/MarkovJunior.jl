@@ -261,7 +261,31 @@ function find_all_md_symmetries(def::RewriteRule_MD_Symmetry_Definition,
     set_rule_axes = fill(false, n_rule_dims)
     unused_grid_axes = Vector{Bool}(undef, n_grid_dims) # Buffer used below
 
-    #TODO: Track chiral groups and filter out options which violate them.
+    # Track chiral groups and filter out options which violate them.
+    chiralities = (set -> sort!(collect(set))).(def.chiral_groups)
+    function check_chirality(rule_to_grid::AbstractVector{GridDir})::Bool
+        for chi::Vector{Int} in chiralities
+            chi_grid_dirs = (rule_to_grid[a] for a in chi)
+
+            # This constraint only applies once all relevant rule axes have been assigned a grid axis.
+            if all((d.axis > 0) for d in chi_grid_dirs)
+                # Parity change from the axis flips:
+                sign_flipping = prod(d.sign for d in chi_grid_dirs)
+
+                # Parity change from the axis swaps:
+                chi_dest_axes = [ d.axis for d in chi_grid_dirs ]
+                dest_axis_orders = sortperm(sortperm(chi_dest_axes)) # Each element is the sorted order of that element in dest_axes: [ 3, 5, 1 ] becomes [ 2, 3, 1 ]
+                sign_rotating = levicivita(dest_axis_orders)
+
+                parity = sign_flipping * sign_rotating
+                if parity < 0
+                    @md_symm_logln("Chirality violated! {", chi, "} trips up option ", iter_join(md_symm_loggable_dirs(rule_to_grid), ", ")...)
+                    return false
+                end
+            end
+        end
+        return true
+    end
 
     # For each new choice to make, try pairing it against every existing choice.
     first_run::Bool = true
@@ -333,11 +357,15 @@ function find_all_md_symmetries(def::RewriteRule_MD_Symmetry_Definition,
                     for (a_rule::Int, a_orientation::Int) in zip(orientation_rule_axes, new_orientation)
                         @markovjunior_assert(new_option[a_rule].axis == -1,
                                              "Rule axis set more than once: ", a_rule)
-                        options[end][a_rule] = GridDir(abs(a_orientation), sign(a_orientation))
+                        new_option[a_rule] = GridDir(abs(a_orientation), sign(a_orientation))
                     end
 
-                    #TODO: Check chirality
-                    @md_symm_logln("New option: [ ", iter_join(md_symm_loggable_dirs(new_option), ", ")..., " ]")
+                    if !check_chirality(new_option)
+                        @md_symm_logln("New option scuttled due to chirality: [ ", iter_join(md_symm_loggable_dirs(new_option), ", ")..., " ]")
+                        pop!(options)
+                    else
+                        @md_symm_logln("New option: [ ", iter_join(md_symm_loggable_dirs(new_option), ", ")..., " ]")
+                    end
                 end
             else
                 break
@@ -392,7 +420,9 @@ function find_all_md_symmetries(def::RewriteRule_MD_Symmetry_Definition,
                         iter_join(md_symm_loggable_dirs(option), ",")..., "]"
                     )
 
-                    #TODO: Check chirality
+                    if !check_chirality(option)
+                        push!(options_to_remove, dest_option_i)
+                    end
                 end
             end
 
@@ -441,11 +471,12 @@ function find_all_md_symmetries(def::RewriteRule_MD_Symmetry_Definition,
                 for a_grid in 1:n_grid_dims if unused_grid_axes[a_grid]
                     for a_grid_sign in (-1, 1)
                         a_grid_dir = GridDir(a_grid, a_grid_sign)
-                        #TODO: Check chirality against this choice
 
                         option = map(identity, src_option)
                         option[a_rule] = a_grid_dir
-                        push!(options, option)
+                        if check_chirality(option)
+                            push!(options, option)
+                        end
                     end
                 end end
             end
@@ -930,8 +961,6 @@ function add_new_desirability(data::RewriteGroupDesirability, new_val::Float32)
     )
 end
 #
-
-#TODO: Priorities should have control over evaluation of desirability, as most of them don't need to know the desirability of EVERY application for EVERY rule. This means they need to have an associated state object.
 
 "
 Decides which rewrite rule to apply.

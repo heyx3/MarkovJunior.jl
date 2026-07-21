@@ -122,7 +122,8 @@ test_all_md_symmetries(2, 2, MJ.RewriteRule_MD_Symmetry_Definition(
         reshape([ 2 ], :, 1) => (nothing, 1)
     ],
     Vector{Set{Int}}()
-    ), [  MJ.GridDir(2, -1)   MJ.GridDir(2, 1)
+    ), [
+        MJ.GridDir(2, -1)   MJ.GridDir(2, 1)
         MJ.GridDir(1, 1)    MJ.GridDir(1, 1)
     ]
 )
@@ -239,6 +240,116 @@ test_all_md_symmetries(2, 2, MJ.RewriteRule_MD_Symmetry_Definition(
     MJ.GridDir(2, 1)  MJ.GridDir(1, -1)
     MJ.GridDir(2, 1)  MJ.GridDir(1, 1)
 ]))
+# Lastly, redo some tests with added chirality constraints.
+# For readability, copy-paste the previous answers and just comment out the ones that violate chirality.
+test_all_md_symmetries(2, 2, MJ.RewriteRule_MD_Symmetry_Definition(
+    Pair{Matrix{Int}, MJ.RewriteRule_TailSymmetry}[ ],
+    Set{Int}[
+        Set([ 1, 2 ])
+    ]
+), permutedims([
+    MJ.GridDir(1, -1)  MJ.GridDir(2, -1)
+    # MJ.GridDir(1, -1)  MJ.GridDir(2, 1)
+    # MJ.GridDir(1, 1)   MJ.GridDir(2, -1)
+    MJ.GridDir(1, 1)   MJ.GridDir(2, 1)
+    # MJ.GridDir(2, -1)  MJ.GridDir(1, -1)
+    MJ.GridDir(2, -1)  MJ.GridDir(1, 1)
+    MJ.GridDir(2, 1)  MJ.GridDir(1, -1)
+    # MJ.GridDir(2, 1)  MJ.GridDir(1, 1)
+]))
+test_all_md_symmetries(4, 6, MJ.RewriteRule_MD_Symmetry_Definition(
+    [
+        [
+            2      1    1    1
+            4      -2   3    6
+        ] => nothing,
+        reshape([ 1 ], :, 1) => 5
+    ],
+    Set{Int}[
+        Set([1, 2]),
+        Set([2, 4])
+    ]
+    ), permutedims([ # Transposed so we can write each symmetry as a row
+        # Fix 1 == {-5}
+            # Fix 2,4 == {+1, -2}
+                #MJ.GridDir(5, -1)    MJ.GridDir(1, +1)    MJ.GridDir(3, -1)    MJ.GridDir(2, -1)
+                #MJ.GridDir(5, -1)    MJ.GridDir(1, +1)    MJ.GridDir(3, +1)    MJ.GridDir(2, -1)
+                #MJ.GridDir(5, -1)    MJ.GridDir(1, +1)    MJ.GridDir(4, -1)    MJ.GridDir(2, -1)
+                #MJ.GridDir(5, -1)    MJ.GridDir(1, +1)    MJ.GridDir(4, +1)    MJ.GridDir(2, -1)
+                #MJ.GridDir(5, -1)    MJ.GridDir(1, +1)    MJ.GridDir(6, -1)    MJ.GridDir(2, -1)
+                #MJ.GridDir(5, -1)    MJ.GridDir(1, +1)    MJ.GridDir(6, +1)    MJ.GridDir(2, -1)
+            # Fix 2,4 == {+1, +3}
+                MJ.GridDir(5, -1)    MJ.GridDir(1, +1)    MJ.GridDir(2, -1)    MJ.GridDir(3, +1)
+                MJ.GridDir(5, -1)    MJ.GridDir(1, +1)    MJ.GridDir(2, +1)    MJ.GridDir(3, +1)
+                MJ.GridDir(5, -1)    MJ.GridDir(1, +1)    MJ.GridDir(4, -1)    MJ.GridDir(3, +1)
+                MJ.GridDir(5, -1)    MJ.GridDir(1, +1)    MJ.GridDir(4, +1)    MJ.GridDir(3, +1)
+                MJ.GridDir(5, -1)    MJ.GridDir(1, +1)    MJ.GridDir(6, -1)    MJ.GridDir(3, +1)
+                MJ.GridDir(5, -1)    MJ.GridDir(1, +1)    MJ.GridDir(6, +1)    MJ.GridDir(3, +1)
+            # Fix 2,4 == {+1, +6}
+                MJ.GridDir(5, -1)    MJ.GridDir(1, +1)    MJ.GridDir(2, -1)    MJ.GridDir(6, +1)
+                MJ.GridDir(5, -1)    MJ.GridDir(1, +1)    MJ.GridDir(2, +1)    MJ.GridDir(6, +1)
+                MJ.GridDir(5, -1)    MJ.GridDir(1, +1)    MJ.GridDir(3, -1)    MJ.GridDir(6, +1)
+                MJ.GridDir(5, -1)    MJ.GridDir(1, +1)    MJ.GridDir(3, +1)    MJ.GridDir(6, +1)
+                MJ.GridDir(5, -1)    MJ.GridDir(1, +1)    MJ.GridDir(4, -1)    MJ.GridDir(6, +1)
+                MJ.GridDir(5, -1)    MJ.GridDir(1, +1)    MJ.GridDir(4, +1)    MJ.GridDir(6, +1)
+        # Fix 1 == {+5}
+            # Fix 2,4 == {+1, -2}
+                #MJ.GridDir(5, +1)    MJ.GridDir(1, +1)    MJ.GridDir(3, -1)    MJ.GridDir(2, -1)
+                #MJ.GridDir(5, +1)    MJ.GridDir(1, +1)    MJ.GridDir(3, +1)    MJ.GridDir(2, -1)
+                #MJ.GridDir(5, +1)    MJ.GridDir(1, +1)    MJ.GridDir(4, -1)    MJ.GridDir(2, -1)
+                #MJ.GridDir(5, +1)    MJ.GridDir(1, +1)    MJ.GridDir(4, +1)    MJ.GridDir(2, -1)
+                #MJ.GridDir(5, +1)    MJ.GridDir(1, +1)    MJ.GridDir(6, -1)    MJ.GridDir(2, -1)
+                #MJ.GridDir(5, +1)    MJ.GridDir(1, +1)    MJ.GridDir(6, +1)    MJ.GridDir(2, -1)
+            # Fix 2,4 == {+1, +3}
+                #MJ.GridDir(5, +1)    MJ.GridDir(1, +1)    MJ.GridDir(2, -1)    MJ.GridDir(3, +1)
+                #MJ.GridDir(5, +1)    MJ.GridDir(1, +1)    MJ.GridDir(2, +1)    MJ.GridDir(3, +1)
+                #MJ.GridDir(5, +1)    MJ.GridDir(1, +1)    MJ.GridDir(4, -1)    MJ.GridDir(3, +1)
+                #MJ.GridDir(5, +1)    MJ.GridDir(1, +1)    MJ.GridDir(4, +1)    MJ.GridDir(3, +1)
+                #MJ.GridDir(5, +1)    MJ.GridDir(1, +1)    MJ.GridDir(6, -1)    MJ.GridDir(3, +1)
+                #MJ.GridDir(5, +1)    MJ.GridDir(1, +1)    MJ.GridDir(6, +1)    MJ.GridDir(3, +1)
+            # Fix 2,4 == {+1, +6}
+                #MJ.GridDir(5, +1)    MJ.GridDir(1, +1)    MJ.GridDir(2, -1)    MJ.GridDir(6, +1)
+                #MJ.GridDir(5, +1)    MJ.GridDir(1, +1)    MJ.GridDir(2, +1)    MJ.GridDir(6, +1)
+                #MJ.GridDir(5, +1)    MJ.GridDir(1, +1)    MJ.GridDir(3, -1)    MJ.GridDir(6, +1)
+                #MJ.GridDir(5, +1)    MJ.GridDir(1, +1)    MJ.GridDir(3, +1)    MJ.GridDir(6, +1)
+                #MJ.GridDir(5, +1)    MJ.GridDir(1, +1)    MJ.GridDir(4, -1)    MJ.GridDir(6, +1)
+                #MJ.GridDir(5, +1)    MJ.GridDir(1, +1)    MJ.GridDir(4, +1)    MJ.GridDir(6, +1)
+        # Fix 1 == {-6}
+            # Fix 2,4 == {+1, -2}
+                #MJ.GridDir(6, -1)    MJ.GridDir(1, +1)    MJ.GridDir(3, -1)    MJ.GridDir(2, -1)
+                #MJ.GridDir(6, -1)    MJ.GridDir(1, +1)    MJ.GridDir(3, +1)    MJ.GridDir(2, -1)
+                #MJ.GridDir(6, -1)    MJ.GridDir(1, +1)    MJ.GridDir(4, -1)    MJ.GridDir(2, -1)
+                #MJ.GridDir(6, -1)    MJ.GridDir(1, +1)    MJ.GridDir(4, +1)    MJ.GridDir(2, -1)
+                #MJ.GridDir(6, -1)    MJ.GridDir(1, +1)    MJ.GridDir(5, -1)    MJ.GridDir(2, -1)
+                #MJ.GridDir(6, -1)    MJ.GridDir(1, +1)    MJ.GridDir(5, +1)    MJ.GridDir(2, -1)
+            # Fix 2,4 == {+1, +3}
+                MJ.GridDir(6, -1)    MJ.GridDir(1, +1)    MJ.GridDir(2, -1)    MJ.GridDir(3, +1)
+                MJ.GridDir(6, -1)    MJ.GridDir(1, +1)    MJ.GridDir(2, +1)    MJ.GridDir(3, +1)
+                MJ.GridDir(6, -1)    MJ.GridDir(1, +1)    MJ.GridDir(4, -1)    MJ.GridDir(3, +1)
+                MJ.GridDir(6, -1)    MJ.GridDir(1, +1)    MJ.GridDir(4, +1)    MJ.GridDir(3, +1)
+                MJ.GridDir(6, -1)    MJ.GridDir(1, +1)    MJ.GridDir(5, -1)    MJ.GridDir(3, +1)
+                MJ.GridDir(6, -1)    MJ.GridDir(1, +1)    MJ.GridDir(5, +1)    MJ.GridDir(3, +1)
+            # Fix 2,4 == {+1, +6}
+                #    !  1 and 4 are both trying to be {6}  !
+        # Fix 1 == {+6}
+            # Fix 2,4 == {+1, -2}
+                #MJ.GridDir(6, +1)    MJ.GridDir(1, +1)    MJ.GridDir(3, -1)    MJ.GridDir(2, -1)
+                #MJ.GridDir(6, +1)    MJ.GridDir(1, +1)    MJ.GridDir(3, +1)    MJ.GridDir(2, -1)
+                #MJ.GridDir(6, +1)    MJ.GridDir(1, +1)    MJ.GridDir(4, -1)    MJ.GridDir(2, -1)
+                #MJ.GridDir(6, +1)    MJ.GridDir(1, +1)    MJ.GridDir(4, +1)    MJ.GridDir(2, -1)
+                #MJ.GridDir(6, +1)    MJ.GridDir(1, +1)    MJ.GridDir(5, -1)    MJ.GridDir(2, -1)
+                #MJ.GridDir(6, +1)    MJ.GridDir(1, +1)    MJ.GridDir(5, +1)    MJ.GridDir(2, -1)
+            # Fix 2,4 == {+1, +3}
+                #MJ.GridDir(6, +1)    MJ.GridDir(1, +1)    MJ.GridDir(2, -1)    MJ.GridDir(3, +1)
+                #MJ.GridDir(6, +1)    MJ.GridDir(1, +1)    MJ.GridDir(2, +1)    MJ.GridDir(3, +1)
+                #MJ.GridDir(6, +1)    MJ.GridDir(1, +1)    MJ.GridDir(4, -1)    MJ.GridDir(3, +1)
+                #MJ.GridDir(6, +1)    MJ.GridDir(1, +1)    MJ.GridDir(4, +1)    MJ.GridDir(3, +1)
+                #MJ.GridDir(6, +1)    MJ.GridDir(1, +1)    MJ.GridDir(5, -1)    MJ.GridDir(3, +1)
+                #MJ.GridDir(6, +1)    MJ.GridDir(1, +1)    MJ.GridDir(5, +1)    MJ.GridDir(3, +1)
+            # Fix 2,4 == {+1, +6}
+                #    !  1 and 4 are both trying to be {6}  !
+    ])
+)
 
 # Test RewriteRule_MD_Orientations.
 ori_ignored_fields(n_grid) = tuple(Vector{MJ.CellGridConcrete{n_grid}}(), alloc)

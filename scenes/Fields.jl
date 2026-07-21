@@ -27,7 +27,6 @@
     @rewrite (area/6) w=>O field(P -> w)
     @rewrite (area/6) w=>L field(O -> w)
 	@rewrite          w=>N field(L -> w)
-    @fill 'O' +P
     # The above can be sort-of accomplished with a flood-fill rewrite op,
     #   but that op couldn't ensure the coverage is even --
     #   it might go really far down one way and not much down another!
