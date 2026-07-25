@@ -2023,9 +2023,14 @@ function parse_markovjunior_rewrite_rule_strip(inputs::MacroParserInputs, loc, e
                 true
             end
             if is_symmetric_along(lhs, 1) && is_symmetric_along(rhs, 1) && all(is_symmetric_cell, rhs)
-                # Flipping is a no-op on symmetric rules, so make all orientations positive.
-                symmetries_explicit .= (g -> GridDir(g.axis, 1)).(symmetries_explicit)
-                unique!(symmetries_explicit)
+                # Flipping is a no-op on symmetric rules, so remove flips.
+
+                # Explicit symmetries:
+                # (I removed an earlier approach of just turning all symmetries positive,
+                #   because there are still subtle differences regarding things like masking)
+                unique!(g->g.axis, symmetries_explicit)
+
+                # Tail symmetries:
                 symmetries_tail = if isnothing(symmetries_tail)
                     nothing
                 elseif symmetries_tail isa Int

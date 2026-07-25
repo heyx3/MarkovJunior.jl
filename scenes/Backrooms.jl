@@ -1,4 +1,10 @@
 @markovjunior begin
+	# Running this in 3D is actually kinda interesting,
+	#    so here's some materials to make it viewable.
+	@pragma GuiMaterial E empty
+	@pragma GuiMaterial b dielectric 0.65 0.7
+	@pragma GuiMaterial M glass  0.1 0.8  (1, 0.3, 1)
+
 	# Generate a regular old maze.
 	@rewrite 1 b=>Y
 	@rewrite Ybb => YEY
@@ -63,14 +69,4 @@
 	end
 	# Finalize colors.
 	@fill 'E' +M
-
-	# Add lights.
-	#=
-	@rewrite 1 E=>Y
-	@sequence repeat begin
-		@rewrite area/40 E=>L
-		@rewrite area/180 E=>Y
-	end field(LY->E)
-	@rewrite L=>E
-	=#
 end
