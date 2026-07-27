@@ -260,8 +260,8 @@ BIG_TEST = @markovjunior 3 'R' begin
     # Next op is 13
     @rewrite ((area*4.2):(0.5*length)) RM=>GT  \[ x ]
     @rewrite (8:(area/4.2))            RM=>GT  \[ +(1) ]
-    @rewrite                           RM=>GT                   temperature(0.2)
-    @rewrite                           RM=>GT  \[ x, -(2), 4... ] temperature(0.1)
+    @rewrite                           RgR=>GMG                   temperature(0.2)
+    @rewrite                           RgR=>G[1]G  \[ x, -(2), 4... ] temperature(0.1)
 
     # Next op is 17
     @rewrite begin
@@ -601,10 +601,11 @@ BIG_TEST_ANSWER = MJ.MarkovAlgorithm(
                 MJ.RewriteRule_Strip(
                     tuple(
                         (CELL_CODE['R'], CELL_CODE['G']),
-                        (CELL_CODE['M'], CELL_CODE['T'])
+                        (CELL_CODE['g'], CELL_CODE['M']),
+                        (CELL_CODE['R'], CELL_CODE['G'])
                     ),
                     nothing, 1.0f0,
-                    MJ.GridDir[ ], 1
+                    MJ.GridDir[ ], (nothing, 1)
                 )
             ),
             nothing,
@@ -618,7 +619,8 @@ BIG_TEST_ANSWER = MJ.MarkovAlgorithm(
                 MJ.RewriteRule_Strip(
                     tuple(
                         (CELL_CODE['R'], CELL_CODE['G']),
-                        (CELL_CODE['M'], CELL_CODE['T'])
+                        (CELL_CODE['g'], MJ.RewriteRuleCell_Lookup(1)),
+                        (CELL_CODE['R'], CELL_CODE['G'])
                     ),
                     nothing, 1.0f0,
                     [ MJ.GridDir(1, -1), MJ.GridDir(1, 1), MJ.GridDir(2, -1) ], 4

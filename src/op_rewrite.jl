@@ -159,7 +159,7 @@ function visit_rule_match_data(process_candidate::TLambda,
         end
         exists(a_pos) && for axis in a_pos:NDims
             uo = process_dir(GridDir(axis, +1))
-            exist(uo) && return uo
+            exists(uo) && return uo
         end
     else
         error("Unhandled: ", typeof(r.tail_symmetry))
@@ -2010,15 +2010,36 @@ function parse_markovjunior_rewrite_rule_strip(inputs::MacroParserInputs, loc, e
             end
         end
 
-        # If the rule has only one cell, remove all symmetries to avoid redundancy.
+        # Remove any redundancies in symmetry.
         if length(rhs) == 1
             symmetries_explicit = [ GridDir(1, 1) ]
             symmetries_tail = nothing
+        else
+            # For a strip to be symmetric, both sides need to be individually symmetric
+            #    and any Lookup cells need to reference the exact center of the strip.
+            is_symmetric_cell(@nospecialize(dc::RewriteRuleCellDest{Int})) = if dc isa RewriteRuleCell_Lookup{Int}
+                isodd(length(rhs)) && (dc.source_idx == ((length(rhs) ÷ 2) + 1))
+            else
+                true
+            end
+            if is_symmetric_along(lhs, 1) && is_symmetric_along(rhs, 1) && all(is_symmetric_cell, rhs)
+                # Flipping is a no-op on symmetric rules, so remove flips.
+
+                # Explicit symmetries:
+                # (I removed an earlier approach of just turning all symmetries positive,
+                #   because there are still subtle differences regarding things like masking)
+                unique!(g->g.axis, symmetries_explicit)
+
+                # Tail symmetries:
+                symmetries_tail = if isnothing(symmetries_tail)
+                    nothing
+                elseif symmetries_tail isa Int
+                    (nothing, symmetries_tail)
+                else symmetries_tail isa NTuple{2, Int}
+                    (nothing, minimum(t for t in symmetries_tail if exists(t)))
+                end
+            end
         end
-        #TODO: If the rule is symmetric (see requirements below), convert all symmetries to the positive side.
-        #       * For source strip, is cell i identical to cell LEN-i+1?
-        #       * For dest strip, is cell i identical to cell LEN-i+1?
-        #       * For any 'Lookup' cells, does the strip have an odd number of cells and does the lookup index point to the center cell?
 
         return RewriteRule_Strip(
             Tuple(zip(lhs, rhs)),
