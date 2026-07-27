@@ -12,7 +12,7 @@
 	@pragma GuiMaterial E dielectric  1.0 (1, 0.9, 0.8)
     #   Y: lamps
 	@pragma GuiMaterial Y light_source   (10, 10, 6)
-    #   g: furniture/ceiling
+    #   g: furniture/ceiling/stairs
 	@pragma GuiMaterial g dielectric  1.0  0.5
 	#   I: windows/guidelines
 	@pragma GuiMaterial I glass  0.4  1.0 (0, 0.2, 0.5)
@@ -214,7 +214,6 @@
 		_ b _
 		_ b _
 	]  \[  x[x,y],  y[+z]  ]
-	#TODO: Add an elevator covering one strip along the outside
 
 	# Place windows around each level
 	@rewrite [
@@ -226,4 +225,85 @@
 		b {gI} b
 		b I b
 	]  %(0.1:0.3)  \[ x[x, y], y[ +z ] ]
+
+	# Place a staircase on each floor.
+	@sequence repeat begin
+		# Pick a new floor.
+		@rewrite 1 N => R
+		@rewrite RN => RR \[ x, y ]
+
+		# Find a place for staircases.
+		@rewrite (length/64) begin
+			# Try to do a cleaner staircase; if not possible then tear up the level outline a bit.
+			PRIORITIZE(earliest)
+			[
+				R g
+				R g
+				R g
+				R g ;;;
+
+				b [gB]
+				b [gB]
+				b [gB]
+				b [gB] ;;;
+
+				b [gB]
+				b [gB]
+				b [gB]
+				b [gB] ;;;
+
+				[gY] g
+				[gY] g
+				[gY] g
+				[gY] g ;;;
+
+				[Nw] g
+				[Nw] g
+				[Nw] g
+				[Nw] g
+			  ] => [
+				_ _
+				_ _
+				_ _
+				_ _ ;;;
+
+				_ _
+				g _
+				g _
+				b _ ;;;
+
+				_ _
+				_ _
+				g _
+				g _ ;;;
+
+				b _
+				b _
+				b _
+				g _ ;;;
+
+				_ _
+				b _
+				b _
+				b _
+			]  \[ z[ +z ] ]
+			#TODO: Actually the above should always be possible on each floor; why isn't it?
+		end
+
+		# Mark this floor as handled.
+		@rewrite R => w
+	end
+	# Clean up the floor markings.
+	@rewrite w => N
 end
+
+
+
+
+
+
+
+
+
+
+
