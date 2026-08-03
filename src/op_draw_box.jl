@@ -97,6 +97,22 @@ struct MarkovOpDrawBox{N, TRule<:DrawBoxRule} <: AbstractMarkovOp
     mask::Union{Nothing, Float32, NTuple{2, Float32}}
 end
 
+function markov_algo_run(op::MarkovOpDrawBox{NBox, TRule},
+                         algo::MarkovAlgorithm, algo_state::AlgoState{NGrid},
+                         inherited_bias_tuple::Tuple{Vararg{AbstractMarkovBias}},
+                         inherited_bias_state_tuple::Tuple) where {NBox, TRule, NGrid}
+    #TODO: If algo is 'animated', make this op respect biases
+
+    box = get_draw_box_pixels(
+        op.space, op.box,
+        convert(Vec{NGrid, Int32}, vsize(algo_state.grid)),
+        op.box_is_1D_scalar
+    )
+    for pixel in min_inclusive(box):max_inclusive(box)
+        TODO: #TODO: Finish
+    end
+end
+
 struct MarkovOpDrawBox_State{N, TMask<:Optional{MaskGrid{N}}}
     pixels::Bplus.Math.VecRange{N, Int32}
     next_pixel::Optional{Vec{N, Int32}}

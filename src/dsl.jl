@@ -6,9 +6,6 @@ dsl_string(u::UInt8) = (u == CELL_CODE_INVALID) ? CELL_CHAR_INVALID : CELL_TYPES
 dsl_string(s::CellTypeSet) = string(dsl_string.(s)...)
 
 dsl_string(i::Int) = i
-dsl_string(th::ThresholdByArea) = "(area*$(th.scale))"
-dsl_string(th::ThresholdByLength) = "(length*$(th.scale))"
-dsl_string(th::ThresholdRange) = "(($(dsl_string(th.a))):($(dsl_string(th.b))))"
 
 dsl_string(ma::MarkovAlgorithm) = string(
     "@markovjunior '", dsl_string(ma.initial_fill), "' ",
@@ -305,68 +302,6 @@ function with_parsed_markovjunior_bias_statement(to_do, inputs::MacroParserInput
         if !isempty(biases)
             pop!(inputs.bias_stack)
         end
-    end
-end
-
-"
-Checks whether an expression looks to be a Threshold value.
-
-This doesn't guarantee the threshold is well-formed!
-It's meant to disambiguate statements containing optional thresholds and other optional things.
-You need to make sure those other things can't look like thresholds.
-"
-check_markovjunior_threshold_appearance(expr)::Bool =
-    #NOTE: The '|' operator is broken in @capture sadly.
-    (expr isa Integer) || @capture(expr, a_:b_) ||
-    @capture(expr, length/x_) || @capture(expr, length*x_) || @capture(expr, x_*length) ||
-    @capture(expr, area/x_) || @capture(expr, area*x_) || @capture(expr, x_*area)
-parse_markovjunior_threshold(inputs::MacroParserInputs, location, threshold_expr)::Threshold = parse_markovjunior_threshold(
-    expr -> nothing,
-    inputs, location, threshold_expr
-)
-function parse_markovjunior_threshold(try_handle,
-                                      inputs::MacroParserInputs, location, threshold_expr)
-    push!(inputs.op_stack_trace, "Threshold statement")
-    try # Ensure stack trace is popped at end
-        user_attempt = try_handle(threshold_expr)
-        if exists(user_attempt)
-            user_attempt
-        elseif threshold_expr isa Integer
-            return convert(Int, threshold_expr)
-        elseif @capture threshold_expr (area/x_Real)
-            return ThresholdByArea(convert(Float32, 1/x))
-        elseif @capture(threshold_expr, (area*x_Real)) || @capture(threshold_expr, (x_Real*area))
-            return ThresholdByArea(convert(Float32, x))
-        elseif @capture threshold_expr (length/x_Real)
-            return ThresholdByLength(convert(Float32, 1/x))
-        elseif @capture(threshold_expr, (length*x_Real)) || @capture(threshold_expr, (x_Real*length))
-            return ThresholdByLength(convert(Float32, x))
-        elseif @capture threshold_expr (a_:b_)
-            aa = begin
-                push!(inputs.op_stack_trace, "Range start `$a`")
-                result = parse_markovjunior_threshold(inputs, location, a)
-                if !isa(result, ThresholdScalar)
-                    raise_parse_error(location, inputs, "Value not a scalar")
-                end
-                pop!(inputs.op_stack_trace)
-                result
-            end
-            bb = begin
-                push!(inputs.op_stack_trace, "Range end `$b`")
-                result = parse_markovjunior_threshold(inputs, location, b)
-                if !isa(result, ThresholdScalar)
-                    raise_parse_error(location, inputs, "Value not a scalar")
-                end
-                pop!(inputs.op_stack_trace)
-                result
-            end
-            return ThresholdRange(aa, bb)
-        else
-            raise_parse_error(location, inputs, "Unexpected format for threshold; expected")
-        end
-    # Handle stack trace no matter what.
-    finally
-        pop!(inputs.op_stack_trace)
     end
 end
 

@@ -195,6 +195,7 @@ mutable struct GuiRunner
     next_algorithm::GuiText
     next_algorithm_font::Ptr{CImGui.LibCImGui.ImFont}
     algorithm_error_msg::String
+    #TODO: Store a marker of where the error came from, so that the relevant logic knows it can be cleared after fixing problems
 
     available_scenes::Vector{String}
     next_scene_name::GuiText

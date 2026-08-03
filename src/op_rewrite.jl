@@ -2429,6 +2429,8 @@ function parse_markovjunior_rewrite_rule_md(inputs::MacroParserInputs, loc, expr
             end
         end
 
+        # 
+
         #TODO: Find symmetric axes (watch out for Lookup cells that reference one side!) and eliminate redundant explicit+tail-symmetrt options
 
         return RewriteRule_MD(

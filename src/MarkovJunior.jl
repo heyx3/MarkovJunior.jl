@@ -3,46 +3,44 @@ A reimplementation of [https://github.com/mxgmn/MarkovJunior](mxgmn/MarkovJunior
 
 To run the GUI editor/player, simply call `markovjunior_run_gui()`.
 
+# Usage within Julia
 
-# Algorithm Definition
+An algorithm instance can be defined with the macro `@markovjunior [options] begin ... end`.
+The specific syntax is already [documented elsewhere](docs/dsl.md).
+To parse the algorithm from a string (or existing AST), call `markov_algo_parse(source)`.
 
-Use `@markovjunior` to generate an algorithm instance.
-The following functions allow you to work with an instance:
+The algorithm runs as a coroutine within its own Task (i.e. worker thread).
+Start the task with `commsChannel::AlgoCommsChannel = markov_algo_run(algo, initial_state_or_resolution, [tick_settings]; ...)`
+The `TickSettings` struct allows you to control how the algorithm runs, and can even be changed during the run.
+For example you can signal the algorithm to cancel itself with `ticking.cancel_algo = true`,
+  or fast-forward to the end by setting `ticking.skip_most_tagged_events = true` and
+  `ticking.min_runtime_tick_priority = 99999999`.
 
-* `markov_algo_start` to start running it
-* `markov_algo_step` to update it
-* `markov_algo_is_finished` to check if it's done
-* `markov_algo_finish` to run all the way to the end (no timeout for infinite loops)
-* `markov_algo_grid` to read the current state of the grid
+To control the algorithm, it's recommended to call `markov_algo_complete()` with a lambda for tagged events,
+  and optionally a lambda for ticks as well.
+Your lambdas are *blocking calls*, so you could do time-slicing by calling `sleep(x)` within them.
+There are special built-in tagged events, as well as custom ones you can set up within the algorithm.
+Built-in tags are stored in the following global variables:
 
-## Custom Ops
+* `TAG_ALGO_STARTING` for when the algorithm is about to start running.
+* `TAG_NEW_GRID` for when an Op has reallocated (resized) the output grid.
+This is also raised for the initial grid, immediately before `TAG_ALGO_STARTING`.
+* `TAG_ALGO_COMPLETED` for when the algorithm completes successfully and is about to deallocate the grid.
+* `TAG_ALGO_CANCELED` for when you canceled the algorithm and it's about to deallocate the grid.
 
-To define a new `AbstractMarkovOp` (like `@rewrite`), implement the following
-  un-exported interface (see their doc-strings for more info):
+If you want manual control, take the channel returned by `markov_algo_run()` (of type `AlgoCommsChannel`)
+  and follow this protocol loop:
 
-* `markov_op_state_type`
-* `markov_op_initialize`
-* `markov_op_iterate`
-* `markov_op_cancel` if you have any resources/allocations to release;
-you may want to call this when your op finishes as well
-* `markov_op_min_dimension` if your op implies the grid must have a certain number of dimensions
-* `dsl_string`; note that ops are represented with macro call syntax
-* `parse_markovjunior_op` is the inverse of `dsl_string`
-
-## Custom Biases
-
-To define a new `AbstractMarkovBias`, implement the following
-  un-exported interface (see their doc-strings for more info):
-
-* `markov_bias_state_type`
-* `markov_bias_initialize`
-* `markov_bias_update`
-* `markov_bias_cleanup`
-* `markov_bias_calculate`
-* `dsl_string`; note that biases are represented with function call syntax
-* `parse_markovjunior_bias` is the inverse of `dsl_string`
-* `check_markovjunior_biases` if your new bias has rules
-  that need to be validated after parsing (e.g. only one instance allowed)
+1. Read one element from the channel.
+   1. If it's an `Int`, then this is a normal algorithm tick where the int is the tick's 'priority'.
+   2. If it's a `Symbol`, then it's a tagged event.
+      1. If the tag is `MarkovJunior.TAG_NEW_GRID`, then read one more channel element
+which is a reference to the newly-allocated grid, of type `CellGrid{N}`.
+      2. If the tag is `MarkovJunior.TAG_ALGO_COMPLETED` or `MarkovJunior.TAG_ALGO_CANCELED`,
+then no more messages will come in and the current grid will be deallocated as soon as you let the algorithm resume.
+      3. Otherwise it is an internal bookkeeping event (like `MarkovJunior.TAG_ALGO_STARTING`)
+or a custom event you set up within the algorithm source. Do as you please.
+2. Let the algorithm resume by writing `zero(Int)` to the channel.
 
 # GUI runner Tool
 
@@ -85,18 +83,14 @@ include("cells.jl")
 include("allocator.jl")
 include("algo.jl")
 include("dsl.jl")
-include("interface.jl")
+include("thresholds.jl")
+include("algo_interfaces.jl")
 include("op_rewrite.jl")
 include("op_draw_box.jl")
 include("op_sequence.jl")
 include("bias_temperatue.jl")
 include("bias_field.jl")
-export AbstractMarkovAllocator, AbstractMarkovBias, AbstractMarkovOp,
-       MarkovAlgorithm, MarkovAlgoState, MarkovOpContext,
-       markov_algo_grid, markov_algo_n_iterations,
-       markov_algo_start, markov_algo_step, markov_algo_finish,
-       markov_algo_is_started, markov_algo_is_finished,
-       @markovjunior, markov_algo_parse, markov_algo_to_string
+error("#TODO: New export statements")
 
 # Tooling:
 if BUILT_WITH_TOOL

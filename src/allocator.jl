@@ -25,6 +25,41 @@ markov_allocator_release_ordered_set(allocator::AbstractMarkovAllocator, s::Orde
 markov_allocator_release_set(allocator::AbstractMarkovAllocator, s::Set) = nothing
 Base.close(::AbstractMarkovAllocator) = nothing
 
+"Executes and returns your lambda on the given allocated array, automatically cleaning it up afterwards"
+@inline function markov_allocator_with_array(to_do,
+                                             allocator::AbstractMarkovAllocator,
+                                             size::Tuple{Vararg{Integer}},
+                                             T::DataType)
+    array = markov_allocator_acquire_array(allocator, size, T)
+    try
+        return to_do(array)
+    finally
+        markov_allocator_release_array(allocator, array)
+    end
+end
+"Executes and returns your lambda on the given allocated set, automatically cleaning it up afterwards"
+@inline function markov_allocator_with_set(to_do,
+                                           allocator::AbstractMarkovAllocator,
+                                           T::DataType)
+    set = markov_allocator_acquire_set(allocator, T)
+    try
+        return to_do(array)
+    finally
+        markov_allocator_release_set(allocator, set)
+    end
+end
+"Executes and returns your lambda on the given allocated set, automatically cleaning it up afterwards"
+@inline function markov_allocator_with_ordered_set(to_do,
+                                                   allocator::AbstractMarkovAllocator,
+                                                   T::DataType)
+    set = markov_allocator_acquire_ordered_set(allocator, T)
+    try
+        return to_do(array)
+    finally
+        markov_allocator_release_ordered_set(allocator, set)
+    end
+end
+
 
 ########
 
@@ -43,6 +78,7 @@ MarkovAllocatorHeapReused() = MarkovAllocatorHeapReused(
     Dict{DataType, Vector{<:OrderedSet}}(),
     Dict{DataType, Vector{<:Set}}()
 )
+println("#TODO: One global HeapReused")
 
 "Helper struct that exists to return a specific value for 'Base.length()'"
 struct ConstantLength

@@ -60,14 +60,15 @@ abstract type AbstractMarkovOp end
 abstract type AbstractMarkovBias end
 
 # Equality between ops and between biases is important for testing.
-# By default, we check their precise types and their individual fields with ==
-#   (by default Julia would use === on the fields).
+# We set a standard implementation of checking their precise types
+#   and comparing their individual fields with == (by default Julia would use === on the fields).
 Base.:(==)(a::T, b::T) where {T<:Union{AbstractMarkovOp, AbstractMarkovBias}} =
     (typeof(a) == typeof(b)) && all(
         f -> getfield(a, f) == getfield(b, f),
         fieldnames(typeof(a))
     )
 #
+
 
 struct MarkovAlgorithm
     initial_fill::UInt8
@@ -98,81 +99,129 @@ Base.:(==)(a::MarkovAlgorithm, b::MarkovAlgorithm) = (
 )
 
 
-"Information about the algorithm state relevant to a Bias struct"
-struct MarkovBiasContext
+"The tag that is emitted right after the algorithm starts, allowing you to decide when to actually let it run"
+const TAG_ALGO_STARTING = :ALGORITHM_STARTING
+"The tag that's used whenever an Op replaces the grid (including before the first tick); this tag is always followed by a reference to the new grid"
+const TAG_NEW_GRID = :ALGORITHM_REPLACED_GRID
+"The tag for a completed algorithm run"
+const TAG_ALGO_COMPLETED = :ALGORITHM_COMPLETED
+"The tag for a canceled algorithm run"
+const TAG_ALGO_CANCELED = :ALGORITHM_CANCELED
+
+const BUILTIN_TAGS = Set{Symbol}([
+    TAG_ALGO_STARTING, TAG_NEW_GRID,
+    TAG_ALGO_COMPLETED, TAG_ALGO_CANCELED
+])
+const IMPORTANT_BUILTIN_TAGS = Set{Symbol}([
+    TAG_NEW_GRID,
+    TAG_ALGO_COMPLETED, TAG_ALGO_CANCELED
+])
+
+"
+Ticks level 1 and 2 are very minor events
+  that we usually don't want to waste any CPU cycles on checking.
+"
+const STANDARD_MIN_COMPILE_TIME_TICK_PRIORITY = 3
+
+struct ErrorCancelAlgo <: Exception end
+Base.showerror(io::IO, ::ErrorCancelAlgo) = error("ErrorCancelAlgo should never go uncaught!")
+
+"
+Controls how an algorithm a) time-slices itself and b) keeps the user updated on tagged events.
+You may edit these settings mid-run.
+"
+Base.@kwdef mutable struct TickSettings{MinCompileTimePriority}
+    # The above type parameter removes low-priority ticks at compile time;
+    #   this removes further ones with runtime checks.
+    min_runtime_tick_priority::Int = STANDARD_MIN_COMPILE_TIME_TICK_PRIORITY + 1
+
+    # Only "new grid" and "canceled/completed" will happen; the rest will not.
+    skip_most_tagged_events::Bool = false
+    cancel_algo::Bool = false
+
+    # A hint to algorithm logic that the visual output matters;
+    #   without this there are some clever optimizations that re-order events.
+    #
+    # Implemented as a stack so that specific sequences can push and pop their own hint.
+    # An empty stack represents 'false'.
+    animated::Vector{Bool} = preallocated_vector(Bool, 2)
+end
+TickSettings(; kw...) = TickSettings{STANDARD_MIN_COMPILE_TIME_TICK_PRIORITY}(; kw...)
+is_animated(t::TickSettings)::Bool = !isempty(t.animated) && t.animated[end]
+
+const AlgoCommsChannel = Channel{Union{Int, Symbol, CellGrid{NGrid}}}
+
+mutable struct AlgoState{NGrid, TGrid<:CellGrid{NGrid},
+                         MinCompileTimeTickPriority}
+    grid::TGrid
+    rng::PRNG
     allocator::AbstractMarkovAllocator
 
-    #NOTE: These collections are copies of the one in MarkovAlgorithm and should not be modified!
-    pragmas_chronological::Vector{Pair{Symbol, Int}}
-    pragmas_map::Dict{Symbol, Vector{Vector{Any}}}
-    add_ons::Dict{Symbol, Any}
-    data_store::Dict{Symbol, Any}
+    data_store::Dict{Symbol, Any}()
+
+    channel::AlgoCommsChannel
+    # (the inclusion of Symbol means that the Ints get boxed, however
+    #    Julia keeps an array of pre-boxed small Ints so we shouldn't be affected --
+    #    see https://github.com/JuliaLang/julia/issues/62598)
+
+    ticking::TickSettings{MinCompileTimeTickPriority}
+end
+
+@inline markov_algo_tick(s::AlgoState{NG, TG, MinP}, p::Int) where {NG, TG, MinP} = if p < MinP
+    nothing
+elseif s.ticking.cancel_algo
+    throw(ErrorCancelAlgo())
+elseif (p <= s.min_runtime_priority) || s.insta_finish
+    nothing
+else
+    put!(channel, M)
+    @bp_check(take!(channel) == 0, "You should write 0 in response to every tick")
+    nothing
+end
+function markov_algo_tick(s::AlgoState, tag::Symbol)
+    if !s.ticking.skip_most_tagged_events || in(tag, IMPORTANT_BUILTIN_TAGS)
+        put!(s.channel, tag)
+        if tag == TAG_NEW_GRID
+            put!(s.channel, s.grid)
+        end
+        @bp_check(take!(channel) == 0, "You should write 0 in response to every tick")
+    end
+    if s.ticking.cancel_algo
+        throw(ErrorCancelAlgo())
+    end
+    return nothing
+end
+
+"Reallocates the algorithm grid and issues a tagged event for it"
+function markov_algo_new_grid(new_state_setup_fn,
+                              state::AlgoState{NGrid, TGrid},
+                              new_size::NTuple{NGrid, Int}
+                             )::CellGrid{NGrid}
+    new_grid = markov_allocator_acquire_array(state.allocator, new_size, UInt8)
+    new_state_setup_fn(state.grid, new_grid)
+
+    markov_allocator_release_array(state.allocator, state.grid)
+    state.grid = new_grid
+
+    markov_algo_tick(state, TAG_NEW_GRID)
+    return new_grid
 end
 
 "
-Information about the algorithm state relevant to an Op.
-Inherits properties from `MarkovBiasContext`.
+Runs the algorithm as a coroutine on a separate task,
+   writing ticks/events through a Channel and waiting for you to write `zero(Int)`
+   in response to each one.
+Returns the Channel you must use to communicate with it.
+
+`seeds` should be a `Real` number or small enumeration of `Real` numbers.
 "
-struct MarkovOpContext
-    all_biases::Vector{AbstractMarkovBias} # Ops can read/add/remove from this as appropriate
-    bias_context::MarkovBiasContext
-end
-Base.propertynames(::MarkovOpContext) = propertynames(MarkovOpContext)
-Base.propertynames(::Type{MarkovOpContext}) = (
-    propertynames(MarkovBiasContext)...,
-    fieldnames(MarkovOpContext)...
-)
-@inline Base.getproperty(c::MarkovOpContext, n::Symbol) = if n in fieldnames(MarkovOpContext)
-    getfield(c, n)
-else
-    getproperty(getfield(c, :bias_context), n)
-end
-
-function Base.close(context::MarkovOpContext)
-    markov_allocator_release_array(context.allocator, context.all_biases)
-end
-
-"Inherits properties from `MarkovOpContext`, though they aren't directly settable"
-mutable struct MarkovAlgoState{N}
-    grid::Base.RefValue{CellGridConcrete{N}} # Wrapped in a Ref for implementation reasons
-    n_iterations::Int
-
-    op_idx::Int
-    op_state::Any
-    op_context::MarkovOpContext # Inner sequences can modify this field
-
-    rng::PRNG
-    data_store::Dict{Symbol, Any} # Place for Ops, Biases, etc to store persistent data
-
-    buffer_iter_count::Base.RefValue{Optional{Int}}
-end
-Base.propertynames(c::MarkovAlgoState) = propertynames(typeof(c))
-Base.propertynames(T::Type{<:MarkovAlgoState}) = (
-    propertynames(MarkovOpContext)...,
-    fieldnames(T)...
-)
-@inline Base.getproperty(s::MarkovAlgoState, n::Symbol) = if n in fieldnames(typeof(s))
-    getfield(s, n)
-else
-    getproperty(getfield(s, :op_context), n)
-end
-
-
-##################
-#  Interface
-
-"""
-Initial state may be a size (tuple or Vec), filled with the algorithm's default fill color,
-  or else an array that is copied from.
-
-Seeds may be a single bitstype or an enumeration of them.
-"""
-function markov_algo_start(algo::MarkovAlgorithm,
-                           initial::Union{CellGrid, Tuple{Vararg{Integer}}, VecT{<:Integer}},
-                           @nospecialize(seeds = rand(UInt32))
-                           ;
-                           allocator::AbstractMarkovAllocator = MarkovAllocatorHeapReused()
-                          )::MarkovAlgoState
+function markov_algo_run(algo::MarkovAlgorithm,
+                         initial::Union{CellGrid, Tuple{Vararg{Integer}}, VecT{<:Integer}},
+                         ticking::TickSettings = TickSettings()
+                         ;
+                         seeds = rand(UInt32),
+                         allocator::AbstractMarkovAllocator = MarkovAllocatorHeapReused()
+                        )::AlgoCommsChannel
     initial_size::Tuple{Vararg{Int}} = if initial isa CellGrid
         size(initial)
     elseif initial isa Vec
@@ -188,162 +237,73 @@ function markov_algo_start(algo::MarkovAlgorithm,
               algo.fixed_dimension, "D algorithm")
     end
 
-    grid::CellGridConcrete{length(initial_size)} = markov_allocator_acquire_array(allocator, initial_size, UInt8)
-    if initial isa CellGrid
-        copyto!(grid, initial)
-    else
-        fill!(grid, algo.initial_fill)
-    end
-
-    rng = (seeds isa Real) ? PRNG(seeds)    : PRNG(seeds...)
-
+    rng::PRNG = (seeds isa Real) ? PRNG(seeds) : PRNG(seeds...)
     data_store = Dict{Symbol, Any}()
-    state = MarkovAlgoState(
-        Ref(grid), 0,
-        0, nothing,
-        MarkovOpContext(
-            markov_allocator_acquire_array(allocator, (), AbstractMarkovBias)::Vector{AbstractMarkovBias},
-            MarkovBiasContext(
-                allocator,
-                algo.pragmas_chronological, algo.pragmas_map, algo.add_ons, data_store
-            )
-        ),
-        rng,
-        data_store,
-        Ref{Optional{Int}}()
-    )
-    @logic_logln("Started an algorithm run with seeds ", seeds)
-    return state
-end
-
-"May not run all requested iterations, due to the algorithm completing"
-function markov_algo_step(algo::MarkovAlgorithm, state::MarkovAlgoState, n_iterations::Integer = 1)
-    # Internal behavior: if n_iterations is negative, run all the way to the end.
-    if n_iterations < 0
-        state.buffer_iter_count[] = nothing
-    else
-        state.buffer_iter_count[] = convert(Int, n_iterations)
-    end
-
-    @logic_logln("Next tick of the algorithm will run ",
-                  exists(state.buffer_iter_count[]) ?
-                      state.buffer_iter_count[] :
-                      "infinite",
-                  " iterations")
-
-    @logic_tab_in()
-    while !markov_algo_is_finished(algo, state) && (isnothing(state.buffer_iter_count[]) || state.buffer_iter_count[] > 0)
-        # Note that when starting the algorithm, op_idx is 0 and op_state is initialized to nothing.
-        if exists(state.op_state)
-            n_iters_before::Int = get_something(state.buffer_iter_count[], 0)
-            state.op_state = markov_op_iterate(algo.sequence[state.op_idx], state.op_state, state.grid,
-                                               state.rng, state.op_context, state.buffer_iter_count)
-            n_iters_after::Int = get_something(state.buffer_iter_count[], 0)
-
-            n_op_ticks::Int = n_iters_before - n_iters_after
-            @markovjunior_assert(n_op_ticks >= 0,
-                                 "Your op ", typeof(algo.sequence[state.op_idx]),
-                                   "*added* ", -n_op_ticks, " to n_ticks_left??")
-            state.n_iterations += n_op_ticks
-
-            @logic_logln("Completed ", n_op_ticks, " iterations, totaling ", state.n_iterations)
+    return AlgoCommsChannel(0) do ch
+        initial_grid = markov_allocator_acquire_array(allocator, initial_size, UInt8)
+        if initial isa CellGrid
+            copyto!(initial_grid, initial)
+        else
+            fill!(initial_grid, algo.initial_fill)
         end
+        algo_state = AlgoState(initial_grid, rng, allocator, data_store, ch, ticking)
 
-        if isnothing(state.op_state)
-            @logic_logln("Moving on to the next top-level op!")
-            state.op_idx += 1
+        try
+            @logic_logln "Starting algorithm of size " size(algo_state.grid)
+            markov_algo_tick(algo_state, TAG_NEW_GRID)
+            markov_algo_tick(algo_state, TAG_ALGO_STARTING)
+
             @logic_tab_in()
-            if state.op_idx <= length(algo.sequence)
-                @logic_logln(typeof(algo.sequence[state.op_idx]))
-                state.op_state = markov_op_initialize(algo.sequence[state.op_idx],
-                                                      markov_op_state_type(algo.sequence[state.op_idx],
-                                                                           typeof(state.grid[]),
-                                                                           state.rng, state.op_context),
-                                                      state.grid,
-                                                      state.rng, state.op_context)
-                @logic_logln("Initial state:\n  ", state.op_state)
-            else
-                @logic_logln("No more ops left. This algo run is about to end")
+            for op in algo.sequence
+                @logic_logln "Starting a top-level op..."
+                @logic_tab_in()
+                markov_algo_run(op, algo, algo_state, (), ())
+                @logic_tab_out()
             end
+            @logic_logln "Finishing algorithm of size " size(algo_state.grid)
             @logic_tab_out()
+            markov_algo_tick(algo_state, TAG_ALGO_COMPLETED)
+        catch e
+            if e isa ErrorCancelAlgo
+                @logic_logln "User canceled algorithm!"
+                markov_algo_tick(algo_state, TAG_ALGO_CANCELED)
+            else
+                rethrow()
+            end
+        finally
+            markov_allocator_release_array(algo_state.allocator, algo_state.grid)
         end
     end
-    @logic_tab_out()
-
-    return nothing
 end
-markov_algo_finish(algo::MarkovAlgorithm, state::MarkovAlgoState) = markov_algo_step(algo, state, -1)
 
 "
-Releases all allocations of the MarkovAlgoState back to its allocator;
-  remember to call this when you're done with the algorithm state!
+Runs through the given algorithm (as its channel returned from `markov_algo_run()`).
+On each tagged event, sends it along with the current grid into your lambda.
+  You can also provide a lambda for normal ticks.
 "
-function Base.close(s::MarkovAlgoState, owning_algo::MarkovAlgorithm)
-    @logic_logln("Closing algo for ", vsize(s.grid[]))
-    @logic_tab_in()
-    if !markov_algo_is_finished(owning_algo, s) && markov_algo_is_started(owning_algo, s)
-        markov_op_cancel(owning_algo.sequence[s.op_idx], s.op_state, s.op_context)
+function markov_algo_complete(process_tagged_event,
+                              ch::AlgoCommsChannel,
+                              current_grid::Optional{CellGrid{NGrid}} = nothing,
+                              process_tick = ((priority::Int, grid::CellGrid{NGrid}) -> nothing)
+                             )::Nothing where {NGrid}
+    while true
+        next_msg = take!(ch)
+        if next_msg isa Int
+            process_tick(next_msg, current_grid)
+        elseif next_msg isa Symbol
+            if next_msg == TAG_NEW_GRID
+                current_grid = take!(ch)
+            end
+            process_tagged_event(next_msg, current_grid)
+            if next_msg == TAG_ALGO_COMPLETED
+                break
+            end
+        else
+            error("Unhandled: ", typeof(next_msg))
+        end
     end
-    markov_allocator_release_array(s.allocator, s.grid[])
-    markov_allocator_release_array(s.allocator, s.op_context.all_biases)
-    #TODO: Release data_store? Or just pool it internally?
-    @logic_tab_out()
+
     return nothing
 end
-
-
-markov_algo_is_started(algo::MarkovAlgorithm, state::MarkovAlgoState) = (state.op_idx > 0)
-markov_algo_is_finished(algo::MarkovAlgorithm, state::MarkovAlgoState) = (state.op_idx > length(algo.sequence))
-
-"Operations can require a minimum number of dimensions for the grid"
-markov_op_min_dimension(::AbstractMarkovOp)::Int = 1
-
-"Gets the grid that generation is running on"
-markov_algo_grid(s::MarkovAlgoState) = s.grid[]
-"Gets the current number of iterations executed so far"
-markov_algo_n_iterations(s::MarkovAlgoState) = s.n_iterations
 
 markov_algo_to_string(a::MarkovAlgorithm) = dsl_string(a)
-
-
-#################
-#  Thresholds
-
-struct ThresholdByArea
-    scale::Float32
-end
-struct ThresholdByLength
-    scale::Float32
-end
-const ThresholdScalar = Union{Int, ThresholdByArea, ThresholdByLength}
-
-"A randomly chosen threshold between two (unordered) values"
-struct ThresholdRange
-    a::ThresholdScalar
-    b::ThresholdScalar
-end
-
-const Threshold = Union{ThresholdScalar, ThresholdRange}
-
-
-struct ThresholdInputs
-    area::Float32
-    length::Float32
-    rng::PRNG
-end
-
-get_threshold(th::Threshold, in::ThresholdInputs)::Int = max(1, round(Int, get_raw_threshold(th, in)))
-get_threshold(th::Threshold, grid::CellGrid, rng::PRNG)::Int = get_threshold(th, ThresholdInputs(
-    convert(Float32, prod(vsize(grid))),
-    convert(Float32, sum(vsize(grid)) / ndims(grid)),
-    rng
-))
-
-get_raw_threshold(th::Int, in::ThresholdInputs) = convert(Float32, th)
-get_raw_threshold(th::ThresholdByArea, in::ThresholdInputs) = convert(Float32, in.area) * th.scale
-get_raw_threshold(th::ThresholdByLength, in::ThresholdInputs) = convert(Float32, in.length) * th.scale
-function get_raw_threshold(th::ThresholdRange, in::ThresholdInputs)
-    a::Float32 = get_raw_threshold(th.a, in)
-    b::Float32 = get_raw_threshold(th.b, in)
-    return lerp(a, b, rand(in.rng, Float32))
-end

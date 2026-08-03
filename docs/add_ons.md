@@ -41,30 +41,30 @@ mj.add_ons[:my_custom_op_param] = 4.5  # Only this instance has this param
 
 ### Data Store
 
-To store data at runtime for one specific run of an algorithm,
-  use the `data_store` dictionary, in the `context` object passed to you:
+When extending the language, you can store and modify data at runtime.
+Use the `data_store` dictionary, in the algorithm state that's passed to you:
 
 ````julia
 # (inside the implementation of a custom Op or Bias)
-context.data_store[:my_custom_n_applications] += 1
-depth_i::Int = context.data_store[:my_custom_n_applications]
+state.data_store[:my_custom_n_applications] += 1
+depth_i::Int = state.data_store[:my_custom_n_applications]
 ````
 
 **NOTE**: because `data_store` is a type-unstable `Dict{Symbol, Any}`,
   I highly recommend storing your custom data in a mutable form (like `Ref{T}`)
-  which you can grab once and store in a type-stable way.
+  which you can pull into a type-stable local variable.
 
 ## Allocators
 
 Users can provide their own "allocators" to control the many arrays and sets that are used
   in each run of an algorithm.
-This allocator is provided in the `context` object passed to your custom Op or Bias.
+This allocator is stored in the algorithm state, available to your custom extensions.
 
 ````julia
 # Our custom Op needs to grab a new Int32 array at half the grid resolution.
 # The allocator is type-unstable, so it's important to specify the type of the variable.
 my_alloc::Array{Int32, ndims(grid)} = markov_allocator_acquire_array(
-    context.allocator,
+    state.allocator,
     size(grid) .÷ 2, Int32
 )
 # If you're grabbing several allocations at once, dispatch on the allocator type to make this easier:
@@ -72,26 +72,34 @@ function with_alloc(alloc::TAlloc) where {TAlloc}
     # Now allocator calls are type-stable!
     ...
 end
-with_alloc(context.allocator)
+with_alloc(state.allocator)
 ...
 # Our Op is finished with the array.
-markov_allocator_release_array(context.allocator, my_alloc)
+markov_allocator_release_array(state.allocator, my_alloc)
+````
+
+Most of the time you should use our scoped wrapper:
+
+````julia
+markov_allocator_with_array(state.allocator, size(grid) .÷ 2, Int32) do small_grid
+    ... # Use the grid
+end
 ````
 
 You can also allocate sets and 'ordered sets' (from the package *OrderedCollections.jl*),
   in a similar way but without providing a size.
-Each new allocated set is expected to already be empty.
+You can expect the sets from the allocator to always come empty.
 
 > *OrderedSets are important because all algorithm logic must be deterministic!*
 > *Don't ever iterate through normal `Set` and `Dict` objects.*
 
 ## Logging
 
-There is a bult-in system of logging macros for algorithm logic.
+There is a built-in system of macros for logging algorithm logic.
 When implementng your own Ops or Biases, you should throw data into it!
 
 It is controlled by a "compile-time" flag, which in Julia can actually be toggled at will --
-  albeit at the cost of significant JIT overhead.
+  albeit at the cost of some JIT compilation time.
 It defaults to off, and you can turn the logging on by redefining the function `MarkovJunior.log_logic() = true`.
 
 The following logger macros are available (but un-exported):
@@ -122,52 +130,12 @@ The stack trace is stored in `inputs.op_stack_trace::Stack{Any}`, in case you wa
 If the likes of `@fill`, `@rewrite`, and `@sequence` aren't enough for you,
   you can define your own grid operations.
 
-First create a struct inheriting from `AbstractMarkovOp`,
-  and I recommend another one representing the current state of your Op as it runs.
-We'll call this second one the "state struct".
+First create a struct inheriting from `AbstractMarkovOp` defining what your Op will do.
 
-> *Optimization is out of scope for this document, but just know*
-> *that you can feed runtime data about the grid into your state struct's type parameters.*
-> *This upgrades the data to a compile-time constant after paying a one-time JIT cost,*
-> *and is one major trick behind Julia's high performance!*
+**TODO: Finish**
 
-Now implement the following interface:
-
-````julia
-using MarkovJunior
-const MJ = MarkovJunior
-
-# Report the type of data representing your Op's running state -- the 'state struct' mentioned above.
-MJ.markov_op_state_type(T::Type{<:MyCustomOp}, ::Val{NGridDims}) where {NGridDims} = MyCustomOpState{NGridDims}
-# If your state type depends on the runtime state of the algorithm, use this overload:
-MJ.markov_op_state_type(op::MyCustomOp, GridType::Type{<:CellGrid{NGridDims}}, rng::PRNG, context::MJ.MarkovOpContext) =
-    MyCustomOpState{op.n_to_use, rand(rng, 1:3), GridType}
-
-# Start running the operation, and return the initial state.
-# You can also return `nothing` to immediately end.
-MJ.markov_op_initialize(op::MyCustomOp,
-                        # You can optionally take the output of 'markov_op_state_type()' as the second parameter.
-                        chosen_state_type::Type{<:MyCustomOpState},
-                        # The grid::CellGrid{N} may instead be taken as a Ref{<:CellGrid{N}},
-                        #    in order to reallocate it (for some kind of upscaling/downscaling operation)
-                        grid::CellGrid{N},
-                        rng::PRNG, context::MJ.MarkovOpContext) = MyCustomOpState(...)
-
-# Run one tick of the operation and return its next state.
-# To end iteration, return `nothing`.
-# As before, grid can be taken as a Ref instead of a direct array.
-MJ.markov_op_iterate(op::MyCustomOp, current_state, grid, rng, context) = ...
-# If your operation can run more effectively in batches, then use this overload instead:
-MJ.markov_op_iterate(op::MyCustomOp, current_state, grid, rng context,
-                     # If the counter holds an integer, you must do up to this many ticks and then subtract that amount from the counter.
-                     # If the counter holds `nothing`, you should just run the op to completion.
-                     ticks_left::Ref{Optional{Int}}) = ...
-
-# Mainly intended to release allocated arrays in your state struct.
-# Automatically called if the algorithm gets canceled early.
-# You probably want to call it manually when your op finishes running.
-MJ.markov_op_cancel(op::MyCustomOp, state, context) = ...
-````
+If you want your Op to reallocate the grid, call `markov_algo_new_grid(state, size_tuple)::CellGrid`.
+The algorithm state's `grid` field will point to the new array after this call.
 
 Lastly, implement parsing and string-ification of your Op.
 
@@ -212,13 +180,7 @@ Biases influence the `@rewrite` Op to prefer some rewrites over others.
 They can also be added to a `@sequence`, causing them to be inherited by every Op within that sequence.
 The workflow for Biases is almost identical to Ops:
 
-1. Declare a state type: `markov_bias_state_type`
-2. "Initialize" the Bias and return the initial state: `markov_bias_initialize`
-3. "Update" the Bias and return its new state: `markov_bias_update`
-4. "Cleanup" the Bias: `markov_bias_cleanup`
-5. Convert the Bias to and from a DSL string: `dsl_string`, `parse_markovjunior_bias`
-
-However there are a few ways in which it's different:
+**TODO: Rewrite, and then update the below ways in which it's different from Ops
 
 * The "update" happens once per rewrite operation, allowing it to react to any changes to the grid
 * Between each update, the Bias has a "calculate" function which is called many times --
@@ -234,8 +196,6 @@ to decide the bias towards each potential rewrite move: `markov_bias_calculate`
 Priorities decide which rule a `@rewrite` Op focuses on first.
 They are similar to biases, but operate per-rule rather than per-application of a rule at a specific place.
 The DSL syntax is `PRIORITIZE(name, args...)`, for example `PRIORITIZE(earliest)`.
-
-**NOTE: the interface for priorities will change in the future, so be careful when upgrading MarkovJunior.jl**
 
 1. Define a struct inheriting from `AbstractMarkovRewriteProperty`.
 2. Define its conversion to/from string: `dsl_string` and `parse_markovjunior_rewrite_priority`
