@@ -1,9 +1,11 @@
 ##   Ops  ##
 
+"Executes the given op within an algorithm and returns whether it was able to make any changes to the grid"
 function markov_algo_run(op::AbstractMarkovOp, algo, algo_state,
-                         inherited_bias_tuple, inherited_bias_state_tuple)
+                         inherited_bias_tuple, inherited_bias_state_tuple
+                        )::Bool
     throw(MethodError(markov_algo_run, typeof.((
-        op, algo, algo_state, inherited_bias_tuple, inherited_bias_state_tuple
+        op, algo, algo_state, inherited_bias_tuple, inherited_bias_state_tuple, flag_had_no_matches
     ))))
 end
 

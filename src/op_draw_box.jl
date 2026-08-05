@@ -100,7 +100,8 @@ end
 function markov_algo_run(op::MarkovOpDrawBox{NBox, TRule},
                          algo::MarkovAlgorithm, algo_state::AlgoState{NGrid},
                          inherited_bias_tuple::Tuple{Vararg{AbstractMarkovBias}},
-                         inherited_bias_state_tuple::Tuple) where {NBox, TRule, NGrid}
+                         inherited_bias_state_tuple::Tuple
+                        )::Bool where {NBox, TRule, NGrid}
     #TODO: If algo is 'animated', make this op respect biases
 
     box = get_draw_box_pixels(
@@ -108,118 +109,52 @@ function markov_algo_run(op::MarkovOpDrawBox{NBox, TRule},
         convert(Vec{NGrid, Int32}, vsize(algo_state.grid)),
         op.box_is_1D_scalar
     )
-    for pixel in min_inclusive(box):max_inclusive(box)
-        TODO: #TODO: Finish
-    end
-end
 
-struct MarkovOpDrawBox_State{N, TMask<:Optional{MaskGrid{N}}}
-    pixels::Bplus.Math.VecRange{N, Int32}
-    next_pixel::Optional{Vec{N, Int32}}
-    mask_grid::TMask
-    mask_level::Float32
-end
-
-markov_op_state_type(op::MarkovOpDrawBox, ::Type{<:CellGrid{NDims}}, ::PRNG, ::MarkovOpContext) where {NDims} =
-    MarkovOpDrawBox_State{NDims, isnothing(op.mask) ? Nothing : Array{Float32, NDims}}
-function markov_op_initialize(b::MarkovOpDrawBox{NBox, TRule},
-                              state_type::Type{<:MarkovOpDrawBox_State},
-                              grid::CellGrid{NGrid},
-                              rng::PRNG, context::MarkovOpContext
-                             )::Optional{state_type} where {NBox, NGrid, TRule}
-    box = get_draw_box_pixels(
-        b.space, b.box,
-        convert(Vec{NGrid, Int32}, vsize(grid)),
-        b.box_is_1D_scalar
-    )
-    pixel_range = min_inclusive(box):max_inclusive(box)
-
-    iter_start = iterate(pixel_range)
-    if isnothing(iter_start)
-        return nothing
+    mask_grid = if isnothing(op.mask)
+        nothing
     else
-        (next_pos, next_state) = iter_start
-        @markovjunior_assert(next_pos == next_state, "Iterator works differently than I thought")
+        a::Array{Float32, NGrid} = markov_allocator_acquire_array(algo_state.allocator, size(algo_state.grid), Float32)
+        rand!(rng, a)
+        a
+    end
 
-        mask_grid = if isnothing(b.mask)
-            nothing
-        else
-            a::Array{Float32, NGrid} = markov_allocator_acquire_array(context.allocator, size(grid), Float32)
-            rand!(rng, a)
-            a
-        end
-
-        mask_level = if isnothing(b.mask)
+    # Make sure to de-allocate the mask no matter what.
+    made_changes::Bool = try
+        mask_level = if isnothing(op.mask)
             # Value doesn't matter
             1.0f0
-        elseif b.mask isa Float32
-            b.mask
-        elseif b.mask isa NTuple{2, Float32}
-            lerp(b.mask..., rand(rng, Float32))
+        elseif op.mask isa Float32
+            op.mask
+        elseif op.mask isa NTuple{2, Float32}
+            lerp(op.mask..., rand(rng, Float32))
         else
-            error("Unhandled ", typeof(b.mask))
+            error("Unhandled ", typeof(op.mask))
         end
 
-        return MarkovOpDrawBox_State(pixel_range, next_pos, mask_grid, mask_level)
-    end
-end
-function markov_op_iterate(b::MarkovOpDrawBox{NBox, TRule},
-                           state::MarkovOpDrawBox_State{NGrid, TMaskGrid},
-                           grid::CellGrid{NGrid},
-                           rng::PRNG, context::MarkovOpContext,
-                           ticks_left::Ref{Optional{Int}}
-                          ) where {NBox, NGrid, TRule, TMaskGrid}
-    function apply_at(cell_idx)
-        if check_draw_box_rule(b.rule, grid[cell_idx]) &&
-           (TMaskGrid == Nothing || state.mask_grid[cell_idx] < state.mask_level)
-        #begin
-            grid[cell_idx] = b.value
+        # Make the mask data type-stable before entering the loop.
+        ((mask_grid, mask_level) -> begin
+
+            mc::Bool = false
+            for pixel in min_inclusive(box):max_inclusive(box)
+                if check_draw_box_rule(op.rule, algo_state.grid[pixel]) &&
+                    (isnothing(mask_grid) || (mask_grid[pixel] < mask_level))
+                #begin
+                    mc = true
+                    grid[pixel] = op.value
+                    markov_algo_tick(algo_state, 1)
+                end
+            end
+            mc
+
+        end)(mask_grid, mask_level)
+    finally
+        if exists(mask_grid)
+            markov_allocator_release_array(algo_state.allocator, mask_grid)
         end
     end
 
-    # In some circumstances we want to finish quickly.
-    finish_quickly = isnothing(ticks_left[]) ||
-                     (first(state.pixels) == one(Vec{NGrid, Int32}) && last(state.pixels) == vsize(grid)) ||
-                     haskey(context.pragmas_map, :fast_fills)
-    if finish_quickly && (state.next_pixel == first(state.pixels))
-        foreach(apply_at, first(state.pixels):last(state.pixels))
-        markov_op_cancel(b, state, context)
-        return nothing
-    # Otherwise apply to the next pixel and try to advance.
-    else
-        apply_at(state.next_pixel)
-        if exists(ticks_left[])
-            ticks_left[] -= 1
-        end
-
-        try_iterate = iterate(state.pixels, state.next_pixel)
-        return if isnothing(try_iterate)
-            markov_op_cancel(b, state, context)
-            nothing
-        else
-            @markovjunior_assert(try_iterate[1] == try_iterate[2],
-                                 "Iterator works differently than I thought")
-            typeof(state)(
-                state.pixels,
-                try_iterate[1],
-                state.mask_grid, state.mask_level
-            )
-        end
-    end
-end
-function markov_op_cancel(b::MarkovOpDrawBox{NBox, TRule},
-                          state::MarkovOpDrawBox_State{NGrid, TMaskGrid},
-                          context::MarkovOpContext
-                         ) where {NBox, NGrid, TRule, TMaskGrid}
-    if TMaskGrid != Nothing
-        markov_allocator_release_array(context.allocator, state.mask_grid)
-    end
-    return nothing
-end
-markov_op_min_dimension(b::MarkovOpDrawBox{NBox}) where {NBox} = if b.box_is_1D_scalar
-    1
-else
-    NBox
+    markov_algo_tick(algo_state, 3)
+    return made_changes
 end
 
 
@@ -407,5 +342,12 @@ function parse_markovjunior_op(::Val{Symbol("@fill")},
     end
     col = CELL_CODE_BY_CHAR[exCol]
 
+    inputs.min_dims = max(inputs.min_dims,
+        if box_is_1D_scalar
+            1
+        else
+            length(min_inclusive(space_box))
+        end
+    )
     return MarkovOpDrawBox(col, space, box_is_1D_scalar, space_box, rule, mask)
 end

@@ -303,8 +303,8 @@ However you can provide a *threshold* as the first argument, to limit this.
 * If you want to make it relative to the average length of the grid along each axis,
   pass a simple multiplication or division statement (**in parentheses** if using the simpler macro syntax):
   `@rewrite (0.5*length) R=>G`. It's automatically rounded and clamped >=1.
-* If you want a randomized threshold value, pass a range between two of the above terms.
-  `@rewrite (area/)
+* If you want a randomized threshold value, pass a range: `@rewrite (area/100):20`.
+It's OK if the "max" is greater than the "min".
 
 ### Symmetry
 
@@ -707,7 +707,7 @@ end path(G<-R<-w) # Add a pathing bias
 
 The `threshold` is identical to [the Threshold for `@rewrite` statements](#threshold),
   determining how many times to run, but with an extra option:
- `repeat` makes the sequence repeat until the first inner operation fails to have any matches.
+ `repeat` makes the sequence repeat until the first inner operation fails to do anything.
 
 The last argument to a sequence is a bias statement or block of statements,
   identical to [bias for `@rewrite` statements](#bias-and-weights).
