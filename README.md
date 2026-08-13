@@ -4,11 +4,11 @@ A Julia reimagining of [this awesome procedural generation algorithm](https://gi
   able to generate in any number of dimensions.
 It can build into several things:
 
-* A standalone executable running a GUI playground for testing scenes
-* A C-like DLL for other programs to integrate with
-* A standalone executable exposing the DLL interface through an IPC protocol (to avoid DLL hell).
+* A standalone executable, running a GUI playground for testing scenes
+* A C-like DLL, for other programs to integrate with
+* A standalone executable, exposing the algorithm through an IPC (to avoid DLL hell).
 
-> ***NOTE**: The IPC approach is strongly recommended over the DLL one!*
+> ***NOTE**: The DLL approach is currently deprecated over IPC!*
 
 [A plugin to integrate with Unreal Engine 5 is ongoing](https://github.com/heyx3/JMarkovJunior_Unreal5Demo).
 
@@ -145,39 +145,41 @@ They are numbered by the message's ID, for example you send `1` to initiate the 
    9. Read the success flag.
    10. If it succeeded, read a 4-byte uint representing the ID of the new algo state.
 4. **Destroy an algorithm run**
-   1. Write a 4-byte uint representing the algorithm's ID.
-   2. Write a 4-byte uint representing the algo state's ID.
-   3. Read the success flag.
+   1. Write a 4-byte uint representing the algo state's ID.
+   2. Read the success flag.
 5. **Step an algorithm run forward**
-   1. Write a 4-byte uint representing the algorithm's ID.
-   2. Write a 4-byte uint representing the running state's ID.
-   3. Write a 4-byte uint representing how many iterations to run.
-   4. Read the success flag.
-   5. If it succeeded, read a 1-byte bool (0 or 1) representing whether the algorithm is finished running.
-6. **Run an algorithm to completion**
-   1. Write a 4-byte uint representing the algorithm's ID.
-   2. Write a 4-byte uint representing the running state's ID.
-   3. Read the success flag.
-7. **Query whether an algorithm is finished**
-   1. Write a 4-byte uint representing the algorithm's ID.
-   2. Write a 4-byte uint representing the running state's ID.
-   3. Read the success flag.
-   4. If it succeeded, read a 1-byte bool (0 or 1) representing whether the algorithm is finished running.
-8. **Download the current state of the algorithm grid**
    1. Write a 4-byte uint representing the running state's ID.
-   2. Read the success flag. The rest of the steps only apply if successful.
+   2. Write some info about how to step it forward:
+      1. To run a certain number of ticks (or until the first tagged event), write the following.
+         1. `UInt8(0)`
+         2. `UInt32(lowest_tick_priority_to_count)` (usually 3 or 4; 1 and 2 are extremely minor events and often don't even trigger)
+         3. `UInt32(n_ticks)`
+      2. To run until the first tagged event, write the following.
+         1. `UInt8(1)`
+      3. To run the algorithm to completion, write the following.
+         1. `UInt8(2)`
+   3. Read the success flag. If it failed, your parameter were bad and you should stop here.
+   4. Read the result of the tick:
+      1. `UInt8` bool for whether the algorithm finished.
+      2. If not finished, `UInt8` bool for whether we encountered a tagged event.
+Note that under this protocol, the built-in tagged events are handled internally --
+  you'll never see tags for "algorithm started" or "new grid allocated" or "algorithm completed".
+Only your own events.
+      3. If encountered a tagged event, read the tag using the same format as other/error strings (mentioned above).
+6. **Download the current state of the algorithm grid**
+   1. Write a 4-byte uint representing the running state's ID.
+   2. Read the success flag. If it failed, your state ID is invalid and you should stop here.
    3. Read a 4-byte uint representing the number of dimensions of the grid.
-  This will match what you originally passed when starting the run.
    4. For each grid dimension, read a 4-byte uint representing the resolution along that axis.
   This *may not* match the original size you started with, depending on what your algorithm does!
    5. Read the bytes of the grid.
   Each pixel is one byte so the total byte-count is the product of the grid's resolution along each axis.
   The first axis (X) is the innermost.
-1. **Stop accepting new clients to the service** (must tell the server to support this when starting up)
+7. **Stop accepting new clients to the service** (must tell the server to support this when starting up)
    1. Read the success flag.
-Note that multiple clients can receive success; it only fails if the server does not allow the message.
-   1. If running this service through the standalone executable,
-  then the process dies once all existing clients have disconnected.
+Note that it only fails if the server does not support this call; redundant calls still "succeed".
+   1. If it succeeded, and this service is running through the standalone executable,
+  then the IPC process automatically dies once all existing clients have disconnected.
 
 ## Scenes
 

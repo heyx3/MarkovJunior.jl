@@ -122,6 +122,8 @@ Ticks level 1 and 2 are very minor events
   that we usually don't want to waste any CPU cycles on checking.
 "
 const STANDARD_MIN_COMPILE_TIME_TICK_PRIORITY = 3
+"The tick priority for the end of a normal Op, like @rewrite"
+const STANDARD_END_OF_OP_TICK = 4
 
 struct ErrorCancelAlgo <: Exception end
 Base.showerror(io::IO, ::ErrorCancelAlgo) = error("ErrorCancelAlgo should never go uncaught!")
@@ -129,8 +131,10 @@ Base.showerror(io::IO, ::ErrorCancelAlgo) = error("ErrorCancelAlgo should never 
 "
 Controls how an algorithm a) time-slices itself and b) keeps the user updated on tagged events.
 You may edit these settings mid-run.
+
+
 "
-Base.@kwdef mutable struct TickSettings{MinCompileTimePriority}
+Base.@kwdef mutable struct MarkovTickSettings{MinCompileTimePriority}
     # The above type parameter removes low-priority ticks at compile time;
     #   this removes further ones with runtime checks.
     min_runtime_tick_priority::Int = STANDARD_MIN_COMPILE_TIME_TICK_PRIORITY + 1
@@ -145,29 +149,33 @@ Base.@kwdef mutable struct TickSettings{MinCompileTimePriority}
     # Implemented as a stack so that specific sequences can push and pop their own hint.
     # An empty stack represents 'false'.
     animated::Vector{Bool} = preallocated_vector(Bool, 2)
+
 end
-TickSettings(; kw...) = TickSettings{STANDARD_MIN_COMPILE_TIME_TICK_PRIORITY}(; kw...)
-is_animated(t::TickSettings)::Bool = !isempty(t.animated) && t.animated[end]
+MarkovTickSettings(args...) = MarkovTickSettings{STANDARD_MIN_COMPILE_TIME_TICK_PRIORITY}(args...)
 
-const AlgoCommsChannel = Channel{Union{Int, Symbol, CellGrid{NGrid}}}
+MarkovTickSettings(min_priority::Integer, args...; kw...) = MarkovTickSettings{min(min_priority, STANDARD_MIN_COMPILE_TIME_TICK_PRIORITY)}(
+    args...; kw...
+)
+is_animated(t::MarkovTickSettings)::Bool = !isempty(t.animated) && t.animated[end]
 
-mutable struct AlgoState{NGrid, TGrid<:CellGrid{NGrid},
-                         MinCompileTimeTickPriority}
-    grid::TGrid
+const AlgoCommsChannel = Channel{Union{Int, Symbol, CellGrid}}
+
+mutable struct AlgoState{MinCompileTimeTickPriority}
+    grid::CellGrid
     rng::PRNG
     allocator::AbstractMarkovAllocator
 
-    data_store::Dict{Symbol, Any}()
+    data_store::Dict{Symbol, Any}
 
     channel::AlgoCommsChannel
     # (the inclusion of Symbol means that the Ints get boxed, however
     #    Julia keeps an array of pre-boxed small Ints so we shouldn't be affected --
     #    see https://github.com/JuliaLang/julia/issues/62598)
 
-    ticking::TickSettings{MinCompileTimeTickPriority}
+    ticking::MarkovTickSettings{MinCompileTimeTickPriority}
 end
 
-@inline markov_algo_tick(s::AlgoState{NG, TG, MinP}, p::Int) where {NG, TG, MinP} = if p < MinP
+@inline markov_algo_tick(s::AlgoState{MinP}, p::Int) where {MinP} = if p < MinP
     nothing
 elseif s.ticking.cancel_algo
     throw(ErrorCancelAlgo())
@@ -175,7 +183,7 @@ elseif (p <= s.min_runtime_priority) || s.insta_finish
     nothing
 else
     put!(channel, M)
-    @bp_check(take!(channel) == 0, "You should write 0 in response to every tick")
+    @bp_check(take!(channel) === 0, "You should write 0 in response to every tick")
     nothing
 end
 function markov_algo_tick(s::AlgoState, tag::Symbol)
@@ -184,7 +192,7 @@ function markov_algo_tick(s::AlgoState, tag::Symbol)
         if tag == TAG_NEW_GRID
             put!(s.channel, s.grid)
         end
-        @bp_check(take!(channel) == 0, "You should write 0 in response to every tick")
+        @bp_check(take!(channel) === 0, "You should write 0 in response to every tick")
     end
     if s.ticking.cancel_algo
         throw(ErrorCancelAlgo())
@@ -194,30 +202,41 @@ end
 
 "Reallocates the algorithm grid and issues a tagged event for it"
 function markov_algo_new_grid(new_state_setup_fn,
-                              state::AlgoState{NGrid, TGrid},
+                              state::AlgoState,
                               new_size::NTuple{NGrid, Int}
-                             )::CellGrid{NGrid}
-    new_grid = markov_allocator_acquire_array(state.allocator, new_size, UInt8)
-    new_state_setup_fn(state.grid, new_grid)
+                             )::CellGrid{NGrid} where {NGrid}
+    return ((old_grid, alloc) -> begin
+        new_grid::CellGrid{NGrid} = markov_allocator_acquire_array(state.allocator, new_size, UInt8)
+        new_state_setup_fn(state.grid, new_grid)
 
-    markov_allocator_release_array(state.allocator, state.grid)
-    state.grid = new_grid
+        state.grid = new_grid
+        markov_algo_tick(state, TAG_NEW_GRID)
 
-    markov_algo_tick(state, TAG_NEW_GRID)
-    return new_grid
+        markov_allocator_release_array(state.allocator, old_grid)
+        return new_grid
+    end)(state.grid, state.allocator)
 end
 
 "
 Runs the algorithm as a coroutine on a separate task,
-   writing ticks/events through a Channel and waiting for you to write `zero(Int)`
-   in response to each one.
-Returns the Channel you must use to communicate with it.
-
+   returning the Channel you use to communicate with it.
 `seeds` should be a `Real` number or small enumeration of `Real` numbers.
+
+You can use high-level tick helpers with `markov_algo_next()` and `markov_algo_complete()`,
+  or follow the below low-level protocol:
+
+1. `put!(channel, zero(Int))` to advance the algorithm
+2. `take!(channel)` to get the next event
+3. Event is either an integer for the Priority of the tick that just happened, or a `Symbol` tagged event.
+    * If the event is `TAG_NEW_GRID`, read the new grid with `take!(channel)::CellGrid`.
+    * If the event is `TAG_ALGO_COMPLETED` or `TAG_ALGO_CANCELED`,
+save the most recent grid data somewhere and then write `zero(Int)` to clean up the algorithm.
+4. Go back to 1 to dispatch the next 'tick'.
+5. Cancel the algorithm anytime with `close(channel)`, or by setting `ticking.cancel_algo = true`.
 "
 function markov_algo_run(algo::MarkovAlgorithm,
                          initial::Union{CellGrid, Tuple{Vararg{Integer}}, VecT{<:Integer}},
-                         ticking::TickSettings = TickSettings()
+                         ticking::MarkovTickSettings = MarkovTickSettings()
                          ;
                          seeds = rand(UInt32),
                          allocator::AbstractMarkovAllocator = MarkovAllocatorHeapReused()
@@ -250,6 +269,7 @@ function markov_algo_run(algo::MarkovAlgorithm,
 
         try
             @logic_logln "Starting algorithm of size " size(algo_state.grid)
+            @bp_check(take!(ch) === 0)
             markov_algo_tick(algo_state, TAG_NEW_GRID)
             markov_algo_tick(algo_state, TAG_ALGO_STARTING)
 
@@ -264,9 +284,11 @@ function markov_algo_run(algo::MarkovAlgorithm,
             @logic_tab_out()
             markov_algo_tick(algo_state, TAG_ALGO_COMPLETED)
         catch e
-            if e isa ErrorCancelAlgo
+            if isa(e, ErrorCancelAlgo) || isa(e, InvalidStateException)
                 @logic_logln "User canceled algorithm!"
-                markov_algo_tick(algo_state, TAG_ALGO_CANCELED)
+                # If canceled cleanly (without closing the channel),
+                #   issue a 'Canceled' tagged event through the channel.
+                (e isa ErrorCancelAlgo) && markov_algo_tick(algo_state, TAG_ALGO_CANCELED)
             else
                 rethrow()
             end
@@ -277,29 +299,74 @@ function markov_algo_run(algo::MarkovAlgorithm,
 end
 
 "
-Runs through the given algorithm (as its channel returned from `markov_algo_run()`).
-On each tagged event, sends it along with the current grid into your lambda.
-  You can also provide a lambda for normal ticks.
+Runs one 'step' of the algorithm, and returns what that step was:
+
+* The priority of the tick that just completed
+* The tagged event that just happened
+* The newly-allocated grid, on a `TAG_NEW_GRID` event
 "
-function markov_algo_complete(process_tagged_event,
+function markov_algo_next(channel::AlgoCommsChannel)::Union{Int, Symbol, CellGrid}
+    put!(channel, zero(Int))
+    msg = take!(channel)
+    if msg isa Int
+        return msg
+    elseif msg == TAG_NEW_GRID
+        return take!(channel)::CellGrid
+    elseif msg isa Symbol
+        return msg
+    else
+        error("Unhandled: ", typeof(msg), "(", msg, ")")
+    end
+end
+
+"
+Executes the rest of the given algorithm (using its comms channel, returned from `markov_algo_run()`).
+Runs your lambda on the final `CellGrid` representing the state after the algorithm is done,
+  keeping in mind that this grid is deallocated as soon as your lambda exits.
+Returns the output of your lambda.
+
+Optionally uses another lambda for processing each tick and tagged event,
+   of the form `(tick::Union{Int, Symbol}, current_grid::CellGrid) -> nothing`.
+
+If you've already partially run this algorithm, you should supply the most recent allocated grid,
+   or else the grid passed to your lambdas will be `Nothing` until the next grid reallocation.
+
+If you for some reason cancel the algorithm yourself while this function is executing,
+   it will invoke your lambda with `nothing` for the grid instance.
+"
+function markov_algo_complete(process_final_state,
                               ch::AlgoCommsChannel,
-                              current_grid::Optional{CellGrid{NGrid}} = nothing,
-                              process_tick = ((priority::Int, grid::CellGrid{NGrid}) -> nothing)
-                             )::Nothing where {NGrid}
-    while true
-        next_msg = take!(ch)
-        if next_msg isa Int
-            process_tick(next_msg, current_grid)
-        elseif next_msg isa Symbol
-            if next_msg == TAG_NEW_GRID
-                current_grid = take!(ch)
+                              current_grid::Optional{CellGrid} = nothing,
+                              process_ticks = ((::Union{Int, Symbol}, ::CellGrid) -> nothing)
+                             )
+    try
+        while true
+            put!(ch, zero(Int))
+            next_msg = take!(ch)
+
+            if next_msg isa Int
+                process_ticks(next_msg, current_grid)
+            elseif next_msg isa Symbol
+                if next_msg == TAG_NEW_GRID
+                    current_grid = take!(ch)
+                elseif next_msg in (TAG_ALGO_COMPLETED, TAG_ALGO_CANCELED)
+                    result = process_final_state(current_grid)
+                    put!(ch, zero(Int))
+                    return result
+                else
+                    process_ticks(next_msg, current_grid)
+                end
+            else
+                error("Unhandled: ", typeof(next_msg))
             end
-            process_tagged_event(next_msg, current_grid)
-            if next_msg == TAG_ALGO_COMPLETED
-                break
-            end
+        end
+    catch e
+        # If the user canceled the algo, catch and process that.
+        # The grid is already potentially deallocated, so pass `nothing` in place of it.
+        if isa(e, InvalidStateException)
+            return process_final_state(nothing)
         else
-            error("Unhandled: ", typeof(next_msg))
+            rethrow()
         end
     end
 

@@ -1090,7 +1090,7 @@ BIG_TEST_ANSWER = MJ.MarkovAlgorithm(
             "Detailed printout is above this line -- A is the actual, B is the expected")
 
 # Test dsl_string() by executing it, parsing the result, and comparing them again.
-BIG_TEST_2 = MJ.markov_algo_parse(MJ.dsl_string(BIG_TEST))
+BIG_TEST_2 = markov_algo_parse(MJ.dsl_string(BIG_TEST))
 @bp_check(BIG_TEST_2 == BIG_TEST_ANSWER,
           test_compare(BIG_TEST_2, BIG_TEST_ANSWER),
           "INCORRECT result from `dsl_string()`! ",

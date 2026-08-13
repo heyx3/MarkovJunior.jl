@@ -63,7 +63,7 @@ end
 
 ########
 
-"Allocates on the heap and lets Julia's GC take the array afterwards"
+"Allocates on the heap and doesn't do anything to clean it up (Julia GC will get to it eventually)"
 struct MarkovAllocatorHeap <: AbstractMarkovAllocator end
 
 

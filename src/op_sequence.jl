@@ -6,11 +6,11 @@ struct MarkovOpSequence{NBiases, TBiases<:NTuple{NBiases, AbstractMarkovBias}} <
     biases::TBiases
 end
 
-function markov_algo_run(sequence::MarkovOpSequence,
+function markov_algo_run(sequence::MarkovOpSequence{NSelfBiases},
                          algo::MarkovAlgorithm, algo_state::AlgoState{NGrid},
                          inherited_biases::NTuple{NInheritedBiases, AbstractMarkovBias},
                          inherited_bias_states::NTuple{NInheritedBiases, Any}
-                        )::Bool where {NGrid, NBiases}
+                        )::Tuple{Bool, typeof(inherited_bias_states)} where {NGrid, NInheritedBiases, NSelfBiases}
     # Set up the repetition counter.
     repetitions_left = if isnothing(s.threshold)
         typemax(Int)
@@ -54,8 +54,10 @@ function markov_algo_run(sequence::MarkovOpSequence,
             @logic_logln("Inner op ", op_i, ":")
             @logic_tab_in()
 
-            op_made_changes = markov_algo_run(sequence.ops[op_i], algo, algo_state,
-                                              all_biases, all_bias_states)
+            (op_made_changes, all_bias_states) = markov_algo_run(
+                sequence.ops[op_i], algo, algo_state,
+                all_biases, all_bias_states
+            )
             made_any_changes |= op_made_changes
             if !op_made_changes && (op_i == 1) && (repetitions_left isa SequenceRepeatModeTag)
                 @logic_logln("Inner op did nothing! The outer sequence will end now")
@@ -67,7 +69,14 @@ function markov_algo_run(sequence::MarkovOpSequence,
         end
     end
 
-    return made_any_changes
+    foreach(ntuple(identity, Val(NSelfBiases))) do i
+        markov_bias_cleanup(all_biases[i + NInheritedBiases],
+                            all_bias_states[i + NInheritedBiases],
+                            algo, algo_state)
+    end
+
+    markov_algo_tick(algo_state, STANDARD_END_OF_OP_TICK + 1)
+    return (made_any_changes, all_bias_states[1:NInheritedBiases])
 end
 
 dsl_string(s::MarkovOpSequence) = string(

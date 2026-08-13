@@ -7,9 +7,9 @@ struct MarkovBiasTemperature <: AbstractMarkovBias
 end
 
 markov_bias_calculate(t::MarkovBiasTemperature, ::Nothing,
-                      ::CellGrid{N}, ::Union{CellLine{N}, CellRegion{N}},
-                      rng::PRNG
-                     ) where {N} = rand(rng, Float32) * t.amount
+                      algo::MarkovAlgorithm, algo_state::AlgoState,
+                      ::Union{CellLine{N}, CellRegion{N}}
+                     ) where {N} = rand(algo_state.rng, Float32) * t.amount
 
 dsl_string(b::MarkovBiasTemperature) = "temperature($(b.amount))"
 

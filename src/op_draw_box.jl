@@ -101,9 +101,7 @@ function markov_algo_run(op::MarkovOpDrawBox{NBox, TRule},
                          algo::MarkovAlgorithm, algo_state::AlgoState{NGrid},
                          inherited_bias_tuple::Tuple{Vararg{AbstractMarkovBias}},
                          inherited_bias_state_tuple::Tuple
-                        )::Bool where {NBox, TRule, NGrid}
-    #TODO: If algo is 'animated', make this op respect biases
-
+                        )::Tuple{Bool, typeof(inherited_bias_state_tuple)} where {NBox, TRule, NGrid}
     box = get_draw_box_pixels(
         op.space, op.box,
         convert(Vec{NGrid, Int32}, vsize(algo_state.grid)),
@@ -113,13 +111,26 @@ function markov_algo_run(op::MarkovOpDrawBox{NBox, TRule},
     mask_grid = if isnothing(op.mask)
         nothing
     else
-        a::Array{Float32, NGrid} = markov_allocator_acquire_array(algo_state.allocator, size(algo_state.grid), Float32)
+        a::Array{Float32, NGrid} = markov_allocator_acquire_array(algo_state.allocator,
+                                                                  size(algo_state.grid), Float32)
         rand!(rng, a)
         a
     end
+    previous_value_grid = if isempty(inherited_bias_tuple)
+        nothing
+    else
+        a = markov_allocator_acquire_array(algo_state.allocator, size(algo_state.grid), UInt8)
+        box_a = min_inclusive(box)
+        box_b = max_inclusive(box)
+        grid_slice = ntuple(i -> box_a[i]:box_b[i], Val(NGrid))
+        previous_value_grid .= algo_state.grid[grid_slice...]
+        a
+    end
 
-    # Make sure to de-allocate the mask no matter what.
+    # Make sure to de-allocate the arrays no matter what.
     made_changes::Bool = try
+
+        # Pick a mask.
         mask_level = if isnothing(op.mask)
             # Value doesn't matter
             1.0f0
@@ -144,17 +155,22 @@ function markov_algo_run(op::MarkovOpDrawBox{NBox, TRule},
                     markov_algo_tick(algo_state, 1)
                 end
             end
-            mc
+            inherited_bias_state_tuple = markov_bias_update.(
+                inherited_bias_tuple, inherited_bias_state_tuple,
+                Ref(algo), Ref(algo_state),
+                Ref(box), Ref(previous_value_grid)
+            )
+            return mc
 
         end)(mask_grid, mask_level)
+
     finally
-        if exists(mask_grid)
-            markov_allocator_release_array(algo_state.allocator, mask_grid)
-        end
+        exists(previous_value_grid) && markov_allocator_release_array(algo_state.allocator, previous_value_grid)
+        exists(mask_grid) && markov_allocator_release_array(algo_state.allocator, mask_grid)
     end
 
-    markov_algo_tick(algo_state, 3)
-    return made_changes
+    markov_algo_tick(algo_state, STANDARD_END_OF_OP_TICK - 1)
+    return (made_changes, inherited_bias_state_tuple)
 end
 
 

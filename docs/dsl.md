@@ -68,6 +68,14 @@ For example:
         wRG_GRw  => wwwwwww # Stomp over whatever was between the two walls, to make things interesting
         wRG__GRw => wwwwwwww # Slightly larger stomp
     end
+
+    # Emit a "tagged event", which pauses the algorithm for users to view its current state.
+    @event BeforeFinalSteps
+    # If users need to *modify* the grid during a tagged event, prepend the name with '!'.
+    # There's no special checking around this, so it's up to you to be vigilant!
+    @event !BeforeFinalSteps
+
+    # Emit another tagged event which gives users 
     # Finally, place a "player start" square.
     @fill B pixel(min=0, size=4)
     @fill T pixel(min=0, size=1)
@@ -102,6 +110,27 @@ Our built-in GUI tool checks pragmas for the 3D materials of different cell type
 
 As another example, the `@fill` Op looks for `@pragma fast_fills`
   and, if it finds it, will always finish itself in a single tick.
+
+## `@event`
+
+This is a no-op which inserts a "tagged event", sort of like a named tick.
+It signals to users that the algorithm has reached a certain point,
+   and those users may wish to read the grid state before the algorithm continues to modify it.
+
+````julia
+@event BeforeSpawnPlacement
+````
+
+When used this way, users should *not* modify the grid! Only read from it.
+To support modification, prepend the event name with `!`:
+
+````julia
+@event !BeforeSpawnPlacement
+````
+
+This will give secondary state, like all active [Biases](#bias-and-weights),
+  a chance to update themselves after your modifications.
+It can have a big performance impact under really active Biases, so use it sparingly.
 
 ## `@rewrite`
 

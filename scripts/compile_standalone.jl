@@ -15,11 +15,12 @@ using MarkovJunior; const MJ = MarkovJunior
 
 # Figure out what kind of thing we're building.
 if ("-exe" in ARGS) + ("-dll" in ARGS) != 1
-    error("Must give exactly one of '-exe' and '-dll'")
+    error("Must give exactly one of [ '-exe', '-dll' ]")
 end
 const MODE = if "-exe" in ARGS
     :exe
 elseif "-dll" in ARGS
+    error("DLL mode disabled for now! Use the IPC executable (-exe) instead")
     :dll
 else
     error("Unhandled: ", ARGS)

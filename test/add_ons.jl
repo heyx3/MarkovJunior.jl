@@ -3,6 +3,8 @@
 #   * A custom Op reading from 'pragmas'
 #   * A custom Op reading/writing to 'data_store'
 
+#TODO: Test custom events
+
 using Setfield
 
 
@@ -12,10 +14,9 @@ Ordering can be flipped by giving a named bool to the algo's `add_ons`.
 "
 struct CustomBias <: MJ.AbstractMarkovBias end
 const ADDON_CUSTOM_BIAS_FLIPPED_KEY = :flip_custom_bias
-MJ.markov_bias_state_type(::Type{CustomBias}) = Bool
-function MJ.markov_bias_initialize(::CustomBias, ::Type{Bool}, grid::MJ.CellGrid, ::PRNG, ctx::MJ.MarkovBiasContext)
-    return haskey(ctx.add_ons, ADDON_CUSTOM_BIAS_FLIPPED_KEY) &&
-           convert(Bool, ctx.add_ons[ADDON_CUSTOM_BIAS_FLIPPED_KEY])
+function MJ.markov_bias_initialize(::CustomBias, algo::MJ.MarkovAlgorithm, algo_state::MJ.AlgoState)
+    return haskey(algo.add_ons, ADDON_CUSTOM_BIAS_FLIPPED_KEY) &&
+           convert(Bool, algo.add_ons[ADDON_CUSTOM_BIAS_FLIPPED_KEY])
 end
 function impl_custom_bias(pos::MJ.CellIdx{N}, size::MJ.CellIdx{N},
                           is_flipped::Bool
@@ -30,10 +31,14 @@ function impl_custom_bias(pos::MJ.CellIdx{N}, size::MJ.CellIdx{N},
                          slice_size = slice_size * size[axis])
     end)
 end
-MJ.markov_bias_calculate(::CustomBias, is_flipped::Bool, grid::MJ.CellGrid{N},
-                         line::MJ.CellLine{N}, ::PRNG) where {N} = impl_custom_bias(line.start_cell, vsize(grid), is_flipped)
-MJ.markov_bias_calculate(::CustomBias, is_flipped::Bool, grid::MJ.CellGrid{N},
-                         area::MJ.CellRegion{N}, ::PRNG) where {N} = impl_custom_bias(min_inclusive(area.b), vsize(grid), is_flipped)
+MJ.markov_bias_calculate(::CustomBias, is_flipped::Bool,
+                         algo::MJ.MarkovAlgorithm, algo_state::MJ.AlgoState,
+                         line::MJ.CellLine{N}
+                        ) where {N} = impl_custom_bias(line.start_cell, vsize(algo_state.grid), is_flipped)
+MJ.markov_bias_calculate(::CustomBias, is_flipped::Bool,
+                         algo::MJ.MarkovAlgorithm, algo_state::MJ.AlgoState,
+                         area::MJ.CellRegion{N}
+                        ) where {N} = impl_custom_bias(min_inclusive(area.b), vsize(algo_state.grid), is_flipped)
 MJ.dsl_string(::CustomBias) = "custom()"
 MJ.parse_markovjunior_bias(::Val{:custom}, inputs::MJ.MacroParserInputs,
                            loc::LineNumberNode, args
@@ -59,54 +64,81 @@ MJ.parse_markovjunior_bias(::Val{:custom}, inputs::MJ.MacroParserInputs,
         log_info = (" i=", i, flipped ? " (flipped)" : "")
 
         size_1 = (2, 3, 4, 3, 2)
-        state_1 = MJ.markov_algo_start(test_mj, size_1, (i, 0xaabbcc))
-        MJ.markov_algo_step(test_mj, state_1, 1)
+        state_ch_1 = markov_algo_run(test_mj, size_1, seeds=(i, 0xaabbcc))
+        grid_1 = begin
+            g = nothing
+            while !isa(g, MJ.CellGrid)
+                g = markov_algo_next(state_ch_1)
+            end
+            g
+        end
+        @bp_check(markov_algo_next(state_ch_1) isa Int)
         base_idx = flipped ? size_1 : (1, 1, 1, 1, 1)
         idx_desc = flipped ? "last" : "first"
         rest_range = flipped ? (1:(prod(size_1)-1)) : (2:(prod(size_1)))
-        log_info_1 = (log_info..., "  grid:\n", MJ.markov_algo_grid(state_1))
-        @bp_check(MJ.markov_algo_grid(state_1)[base_idx...] == MJ.CELL_CODE_BY_CHAR['w'],
+        log_info_1 = (log_info..., "  grid:\n", grid_1)
+        @bp_check(grid_1[base_idx...] == MJ.CELL_CODE_BY_CHAR['w'],
                   "1-step didn't write 'w' at the ", idx_desc, " pixel!", log_info_1...)
         @bp_check(all(u -> (u==MJ.CELL_CODE_BY_CHAR['b']),
-                      MJ.markov_algo_grid(state_1)[rest_range]),
+                      grid_1[rest_range]),
                   "1-step didn't leave all other cells as 'b'!", log_info_1...)
-        close(state_1, test_mj)
+        close(state_ch_1)
 
         size_2 = (2, 3, 4, 3, 2)
-        state_2 = MJ.markov_algo_start(test_mj, size_2, (i, 0xafabbcfc))
-        MJ.markov_algo_step(test_mj, state_2, 2)
+        state_ch_2 = markov_algo_run(test_mj, size_2, seeds=(i, 0xafabbcfc))
+        grid_2 = begin
+            g = nothing
+            while !isa(g, MJ.CellGrid)
+                g = markov_algo_next(state_ch_2)
+            end
+            g
+        end
+        for i in 1:2
+            @bp_check(markov_algo_next(state_ch_2) isa Int, i)
+        end
         base_idx = flipped ? size_2 : (1, 1, 1, 1, 1)
         idx_desc = flipped ? "last" : "first"
         rest_range = flipped ? (1:(prod(size_2)-2)) : (3:(prod(size_2)))
         idx_sign = flipped ? -1 : 1
-        log_info_2 = (log_info..., "  grid:\n", MJ.markov_algo_grid(state_2))
-        @bp_check(MJ.markov_algo_grid(state_2)[base_idx...] == MJ.CELL_CODE_BY_CHAR['w'],
+        log_info_2 = (log_info..., "  grid:\n", grid_2)
+        @bp_check(grid_2[base_idx...] == MJ.CELL_CODE_BY_CHAR['w'],
                   "2-step didn't write 'w' at the ", idx_desc, " pixel!", log_info_2...)
-        @bp_check(MJ.markov_algo_grid(state_2)[@set(base_idx[1] += idx_sign)...] == MJ.CELL_CODE_BY_CHAR['w'],
+        @bp_check(grid_2[@set(base_idx[1] += idx_sign)...] == MJ.CELL_CODE_BY_CHAR['w'],
                   "2-step didn't write 'w' at the ", idx_desc, "-take-1 pixel!", log_info_2...)
         @bp_check(all(u -> (u==MJ.CELL_CODE_BY_CHAR['b']),
-                      MJ.markov_algo_grid(state_2)[rest_range]),
+                      grid_2[rest_range]),
                   "2-step didn't leave all other cells as 'b'!", log_info_2...)
-        close(state_2, test_mj)
+        close(state_ch_2)
 
+        # This test will use a random seed; if this is the one that fails
+        #    then perhaps the other seeds just got lucky.
         size_3 = (2, 2, 2)
-        state_3 = MJ.markov_algo_start(test_mj, size_3, (i, 0xaf67bcfc))
-        MJ.markov_algo_step(test_mj, state_3, 3)
+        state_ch_3 = markov_algo_run(test_mj, size_3)
+        grid_3 = begin
+            g = nothing
+            while !isa(g, MJ.CellGrid)
+                g = markov_algo_next(state_ch_3)
+            end
+            g
+        end
+        for i in 1:3
+            @bp_check(markov_algo_next(state_ch_3) isa Int, i)
+        end
         base_idx = flipped ? size_3 : (1, 1, 1)
         idx_desc = flipped ? "last" : "first"
         idx_sign = flipped ? -1 : 1
         rest_range = flipped ? (1:(prod(size_3)-3)) : (4:(prod(size_3)))
-        log_info_3 = (log_info..., "  grid:\n", MJ.markov_algo_grid(state_3))
-        @bp_check(MJ.markov_algo_grid(state_3)[base_idx...] == MJ.CELL_CODE_BY_CHAR['w'],
+        log_info_3 = (log_info..., "  grid:\n", grid_3)
+        @bp_check(grid_3[base_idx...] == MJ.CELL_CODE_BY_CHAR['w'],
                   "3-step didn't write 'w' at the ", idx_desc, " pixel!", log_info_3...)
-        @bp_check(MJ.markov_algo_grid(state_3)[@set(base_idx[1] += idx_sign)...] == MJ.CELL_CODE_BY_CHAR['w'],
+        @bp_check(grid_3[@set(base_idx[1] += idx_sign)...] == MJ.CELL_CODE_BY_CHAR['w'],
                   "3-step didn't write 'w' at the ", idx_desc, "-take-1 pixel!", log_info_3...)
-        @bp_check(MJ.markov_algo_grid(state_3)[@set(base_idx[2] += idx_sign)...] == MJ.CELL_CODE_BY_CHAR['w'],
+        @bp_check(grid_3[@set(base_idx[2] += idx_sign)...] == MJ.CELL_CODE_BY_CHAR['w'],
                   "3-step didn't write 'w' at the ", idx_desc, "-take-2 pixel!", log_info_3...)
         @bp_check(all(u -> (u==MJ.CELL_CODE_BY_CHAR['b']),
-                      MJ.markov_algo_grid(state_3)[rest_range]),
+                      grid_3[rest_range]),
                   "3-step didn't leave all other cells as 'b'!", log_info_3...)
-        close(state_3, test_mj)
+        close(state_ch_3)
     end
 end)()
 
@@ -121,45 +153,58 @@ struct CustomOpState{N}
     overridden_b::UInt8
     next_pos::MJ.CellIdx{N}
 end
-MJ.markov_op_state_type(::Type{CustomOp}, ::Val{N}) where {N} = CustomOpState{N}
 const PRAGMA_CUSTOM_OP_OVERRIDE_A = :cust_a_forced
 const PRAGMA_CUSTOM_OP_OVERRIDE_B = :cust_b_forced
-function MJ.markov_op_initialize(co::CustomOp, ::MJ.CellGrid{N}, ::PRNG, ctx::MJ.MarkovOpContext) where {N}
-    # Look for pragma statements that force checkerboard values for the whole grid.
+function MJ.markov_op_run(co::CustomOp, algo::MJ.MarkovAlgorithm, algo_state::MJ.AlgoState,
+                          inherited_biases::Tuple{Vararg{MJ.AbstractMarkovBias}},
+                          inherited_bias_states::Tuple{Vararg{Any}},
+                          # Turn some data into compile-time knowledge.
+                          ::Val{N} = Val(ndims(algo_state.grid)),
+                          ::Type{TGrid} = typeof(algo_state.grid)
+                         )::Tuple{Bool, typeof(inherited_bias_states)} where {N, TGrid}
+    # Look for pragma statements that force checkerboard values over the ones in the Op.
     a = co.a
     b = co.b
-    if haskey(ctx.pragmas_map, PRAGMA_CUSTOM_OP_OVERRIDE_A)
-        (override, ) = ctx.pragmas_map[PRAGMA_CUSTOM_OP_OVERRIDE_A][end]
+    if haskey(algo.pragmas_map, PRAGMA_CUSTOM_OP_OVERRIDE_A)
+        (override, ) = algo.pragmas_map[PRAGMA_CUSTOM_OP_OVERRIDE_A][end]
         a = MJ.CELL_CODE_BY_SYMBOL[override]
     end
-    if haskey(ctx.pragmas_map, PRAGMA_CUSTOM_OP_OVERRIDE_B)
-        (override, ) = ctx.pragmas_map[PRAGMA_CUSTOM_OP_OVERRIDE_B][end]
+    if haskey(algo.pragmas_map, PRAGMA_CUSTOM_OP_OVERRIDE_B)
+        (override, ) = algo.pragmas_map[PRAGMA_CUSTOM_OP_OVERRIDE_B][end]
         b = MJ.CELL_CODE_BY_SYMBOL[override]
     end
 
-    return CustomOpState{N}(a, b, one(MJ.CellIdx{N}))
-end
-function MJ.markov_op_iterate(op::CustomOp, state::CustomOpState{N}, grid::MJ.CellGrid{N}, ::PRNG, ::MJ.MarkovOpContext) where {N}
-    # Write the next checkerboard cell.
-    grid[state.next_pos] = if iseven(sum(state.next_pos - 1))
-        state.overridden_a
-    else
-        state.overridden_b
+    grid::TGrid = algo_state.grid
+    next_pos::MJ.CellIdx{N} = one(MJ.CellIdx{N})
+
+    # Technically we are supposed to update biases after we're done changing pixels;
+    #    even though we don't use biases in this test we may as well do it right.
+    inherited_bias_states = MJ.markov_allocator_with_array(algo_state.allocator,
+                                                           size(grid), eltype(grid)) do old_grid
+    #begin
+        old_grid .= grid
+
+        for next_pos in one(MJ.CellIdx{N}) : convert(MJ.CellIdx{N}, vsize(grid))
+            # Write the next checkerboard cell.
+            grid[next_pos] = if iseven(sum(next_pos - 1))
+                a
+            else
+                b
+            end
+
+            MJ.markov_algo_tick(algo_state, 2)
+        end
+
+        MJ.markov_bias_update(
+            inherited_biases, inherited_bias_states,
+            Ref(algo), Ref(algo_state),
+            Ref(BoxI{N}(min=one(MJ.CellIdx{N}), size=vsize(grid))),
+            Ref(old_grid)
+        )
     end
 
-    # Move on.
-    next_pos = state.next_pos
-    axis = 1
-    while (axis <= N) && (next_pos[axis] == size(grid, axis))
-        @set! next_pos[axis] = 1
-        axis += 1
-    end
-    if axis > N
-        return nothing
-    else
-        @set! next_pos[axis] += 1
-        return CustomOpState{N}(state.overridden_a, state.overridden_b, next_pos)
-    end
+    MJ.markov_algo_tick(algo_state, MJ.STANDARD_END_OF_OP_TICK)
+    return (!isempty(grid), inherited_bias_states)
 end
 MJ.dsl_string(co::CustomOp) = "@cust $(MJ.dsl_string(co.a)) $(MJ.dsl_string(co.b))"
 function MJ.parse_markovjunior_op(::Val{Symbol("@cust")},
@@ -182,9 +227,10 @@ end
               "Custom Op parsing failed!\n\nSource:\n", test_mj1,
                 "\nDest:\n", test_parsed_mj,
                 "\nSource as string: ", markov_algo_to_string(test_mj1))
-    state_1 = MJ.markov_algo_start(test_mj1, (3, 4, 2), 0xaabbcc)
-    MJ.markov_algo_finish(test_mj1, state_1)
-    grid_1 = MJ.markov_algo_grid(state_1)
+    # Use a normal heap allocator so we can steal the grid after the algo is done.
+    state_ch_1 = markov_algo_run(test_mj1, (3, 4, 2), seeds=0xaabbcc,
+                                    allocator=MJ.MarkovAllocatorHeap())
+    grid_1 = markov_algo_complete(identity, state_ch_1)
     @bp_check(grid_1 == getindex.(Ref(MJ.CELL_CODE_BY_SYMBOL), [
         :R :G :R :G
         :G :R :G :R
@@ -194,6 +240,7 @@ end
         :G :R :G :R
     ]), "Actual: ", grid_1)
 
+    # This test uses a random seed, so if it fails then maybe the above tests are using lucky seeds!
     test_mj2 = @markovjunior 'b' begin
         @pragma cust_a_forced B
         @cust R G
@@ -204,9 +251,10 @@ end
               "Custom Op parsing #2 failed!\n\nSource:\n", test_mj2,
                 "\nDest:\n", test_parsed_mj,
                 "\nSource as string: ", markov_algo_to_string(test_mj2))
-    state_2 = markov_algo_start(test_mj2, (10, ), 0x80110110)
-    markov_algo_finish(test_mj2, state_2)
-    grid_2 = markov_algo_grid(state_2)
+    # Use a normal heap allocator so we can steal the grid after the algo is done.
+    state_ch_2 = markov_algo_run(test_mj2, (10, ),
+                                    allocator=MJ.MarkovAllocatorHeap())
+    grid_2 = markov_algo_complete(identity, state_ch_2)
     @bp_check(grid_2 == getindex.(Ref(MJ.CELL_CODE_BY_SYMBOL), [
         :B, :g, :B, :g, :B, :g, :B, :g, :B, :g
     ]), "Actual: ", grid_2)
@@ -222,19 +270,35 @@ The output value is taken from the algorithm instance's `data_store`,
 struct CustomOp2{N} <: MJ.AbstractMarkovOp
     location::VecI{N}
 end
-MJ.markov_op_state_type(::Type{<:CustomOp2}, ::Val) = Some{Nothing}
-function MJ.markov_op_initialize(co2::CustomOp2{N}, grid::MJ.CellGrid{N}, ::PRNG, ::MJ.MarkovOpContext) where {N}
-    return if all(co2.location > 0) && all(co2.location <= vsize(grid))
-        Some(nothing)
-    else
-        nothing
+function markov_algo_run(op::CustomOp2{N}, algo::MJ.MarkovAlgorithm, algo_state::MJ.AlgoState,
+                            inherited_biases::NTuple{NB, MJ.AbstractMarkovBias},
+                            inherited_bias_states::NTuple{NB, Any}
+                           )::Tuple{Bool, typeof(inherited_bias_states)} where {N, NB}
+    if any(op.location <= 0) || any(op.location > vsize(algo_state.grid))
+        return (false, inherited_bias_states)
     end
-end
-function MJ.markov_op_iterate(co2::CustomOp2{N}, state::Some{Nothing}, grid::MJ.CellGrid{N}, ::PRNG, ctx::MJ.MarkovOpContext) where {N}
-    counter = get!(() -> Ref(zero(UInt8)), ctx.data_store, :cust_op_2_counter)::Ref{UInt8}
-    grid[co2.location] = counter[]
-    counter[] += 1
-    return nothing
+
+    # Technically we are supposed to update biases after we're done changing pixels;
+    #    even though we don't use biases in this test we may as well do it right.
+    inherited_bias_states = MJ.markov_allocator_with_array(algo_state.allocator,
+                                                           ntuple(i->1, ndims(algo_state.grid)),
+                                                           eltype(algo_state.grid)) do old_grid
+    #begin
+        old_grid[1] .= algo_state.grid[op.location]
+
+        counter = get!(() -> Ref(zero(UInt8)), algo_state.data_store, :cust_op_2_counter)::Ref{UInt8}
+        algo_state.grid[op.location] = counter[]
+        counter[] += 1
+
+        MJ.markov_bias_update(
+            inherited_biases, inherited_bias_states,
+            Ref(algo), Ref(algo_state),
+            Ref(BoxI{N}(min=one(MJ.CellIdx{N}), size=vsize(algo_state.grid))),
+            Ref(old_grid)
+        )
+    end
+
+    return (true, inherited_bias_states)
 end
 MJ.dsl_string(co2::CustomOp2) = "@cust2 $(iter_join(co2.location, " ")...)"
 function MJ.parse_markovjunior_op(::Val{Symbol("@cust2")},
@@ -261,11 +325,12 @@ end
                 "\nSource to string: ", test_mj_str,
                 "\nDest:\n", test_mj_parsed)
 
-    # Test data_store multiple times, just to be sure nothing is persistent.
+    # Test data_store multiple times, to be sure nothing is persistent.
     for i in 1:10
-        state_mj = markov_algo_start(test_mj, (3, 4), 0x0aa1bcde)
-        markov_algo_finish(test_mj, state_mj)
-        grid = markov_algo_grid(state_mj)
+        # Use the basic Heap allocator so we can steal the grid at the end.
+        state_ch = markov_algo_run(test_mj, (3, 4), seeds=0x0aa1bcde,
+                                      allocator=MJ.MarkovAllocatorHeap())
+        grid = markov_algo_complete(identity, state_ch)
         @bp_check(grid == UInt8[
             2 0 15 15
             15 1 15 15
