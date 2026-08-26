@@ -10,9 +10,9 @@ Returns two things:
 function markov_algo_run(op::AbstractMarkovOp, algo, algo_state,
                          inherited_bias_tuple, inherited_bias_state_tuple
                         )::Tuple{Bool, typeof(inherited_bias_state_tuple)}
-    throw(MethodError(markov_algo_run, typeof.((
-        op, algo, algo_state, inherited_bias_tuple, inherited_bias_state_tuple, flag_had_no_matches
-    ))))
+    throw(MethodError(markov_algo_run, (
+        op, algo, algo_state, inherited_bias_tuple, inherited_bias_state_tuple
+    )))
 end
 
 
@@ -42,14 +42,14 @@ markov_bias_update(bias::AbstractMarkovBias, bias_state,
 markov_bias_cleanup(bias::AbstractMarkovBias, bias_state, algo, algo_state) = nothing
 
 "
-Calculates the desirability of a rewrite action, at this moment, in this grid.
-Returns `nothing` if the action must not happen.
+Calculates the desirability of changing the given pixels, at the current moment.
+Returns `nothing` if the action *must* not happen.
 "
 function markov_bias_calculate(bias::AbstractMarkovBias, bias_state,
                                algo, algo_state,
                                at::Union{CellLine{N}, CellRegion{N}}
                               )::Optional{Float32} where {N}
-    throw(MethodError(markov_bias_calculate, typeof.((
+    throw(MethodError(markov_bias_calculate, (
         bias, bias_state, algo, algo_state, at
-    ))))
+    )))
 end

@@ -98,9 +98,10 @@ struct MarkovOpDrawBox{N, TRule<:DrawBoxRule} <: AbstractMarkovOp
 end
 
 function markov_algo_run(op::MarkovOpDrawBox{NBox, TRule},
-                         algo::MarkovAlgorithm, algo_state::AlgoState{NGrid},
+                         algo::MarkovAlgorithm, algo_state::AlgoState,
                          inherited_bias_tuple::Tuple{Vararg{AbstractMarkovBias}},
-                         inherited_bias_state_tuple::Tuple
+                         inherited_bias_state_tuple::Tuple,
+                         ::Val{NGrid} = Val(ndims(algo_state.grid))
                         )::Tuple{Bool, typeof(inherited_bias_state_tuple)} where {NBox, TRule, NGrid}
     box = get_draw_box_pixels(
         op.space, op.box,
@@ -113,7 +114,7 @@ function markov_algo_run(op::MarkovOpDrawBox{NBox, TRule},
     else
         a::Array{Float32, NGrid} = markov_allocator_acquire_array(algo_state.allocator,
                                                                   size(algo_state.grid), Float32)
-        rand!(rng, a)
+        rand!(algo_state.rng, a)
         a
     end
     previous_value_grid = if isempty(inherited_bias_tuple)
@@ -137,7 +138,7 @@ function markov_algo_run(op::MarkovOpDrawBox{NBox, TRule},
         elseif op.mask isa Float32
             op.mask
         elseif op.mask isa NTuple{2, Float32}
-            lerp(op.mask..., rand(rng, Float32))
+            lerp(op.mask..., rand(algo_state.rng, Float32))
         else
             error("Unhandled ", typeof(op.mask))
         end
@@ -151,7 +152,7 @@ function markov_algo_run(op::MarkovOpDrawBox{NBox, TRule},
                     (isnothing(mask_grid) || (mask_grid[pixel] < mask_level))
                 #begin
                     mc = true
-                    grid[pixel] = op.value
+                    algo_state.grid[pixel] = op.value
                     markov_algo_tick(algo_state, 1)
                 end
             end
@@ -169,7 +170,7 @@ function markov_algo_run(op::MarkovOpDrawBox{NBox, TRule},
         exists(mask_grid) && markov_allocator_release_array(algo_state.allocator, mask_grid)
     end
 
-    markov_algo_tick(algo_state, STANDARD_END_OF_OP_TICK - 1)
+    markov_algo_tick(algo_state, STANDARD_END_OF_OP_TICK_PRIORITY - 1)
     return (made_changes, inherited_bias_state_tuple)
 end
 

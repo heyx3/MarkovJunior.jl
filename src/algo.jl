@@ -123,39 +123,46 @@ Ticks level 1 and 2 are very minor events
 "
 const STANDARD_MIN_COMPILE_TIME_TICK_PRIORITY = 3
 "The tick priority for the end of a normal Op, like @rewrite"
-const STANDARD_END_OF_OP_TICK = 4
+const STANDARD_END_OF_OP_TICK_PRIORITY = 4
 
+"
+Internal error type which signals that the algorithm has been canceled.
+
+This is caught at the top of the algorithm loop; all Ops/Biases/etc.
+  must not prevent it from propagating upward!
+"
 struct ErrorCancelAlgo <: Exception end
 Base.showerror(io::IO, ::ErrorCancelAlgo) = error("ErrorCancelAlgo should never go uncaught!")
 
 "
-Controls how an algorithm a) time-slices itself and b) keeps the user updated on tagged events.
-You may edit these settings mid-run.
-
-
+Controls ticking, tagged events, and cancellation.
+You may edit any of these settings mid-run.
 "
-Base.@kwdef mutable struct MarkovTickSettings{MinCompileTimePriority}
+mutable struct MarkovTickSettings{MinCompileTimePriority}
     # The above type parameter removes low-priority ticks at compile time;
     #   this removes further ones with runtime checks.
-    min_runtime_tick_priority::Int = STANDARD_MIN_COMPILE_TIME_TICK_PRIORITY + 1
+    min_runtime_priority::Int
 
     # Only "new grid" and "canceled/completed" will happen; the rest will not.
-    skip_most_tagged_events::Bool = false
-    cancel_algo::Bool = false
+    skip_most_tagged_events::Bool
+    cancel_algo::Bool
 
     # A hint to algorithm logic that the visual output matters;
     #   without this there are some clever optimizations that re-order events.
     #
     # Implemented as a stack so that specific sequences can push and pop their own hint.
     # An empty stack represents 'false'.
-    animated::Vector{Bool} = preallocated_vector(Bool, 2)
+    animated::Vector{Bool}
 
+    MarkovTickSettings(min_tick_priority::Integer = STANDARD_MIN_COMPILE_TIME_TICK_PRIORITY
+                       ;
+                       skip_most_tagged_events = false
+                      ) = new{min(convert(Int, min_tick_priority), STANDARD_MIN_COMPILE_TIME_TICK_PRIORITY)}(
+        convert(Int, min_tick_priority),
+        convert(Bool, skip_most_tagged_events),
+        false, preallocated_vector(Bool, 2)
+    )
 end
-MarkovTickSettings(args...) = MarkovTickSettings{STANDARD_MIN_COMPILE_TIME_TICK_PRIORITY}(args...)
-
-MarkovTickSettings(min_priority::Integer, args...; kw...) = MarkovTickSettings{min(min_priority, STANDARD_MIN_COMPILE_TIME_TICK_PRIORITY)}(
-    args...; kw...
-)
 is_animated(t::MarkovTickSettings)::Bool = !isempty(t.animated) && t.animated[end]
 
 const AlgoCommsChannel = Channel{Union{Int, Symbol, CellGrid}}
@@ -175,24 +182,37 @@ mutable struct AlgoState{MinCompileTimeTickPriority}
     ticking::MarkovTickSettings{MinCompileTimeTickPriority}
 end
 
+"
+Implements our internal coroutine logic,
+  potentially pausing the calling thread until the user resumes us.
+
+Also does other bookkeeping like checking for algorithm cancellation.
+"
 @inline markov_algo_tick(s::AlgoState{MinP}, p::Int) where {MinP} = if p < MinP
+    #NOTE: it's force-inlined so that this first condition disappears at compile-time
     nothing
 elseif s.ticking.cancel_algo
     throw(ErrorCancelAlgo())
-elseif (p <= s.min_runtime_priority) || s.insta_finish
+elseif p < s.ticking.min_runtime_priority
     nothing
 else
-    put!(channel, M)
-    @bp_check(take!(channel) === 0, "You should write 0 in response to every tick")
+    put!(s.channel, p)
+    @bp_check(take!(s.channel) === 0, "You should write 0 in response to every tick")
     nothing
 end
+"
+Implements our internal coroutine logic for tagged events,
+  usually pausing the calling thread until the user resumes us.
+
+Also does some other bookkeeping like checking for algorithm cancellation.
+"
 function markov_algo_tick(s::AlgoState, tag::Symbol)
     if !s.ticking.skip_most_tagged_events || in(tag, IMPORTANT_BUILTIN_TAGS)
         put!(s.channel, tag)
         if tag == TAG_NEW_GRID
             put!(s.channel, s.grid)
         end
-        @bp_check(take!(channel) === 0, "You should write 0 in response to every tick")
+        @bp_check(take!(s.channel) === 0, "You should write 0 in response to every tick")
     end
     if s.ticking.cancel_algo
         throw(ErrorCancelAlgo())
@@ -205,14 +225,18 @@ function markov_algo_new_grid(new_state_setup_fn,
                               state::AlgoState,
                               new_size::NTuple{NGrid, Int}
                              )::CellGrid{NGrid} where {NGrid}
+    # Dispatch on the grid and allocator type:
     return ((old_grid, alloc) -> begin
-        new_grid::CellGrid{NGrid} = markov_allocator_acquire_array(state.allocator, new_size, UInt8)
+        new_grid::CellGrid{NGrid} = markov_allocator_acquire_array(alloc, new_size, UInt8)
+        # Don't use a try/catch for the allocations, because
+        #    on failure we would like the existing grid to remain available to the user.
+
         new_state_setup_fn(state.grid, new_grid)
 
         state.grid = new_grid
         markov_algo_tick(state, TAG_NEW_GRID)
 
-        markov_allocator_release_array(state.allocator, old_grid)
+        markov_allocator_release_array(alloc, old_grid)
         return new_grid
     end)(state.grid, state.allocator)
 end

@@ -977,8 +977,8 @@ Base.:(==)(a::AbstractMarkovRewritePriority, b::AbstractMarkovRewritePriority) =
     all(getfield(a, f) == getfield(b, f) for f in fieldnames(typeof(a)))
 )
 
-struct RewritePriorityInputs{NGrid}
-    weighted_applications::Vector{RewritePotentialApplication{NGrid}}
+struct RewritePriorityInputs{NGridDims}
+    weighted_applications::Vector{RewritePotentialApplication{NGridDims}}
 
     # For each rule, indicates the first index of the first entry
     #    in 'weighted_applications' using that rule.
@@ -1022,11 +1022,13 @@ struct MarkovOpRewrite{TRules <: Tuple{Vararg{Union{RewriteRule_Strip, RewriteRu
 end
 
 function markov_algo_run(rewrite::MarkovOpRewrite{TRules, TBias, TPriority},
-                         algo::MarkovAlgorithm, algo_state::AlgoState{NGrid},
+                         algo::MarkovAlgorithm, algo_state::AlgoState,
                          inherited_biases::NTuple{NInheritedBiases, AbstractMarkovBias},
-                         inherited_bias_states::Tuple{NInheritedBiases, Any}
+                         inherited_bias_states::NTuple{NInheritedBiases, Any},
+                         grid::TGrid = algo_state.grid
                         )::Tuple{Bool, typeof(inherited_bias_states)} where {
-                            TRules, TBias, TPriority, NGrid,
+                            TRules, TBias, TPriority,
+                            NGridDims, TGrid<:CellGrid{NGridDims},
                             NInheritedBiases
                         }
     NRules = length(rewrite.rules)
@@ -1034,12 +1036,15 @@ function markov_algo_run(rewrite::MarkovOpRewrite{TRules, TBias, TPriority},
     mask_grid = if all(rule -> isnothing(rule.mask), rewrite.rules)
         nothing
     else
-        a::Array{Float32, NGrid} = markov_allocator_acquire_array(algo_state.allocator, size(algo_state.grid), Float32)
-        rand!(rng, a)
+        a::Array{Float32, NGridDims} = markov_allocator_acquire_array(
+            algo_state.allocator,
+            size(grid), Float32
+        )
+        rand!(algo_state.rng, a)
         a
     end
 
-    cache = RewriteCache(algo_state.grid, mask_grid, rewrite.rules,
+    cache = RewriteCache(grid, mask_grid, rewrite.rules,
                          map(ru -> pick_mask(ru, algo_state.rng), rewrite.rules),
                          algo_state.allocator)
     if all(isempty, cache.applications)
@@ -1049,8 +1054,13 @@ function markov_algo_run(rewrite::MarkovOpRewrite{TRules, TBias, TPriority},
 
     biases = tuple(inherited_biases..., rewrite.biases...)
     bias_states = tuple(inherited_bias_states..., markov_bias_initialize.(rewrite.biases, Ref(algo), Ref(algo_state))...)
+    NBiases = length(biases)
 
-    threshold = isnothing(r.threshold) ? nothing : get_threshold(r.threshold, grid, rng)
+    threshold = if isnothing(rewrite.threshold)
+        nothing
+    else
+        get_threshold(rewrite.threshold, grid, algo_state.rng)
+    end
 
     desirability_overall = RewriteGroupDesirability()
 
@@ -1060,19 +1070,19 @@ function markov_algo_run(rewrite::MarkovOpRewrite{TRules, TBias, TPriority},
 
     # Allocate buffers through a type-stable allocator.
     longest_1D_rule::Int = maximum(Tuple(
-        length(ru.cells) for ru in r.rules if ru isa RewriteRule_Strip
+        length(ru.cells) for ru in rewrite.rules if ru isa RewriteRule_Strip
     ); init=0)
     (
-        weighted_applications::Vector{RewritePotentialApplication{NGrid}},
+        weighted_applications::Vector{RewritePotentialApplication{NGridDims}},
         weighted_applications_first_indices::Vector{Int},
         desirability_per_rule::Vector{RewriteGroupDesirability},
-        final_choices::Vector{RewritePotentialApplication{NGrid}},
+        final_choices::Vector{RewritePotentialApplication{NGridDims}},
         prev_1D_pixels::CellGridConcrete{1}
     ) = (alloc -> (
-        markov_allocator_acquire_array(alloc, tuple(128), RewritePotentialApplication{NGrid}),
+        markov_allocator_acquire_array(alloc, tuple(128), RewritePotentialApplication{NGridDims}),
         markov_allocator_acquire_array(alloc, tuple(NRules+1), Int),
         markov_allocator_acquire_array(alloc, tuple(NRules), RewriteGroupDesirability),
-        markov_allocator_acquire_array(alloc, tuple(256), RewritePotentialApplication{NGrid}),
+        markov_allocator_acquire_array(alloc, tuple(256), RewritePotentialApplication{NGridDims}),
         markov_allocator_acquire_array(alloc, tuple(max(longest_1D_rule, 1)), UInt8)
     ))(algo_state.allocator)
 
@@ -1082,12 +1092,12 @@ function markov_algo_run(rewrite::MarkovOpRewrite{TRules, TBias, TPriority},
         function finish_op()
             # Clean up this Op's biases.
             foreach(ntuple(identity, Val(length(rewrite.biases)))) do bias_i
-                markov_bias_cleanup(biases[i + NInheritedBiases],
-                                    bias_states[i + NInheritedBiases],
+                markov_bias_cleanup(biases[bias_i + NInheritedBiases],
+                                    bias_states[bias_i + NInheritedBiases],
                                     algo, algo_state)
             end
 
-            markov_algo_tick(algo_state, STANDARD_END_OF_OP_TICK)
+            markov_algo_tick(algo_state, STANDARD_END_OF_OP_TICK_PRIORITY)
             return (made_modifications, bias_states[1:NInheritedBiases])
         end
 
@@ -1097,17 +1107,17 @@ function markov_algo_run(rewrite::MarkovOpRewrite{TRules, TBias, TPriority},
             weighted_applications_first_indices .= -1
             desirability_overall = RewriteGroupDesirability()
             for rule_i in 1:NRules
-                desirability_per_rule[i] = RewriteGroupDesirability()
+                desirability_per_rule[rule_i] = RewriteGroupDesirability()
             end
 
             # Gather all options and their corresponding weights.
-            foreach(r.rules, 1:NRules) do rule, rule_i
+            foreach(rewrite.rules, 1:NRules) do rule, rule_i
                 weighted_applications_first_indices[rule_i] = 1 + length(weighted_applications)
                 for (start_cell, dir) in cache.applications[rule_i]
                     cell_at = if rule isa RewriteRule_Strip
                         CellLine(start_cell, dir, convert(Int32, length(rule.cells)))
                     elseif rule isa RewriteRule_MD
-                        rule_size = vsize((dir::RewriteRule_MD_Orientation{NDims}).rule_permutation)
+                        rule_size = vsize((dir::RewriteRule_MD_Orientation{NGridDims}).rule_permutation)
                         CellRegion(start_cell:(start_cell + rule_size))
                     else
                         error("Unhandled: ", typeof(rule))
@@ -1144,7 +1154,7 @@ function markov_algo_run(rewrite::MarkovOpRewrite{TRules, TBias, TPriority},
                            " options with biases ranging from ",
                            desirability_overall.min, " to ", desirability_overall.max,
                            ": [")
-            log_logic() && for option::RewritePotentialApplication{NDims} in weighted_applications
+            log_logic() && for option::RewritePotentialApplication{NGridDims} in weighted_applications
                 @logic_logln("\tRule ", option.rule_idx, " at ", option.start_cell, " along ",
                                (option.dir isa GridDir) ?
                                   option.dir :
@@ -1208,7 +1218,7 @@ function markov_algo_run(rewrite::MarkovOpRewrite{TRules, TBias, TPriority},
                     @logic_logln("\tThere are ", length(picked_options), ", so one will be chosen randomly")
                 end
             end
-            (pick_start_cell, pick_dir) = let p = rand(rng, picked_options)
+            (pick_start_cell, pick_dir) = let p = rand(algo_state.rng, picked_options)
                 (p.start_cell, p.dir)
             end
             @logic_logln("Decided to apply the rule at ", pick_start_cell, " along ",
@@ -1231,9 +1241,11 @@ function markov_algo_run(rewrite::MarkovOpRewrite{TRules, TBias, TPriority},
                     foreach(rule.cells, 1:length(rule.cells)) do (rewrite_source, rewrite_dest), cell_i
                         cell_pos = grid_dir_pos_along(pick_dir, pick_start_cell, cell_i-1)
                         prev_1D_pixels[cell_i] = grid[cell_pos]
-                        grid[cell_pos] = pick_rewrite_value(rewrite_dest, rewrite_source,
-                                                            source_values, cell_i,
-                                                            rng)
+                        grid[cell_pos] = pick_rewrite_value(
+                            rewrite_dest, rewrite_source,
+                            source_values, cell_i,
+                            algo_state.rng
+                        )
                     end
 
                     # Calculate the affected area.
@@ -1243,7 +1255,7 @@ function markov_algo_run(rewrite::MarkovOpRewrite{TRules, TBias, TPriority},
                     b = Box(pick_start_cell:pick_end_cell)
 
                     # Create an N-dimensional view of the source values in the grid.
-                    source_view_shape = ntuple(Val(NDims)) do i
+                    source_view_shape = ntuple(Val(NGridDims)) do i
                         if i == pick_dir.axis
                             Base.:(:)
                         else
@@ -1255,10 +1267,10 @@ function markov_algo_run(rewrite::MarkovOpRewrite{TRules, TBias, TPriority},
 
                     b, source_view
                 else
-                    pick_dir_o::RewriteRule_MD_Orientation{NDims} = pick_dir
+                    pick_dir_o::RewriteRule_MD_Orientation{NGridDims} = pick_dir
 
                     # Grab a view of the grid area covered by the rule.
-                    values_range = ntuple(Val(NDims)) do i
+                    values_range = ntuple(Val(NGridDims)) do i
                         pick_start_cell[i] : (pick_start_cell[i] + size(pick_dir_o.rule_permutation, i) - 1)
                     end
                     values_view = @view grid[values_range...]
@@ -1273,11 +1285,11 @@ function markov_algo_run(rewrite::MarkovOpRewrite{TRules, TBias, TPriority},
                         (t->t[1]).(pick_dir_o.rule_permutation),
                         Ref(source_values),
                         Tuple.(eachindex(IndexCartesian(), pick_dir_o.rule_permutation)),
-                        Ref(rng)
+                        Ref(algo_state.rng)
                     )
 
                     # Calculate the affected area.
-                    BoxI{NDims}(
+                    BoxI{NGridDims}(
                         min=pick_start_cell,
                         size=vsize(pick_dir.rule_permutation)
                     ), source_values
@@ -1295,9 +1307,9 @@ function markov_algo_run(rewrite::MarkovOpRewrite{TRules, TBias, TPriority},
                 if prod(size(affected_area)) == 1
                     markov_algo_tick(algo_state, STANDARD_MIN_COMPILE_TIME_TICK_PRIORITY - 1)
                 else
-                    markov_algo_tick(algo_state, STANDARD_END_OF_OP_TICK)
+                    markov_algo_tick(algo_state, STANDARD_MIN_COMPILE_TIME_TICK_PRIORITY)
                 end
-            end)(r.rules[pick_rule_i])
+            end)(rewrite.rules[pick_rule_i])
 
             # Update outer bookkeeping.
             made_modifications = true
@@ -2512,7 +2524,7 @@ function pick_rule_using_rewrite_priority(::MarkovRewritePriority_Everything,
     return weighted_random_array_element(
         (d.sum for d in inputs.desirability_per_rule),
         inputs.desirability_overall.sum,
-        rand(rng, Float32)
+        rand(algo_state.rng, Float32)
     )
 end
 function parse_markovjunior_rewrite_priority(::Val{:everything}, expr_args, inputs::MacroParserInputs)
@@ -2530,9 +2542,9 @@ function pick_rule_using_rewrite_priority(::MarkovRewritePriority_Fair,
                                           algo::MarkovAlgorithm, algo_state::AlgoState
                                          )::Int
     n_options = length(op.rules)
-    chosen_i = rand(rng, 1:n_options)
+    chosen_i = rand(algo_state.rng, 1:n_options)
     while isempty(rewrite_rule_option_indices(inputs, chosen_i))
-        chosen_i = rand(rng, 1:n_options)
+        chosen_i = rand(algo_state.rng, 1:n_options)
     end
     return chosen_i
 end

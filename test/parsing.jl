@@ -728,9 +728,7 @@ BIG_TEST_ANSWER = MJ.MarkovAlgorithm(
                 )
             ],
             nothing,
-            MJ.AbstractMarkovBias[
-
-            ]
+            ()
         ),
         MJ.MarkovOpSequence(
             MJ.AbstractMarkovOp[
@@ -750,9 +748,9 @@ BIG_TEST_ANSWER = MJ.MarkovAlgorithm(
                 )
             ],
             MJ.ThresholdByArea(0.5f0),
-            MJ.AbstractMarkovBias[
+            tuple(
                 MJ.MarkovBiasTemperature(convert(Float32, 11.2))
-            ]
+            )
         ),
         MJ.MarkovOpSequence(
             MJ.AbstractMarkovOp[
@@ -795,9 +793,9 @@ BIG_TEST_ANSWER = MJ.MarkovAlgorithm(
                 )
             ],
             nothing,
-            MJ.AbstractMarkovBias[
+            tuple(
                 MJ.MarkovBiasTemperature(0.9f0)
-            ]
+            )
         ),
 
         # Next op is 26

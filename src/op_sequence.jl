@@ -7,9 +7,10 @@ struct MarkovOpSequence{NBiases, TBiases<:NTuple{NBiases, AbstractMarkovBias}} <
 end
 
 function markov_algo_run(sequence::MarkovOpSequence{NSelfBiases},
-                         algo::MarkovAlgorithm, algo_state::AlgoState{NGrid},
+                         algo::MarkovAlgorithm, algo_state::AlgoState,
                          inherited_biases::NTuple{NInheritedBiases, AbstractMarkovBias},
-                         inherited_bias_states::NTuple{NInheritedBiases, Any}
+                         inherited_bias_states::NTuple{NInheritedBiases, Any},
+                         ::Val{NGrid} = Val(ndims(algo_state.grid))
                         )::Tuple{Bool, typeof(inherited_bias_states)} where {NGrid, NInheritedBiases, NSelfBiases}
     # Set up the repetition counter.
     repetitions_left = if isnothing(s.threshold)
@@ -75,7 +76,7 @@ function markov_algo_run(sequence::MarkovOpSequence{NSelfBiases},
                             algo, algo_state)
     end
 
-    markov_algo_tick(algo_state, STANDARD_END_OF_OP_TICK + 1)
+    markov_algo_tick(algo_state, STANDARD_END_OF_OP_TICK_PRIORITY + 1)
     return (made_any_changes, all_bias_states[1:NInheritedBiases])
 end
 
@@ -168,7 +169,7 @@ function parse_markovjunior_op(::Val{Symbol("@sequence")}, inputs::MacroParserIn
                 nothing
             end
         end,
-        biases
+        Tuple(biases)
     )
     return if exists(i_bias)
         with_parsed_markovjunior_bias_statement(generate_output, inputs, loc, expr_args[i_bias])

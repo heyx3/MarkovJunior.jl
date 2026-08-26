@@ -73,7 +73,7 @@ This new group is implicitly stored as an in-order accumulation of every sub-gro
   each being an inherited set of biases (e.g. nested sequences that each have a bias section).
 Note that you must not modify the bias groups; only validate their contents!
 "
-check_markovjunior_biases(type::Type, inputs::MacroParserInputs) = nothing
+markov_bias_validate(type::Type, inputs::MacroParserInputs) = nothing
 
 
 #####################
@@ -280,7 +280,7 @@ function push_parsed_markovjunior_bias_statement(inputs::MacroParserInputs, loca
     if !isempty(output)
         push!(inputs.bias_stack, output)
         for T in unique(typeof.(Iterators.flatten(inputs.bias_stack)))
-            check_markovjunior_biases(T, inputs)
+            markov_bias_validate(T, inputs)
         end
     end
 
