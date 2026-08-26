@@ -121,7 +121,7 @@ It signals to users that the algorithm has reached a certain point,
 @event BeforeSpawnPlacement
 ````
 
-When used this way, users should *not* modify the grid! Only read from it.
+When done this way, users should *not* modify the grid! Only read from it.
 To support modification, prepend the event name with `!`:
 
 ````julia
@@ -772,3 +772,15 @@ However if you add an ellipsis to the end, then those extra axes all take on the
 For example `@downscale (2...)` will halve the size along all axes.
 
 **TODO: Finish**
+
+## `@not_animated`
+
+This is a small helper to tweak rendered animations.
+
+During normal algorithm runs, for optimization purposes, certain complex ops (`@rewrite`)
+  may change the order in which things happen without affecting the final result.
+However when rendering an algorithm to video,
+  these optimizations are disabled so that the frame-by-frame behavior looks correct.
+
+The nested operator `@not_animated [op]` re-enables those optmizations
+  for the duration of the given op.
