@@ -219,8 +219,8 @@ We'll go into detail on everything, but here is a quick cheat sheet of **all** t
 end begin
     # Biases go here (see below).
     # If you only have one, you don't need to put it in a `begin end` block!
-    field(G <- R <- b)
-    field(G -> Y -> R, recompute)
+    field(G <- R, soft)
+    field(G -> Y, recompute)
 end
 ````
 
@@ -383,7 +383,7 @@ You can change this behavior by adding weights to each rule,
 
 ````julia
 # A single bias term:
-@rewrite R=>G   field(R<-Y<-B, 4.5)
+@rewrite R=>G   field(R->Y & B)
 
 # Weighted rules, no bias term:
 @rewrite begin
@@ -394,8 +394,8 @@ end
 
 # Several bias terms:
 @rewrite R=>G  begin
-    field(R->Y->B, 4.5)
-    field(R<-G<-Y, recompute)
+    field(R->Y & B)
+    field(G->R, live)
 end
 ````
 
@@ -719,10 +719,6 @@ The 1D vector lets every axis from 2 onward take up the entire grid,
 
 ## `@sequence`
 
-The op `@sequence [threshold] begin ... end` describes a chronological sequence of actions,
-  similar to the algorithm itself but with Thresholding options.
-For example:
-
 ````julia
 @sequence (length/10) begin
     # Redden 20% of the pixels in the top-left corner of the grid.
@@ -733,6 +729,10 @@ For example:
     @rewrite G_ => GB
 end path(G<-R<-w) # Add a pathing bias
 ````
+
+The op `@sequence [threshold] begin ... end` describes a chronological sequence of actions,
+  similar to the algorithm itself but with Thresholding options.
+For example:
 
 The `threshold` is identical to [the Threshold for `@rewrite` statements](#threshold),
   determining how many times to run, but with an extra option:
@@ -745,6 +745,26 @@ These biases are inherited by all operations within it
 
 ## `@upscale`
 
+````julia
+# Simply convert each pixel into a 2x2 block of itself
+@upscale (2, 2)
+
+# Convert each pixel into a 3x2 block according to the following rules
+@upscale (3, 2) begin
+    R => [
+        w b g
+        M M M
+    ]
+    G => [ M;M;M ;; Y;Y;Y ] # Alternative Julia syntax for multidimensional arrays
+    B => [
+        # Each element that names multiple colors will pick a random one each time
+        wb wb wb
+        g  g  g
+    ]
+    # All other pixels become a 3x2 block of themselves
+end
+````
+
 This increases the size of the grid by stretching each pixel a certain number of times along each axis.
 You may also add rewrite rules that replace specific pixel colors with specific patterns.
 
@@ -753,11 +773,52 @@ Factors are the stretch amounts along each axis, for example `(2, 2)`.
 
 The stretch factor for any extra grid axes defaults to 1, a.k.a. no change.
 However if you add an ellipsis to the end, then those extra axes all take on the last factor.
-For example `@upscale (2...)` will double the size along all axes.
+For example `@upscale (2...)` will double the size along *all* axes.
 
-**TODO: Finish**
+The rewrite rules can be nothing, or a single rule, or a `begin ... end` block of rules.
+If no rules match a source pixel, that pixel keeps its value during upscaling.
+Rules are formatted as a source color, arrow, and destination block,
+  with individual destination values being a single color OR a group whose value is picked randomly each time.
+For example:
+
+````julia
+# This rule only works in a grid of at least two dimensions,
+#   and a rewrite rule which uses a factor of 2 for the first two axes.
+# For every grid dimension above 2D, the block is extruded along that dimension.
+# We borrow the 'set' syntax from rewrite rules to allow random outcomes for certain pixels.
+G => [
+  R  BG
+  G   M
+]
+````
+
+If the grid upscales along more dimensions than the block, that block is extruded along the extra dimensions.
+For example, in the above example rule, a 3D upscale would use that same 2D slice at each Z level.
 
 ## `@downscale`
+
+````julia
+# Simply replace each 2x2 block of pixels with a single pixel,
+#   chosen randomly from that block.
+@downscale (2, 2)
+
+# Replace each 3x2 block of pixels with a single pixel,
+#   usually with random choice but certain blocks have more specific outcomes.
+@downscale (3, 2) begin
+  # A row of RGB, followed by a greyscale row bookended with white and black,
+  #   becomes a Red pixel.
+  R <= [
+    R   G   B
+    w  wgb b
+  ]
+  # A block of Magenta becomes either Green or Blue.
+  GB <= [ M;M;M ;; M;M;M ]
+
+  # Any other blocks fall back to the usual behavior of picking a random pixel.
+  # If a grid has a size not evenly divisible by our factor (3x2),
+  #    there are partial blocks at its ends which all get the default (random) behavior.
+end
+````
 
 This decreases the size of the grid by splitting it into regular blocks of pixels,
   and shrinking each block to a single pixel.
@@ -767,11 +828,16 @@ By default the shrunken pixel chooses a random color from its block,
 The basic syntax is `@downscale (factors...) [rewrite rules]`.
 Factors are the box sizes (i.e. down-scale amounts) along each axis.
 
-The factor for any extra grid axes defaults to 1, a.k.a. no change.
-However if you add an ellipsis to the end, then those extra axes all take on the last factor.
-For example `@downscale (2...)` will halve the size along all axes.
+The factor for any unmentioned/extra grid axes defaults to 1, a.k.a. no change.
+However if you add an ellipsis to the end of your list, then those extra axes all take on the last factor.
+For example `@downscale (2...)` will halve the size along *all* axes.
 
-**TODO: Finish**
+The rule syntax is destination, then left-arrow, then source block.
+The source block must match the factor (e.g. downscaling by `(3,2)` requires that each rule have a 3x2 block),
+  though extra dimensions can be omitted and your block will simply be extruded along that axis.
+
+Both destination pixel and source pixels can use Set syntax,
+  listing multiple colors at once to indicate a random choice among them.
 
 ## `@not_animated`
 
