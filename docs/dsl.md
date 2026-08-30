@@ -15,6 +15,14 @@ However the result looks much worse than the original -- whitespace, comments an
 
 ## Notes about Julia
 
+The DSL parser is written on top of Julia's own built-in ability to parse Julia code.
+DSL statements do not have to be valid compilable Julia code,
+  but they DO have to be made of parseable Julia syntax structures.
+For example `4 = 5` is absurd code but totally valid to the parser,
+  so it could in theory show up in our DSL.
+Some operations, especially `@rewrite`, stretch this to the limit with pretty tortured syntax,
+  but it's all parseable Julia at the end of the day.
+
 For convenience, Julia allows macros (code statements with the `@` symbol) to be written two ways:
 
 * Without parentheses and commas, to make statements shorter: `@my_macro a b c`
@@ -838,6 +846,23 @@ The source block must match the factor (e.g. downscaling by `(3,2)` requires tha
 
 Both destination pixel and source pixels can use Set syntax,
   listing multiple colors at once to indicate a random choice among them.
+
+## `@convolve`
+
+Convolution is the technical term for processing an image
+  by replacing each pixel with a particular blend of itself with its neighbors.
+The specific blend being used is called the Kernel.
+For example, blurs are defined this way and you get different kinds of blurs by using different Kernels.
+It's also a popular way to implement Cellular Automata such as the Game of Life.
+
+With MarkovJunior's extremely limited palette, convolution is defined in a simpler way:
+
+* The Kernel is an array of which neighboring pixels to include, optionally only including particular colors at particular neighbor points.
+* Different kernels can be used depending on the color of the central pixel. One color can even define multiple kernels, chosen randomly per pixel.
+* For each pixel, a Kernel is chosen and all included neighbors are counted by their color. 
+* A series of if-then statements is used to pick the new value based on integer math with the color counts (and with the color of the central pixel).
+
+**TODO: syntax**
 
 ## `@not_animated`
 
