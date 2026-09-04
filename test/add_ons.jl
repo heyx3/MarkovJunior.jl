@@ -304,7 +304,7 @@ function MJ.markov_algo_run(op::CustomOp2{N}, algo::MJ.MarkovAlgorithm, algo_sta
         algo_state.grid[op.location] = counter[]
         counter[] += 1
 
-        MJ.markov_bias_update(
+        MJ.markov_bias_update.(
             inherited_biases, inherited_bias_states,
             Ref(algo), Ref(algo_state),
             Ref(BoxI{N}(min=one(MJ.CellIdx{N}), size=vsize(algo_state.grid))),

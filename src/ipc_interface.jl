@@ -22,6 +22,7 @@ ipc_get_algorithm(id::IPC_Handle)::Optional{MarkovAlgorithm} = lock_read(IPC_ALG
     return get(IPC_ALGO_LOOKUP, id, nothing)
 end
 ipc_add_algorithm(algo::MarkovAlgorithm)::IPC_Handle = lock_write(IPC_ALGORITHM_LOCKER) do
+    global IPC_NEXT_ALGO_ID
     id = IPC_NEXT_ALGO_ID
     IPC_ALGO_LOOKUP[id] = algo
 
@@ -42,6 +43,7 @@ ipc_get_state(id::IPC_Handle)::Optional{Tuple{MarkovAlgorithm, CellGrid, AlgoCom
     return get(IPC_STATE_LOOKUP, id, nothing)
 end
 ipc_add_state(algo::MarkovAlgorithm, @nospecialize(grid::CellGrid), channel::AlgoCommsChannel)::IPC_Handle = lock_write(IPC_STATE_LOCKER) do
+    global IPC_NEXT_STATE_ID
     id = IPC_NEXT_STATE_ID
     IPC_STATE_LOOKUP[id] = (algo, grid, channel)
 
@@ -96,18 +98,17 @@ function ipc_client_loop(client_name, channel, server, max_grid_byte_size, ::Val
                 @ipc_debug_log client_name "|    algo is " str_len " bytes"
                 str_bytes = read(channel, str_len)
 
-                # Auto-append a null terminator if necessary.
-                if !iszero(str_bytes[end])
-                    @ipc_debug_log client_name "|    received with no null-terminator; appending it."
-                    push!(str_bytes, zero(UInt8))
+                # Remove the null-terminator if necessary.
+                if !isempty(str_bytes) && iszero(str_bytes[end])
+                    deleteat!(str_bytes, length(str_bytes))
                 end
-                algo_src = unsafe_string(str_bytes)
+                algo_src = String(str_bytes)
 
                 # Execute the parser.
                 result = try
                     markov_algo_parse(algo_src)
                 catch e
-                    "Falied to parse algorithm! $(sprint(showerror, e))"
+                    "Failed to parse algorithm! $(sprint(showerror, e))"
                 end
 
                 # Send/log the results.
@@ -147,7 +148,7 @@ function ipc_client_loop(client_name, channel, server, max_grid_byte_size, ::Val
                 a_size = Vector{UInt32}(undef, n_dims)
                 @ipc_debug_log client_name "|    Dims " n_dims
                 read!(channel, a_size)
-                @ipc_debug_log client_name "|    Size " Tuple(a_size)
+                @ipc_debug_log client_name "|    Size " Int.(Tuple(a_size))
                 a_size = reinterpret(Cint, a_size)
 
                 if prod(convert.(Ref(Int), a_size)) > max_grid_byte_size
@@ -194,11 +195,14 @@ function ipc_client_loop(client_name, channel, server, max_grid_byte_size, ::Val
                                 ticking,
                                 seeds=seed_bytes
                             )
+                            @ipc_debug_log client_name "|    Just started running!"
 
                             # Move the algorithm forward until we've got a reference to the initial grid.
                             grid::Optional{CellGrid} = nothing
                             while isnothing(grid)
+                                put!(run_channel, zero(Int))
                                 next_tick = take!(run_channel)
+                                @ipc_debug_log client_name "|    While looking for initial grid, got " next_tick
                                 if next_tick == TAG_NEW_GRID
                                     grid = take!(run_channel)
                                 end
