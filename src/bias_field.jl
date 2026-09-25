@@ -59,6 +59,8 @@ struct MarkovBiasField_State{NGrid, BHasPathCells, BHasAnchors,
     biases_buffer::Vector{Float32}
 end
 
+println("#TODO: Plan a switch for field() bias from djikstra maps to BFS, which should be far faster")
+
 """
 Returns the largest distance value in the field
   (not including `typemax(UInt32)` which means 'unreachable').
@@ -80,7 +82,7 @@ function rebuild_distance_field(field::MarkovBiasField,
     end
     fn_check_anchor = if BHasAnchors
         anchor_idcs = Iterators.filter(v -> (grid[v] in field.anchors), grid_idcs_iter)
-        function path_connections(v::V, output_list::AbstractVector{v2i})
+        function path_connections(v::V, output_list::AbstractVector{V})
             function try_side(_axis::Integer, _dir_bool::Integer)
                 axis = convert(Int32, _axis)
                 dir_bool = convert(Int32, _dir_bool)
@@ -95,7 +97,7 @@ function rebuild_distance_field(field::MarkovBiasField,
 
                 # Check that the end is a path cell.
                 # Ignore the start! We're sometimes coming from a source/anchor cell, not a path one.
-                if within_edge && fn_check_path(grid[v2])
+                if within_edge && fn_check_path(v2)
                     push!(output_list, v2)
                 end
                 return nothing
@@ -230,6 +232,7 @@ function markov_bias_cleanup(f::MarkovBiasField, s::MarkovBiasField_State,
         if exists(s.anchor_buffers)
             markov_allocator_release_array(alloc, s.anchor_buffers[1])
             markov_allocator_release_array(alloc, s.anchor_buffers[2].interesting_nodes)
+            markov_allocator_release_array(alloc, s.biases_buffer)
             markov_allocator_release_set(alloc, s.anchor_buffers[2].visited_nodes)
         end
         return nothing
@@ -240,7 +243,7 @@ end
 function markov_bias_update(field::MarkovBiasField, state::MarkovBiasField_State{N},
                             algo::MarkovAlgorithm, algo_state::AlgoState,
                             subset::BoxI{N}, old_subset_values::CellGrid{N}
-                           )::Nothing where {N}
+                           ) where {N}
     if field.live
         # First check whether the changed area had any relevant cell types.
         involved_cell_types = union(CellTypeSet(old_subset_values),
@@ -346,13 +349,23 @@ function markov_bias_calculate(field::MarkovBiasField, state::MarkovBiasField_St
         for_each_cell(at) do local_idx, global_idx
             push!(state.biases_buffer, pixel_bias(global_idx))
         end
-        if field.combo == BiasFieldComboMode.average
+        # Some edge-cases cause us to switch the behavior we use.
+        combo_to_use = if (field.combo == BiasFieldComboMode.deviation && length(state.biases_buffer) < 2)
+            # std() on a one-element array is NaN; just use diff mode instead.
+            BiasFieldComboMode.diff
+        else
+            field.combo
+        end
+        if combo_to_use == BiasFieldComboMode.average
             mean(state.biases_buffer)
-        elseif field.combo == BiasFieldComboMode.min
+        elseif combo_to_use == BiasFieldComboMode.min
             minimum(state.biases_buffer)
-        elseif field.combo == BiasFieldComboMode.max
+        elseif combo_to_use == BiasFieldComboMode.max
             maximum(state.biases_buffer)
-        elseif field.combo == BiasFieldComboMode.deviation
+        elseif combo_to_use == BiasFieldComboMode.deviation
+            # Edge-case: rule has only one cell -- std() of one element is NaN.
+            if length(state.biases_buffer) < 2
+                return 
             # std can at most be half the range, so the value should be doubled for normalization.
             # However in practice it'll be much less, except when some pixels are outside of the path,
             #   so also provide an exponential weighting.
@@ -362,7 +375,7 @@ function markov_bias_calculate(field::MarkovBiasField, state::MarkovBiasField_St
                 s = ((s / Float32(state.largest_dist)) ^ STD_CURVE) * state.largest_dist
             end
             s
-        elseif field.combo == BiasFieldComboMode.diff
+        elseif combo_to_use == BiasFieldComboMode.diff
             # It can already span the whole range, however tends to have a smaller value.
             s = Float32(maximum(state.biases_buffer) - minimum(state.biases_buffer))
             if s < Float32(state.largest_dist) # Pixels outside the path tree will have overlarge values
@@ -375,7 +388,7 @@ function markov_bias_calculate(field::MarkovBiasField, state::MarkovBiasField_St
             end
             s
         else
-            error("Unhandled: ", field.combo)
+            error("Unhandled: ", combo_to_use)
         end
     end
 

@@ -16,14 +16,14 @@ dsl_format(b::MarkovBiasTemperature) = "temperature($(b.amount))"
 function parse_markovjunior_bias(::Val{:temperature}, inputs::MacroParserInputs,
                                  loc::LineNumberNode, args
                                 )::MarkovBiasTemperature
-    push!(inputs.op_stack_trace, "temperature(...)")
-    if length(args) != 1
-        raise_parse_error(loc, inputs, "Expected one parameter, got ", length(args))
-    elseif !isa(args[1], Real)
-        raise_parse_error(loc, inputs, "Expected a number, got ", type(args[1]))
-    else
-        pop!(inputs.op_stack_trace)
-        return MarkovBiasTemperature(args[1])
+    return with_parser_stacktrace(inputs, "temperature(...)") do
+        if length(args) != 1
+            raise_parse_error(loc, inputs, "Expected one parameter, got ", length(args))
+        elseif !isa(args[1], Real)
+            raise_parse_error(loc, inputs, "Expected a number, got ", typeof(args[1]))
+        else
+            MarkovBiasTemperature(args[1])
+        end
     end
 end
 

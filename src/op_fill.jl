@@ -101,31 +101,31 @@ function markov_algo_run(op::MarkovOpDrawBox{NBox, TRule},
                          algo::MarkovAlgorithm, algo_state::AlgoState,
                          inherited_bias_tuple::Tuple{Vararg{AbstractMarkovBias}},
                          inherited_bias_state_tuple::Tuple,
-                         ::Val{NGrid} = Val(ndims(algo_state.grid))
+                         grid::CellGrid{NGrid} = algo_state.grid
                         )::Tuple{Bool, typeof(inherited_bias_state_tuple)} where {NBox, TRule, NGrid}
     box = get_draw_box_pixels(
         op.space, op.box,
-        convert(Vec{NGrid, Int32}, vsize(algo_state.grid)),
+        convert(Vec{NGrid, Int32}, vsize(grid)),
         op.box_is_1D_scalar
     )
+    box_a = min_inclusive(box)
+    box_b = max_inclusive(box)
+    grid_slice_idcs = ntuple(i -> box_a[i]:box_b[i], Val(NGrid))
 
     mask_grid = if isnothing(op.mask)
         nothing
     else
         a::Array{Float32, NGrid} = markov_allocator_acquire_array(algo_state.allocator,
-                                                                  size(algo_state.grid), Float32)
+                                                                  size(box).data, Float32)
         rand!(algo_state.rng, a)
         a
     end
     previous_value_grid = if isempty(inherited_bias_tuple)
         nothing
     else
-        a = markov_allocator_acquire_array(algo_state.allocator, size(algo_state.grid), UInt8)
-        box_a = min_inclusive(box)
-        box_b = max_inclusive(box)
-        grid_slice = ntuple(i -> box_a[i]:box_b[i], Val(NGrid))
-        previous_value_grid .= algo_state.grid[grid_slice...]
-        a
+        a2 = markov_allocator_acquire_array(algo_state.allocator, size(box).data, UInt8)
+        a2 .= @view grid[grid_slice_idcs...]
+        a2
     end
 
     # Make sure to de-allocate the arrays no matter what.
@@ -145,14 +145,14 @@ function markov_algo_run(op::MarkovOpDrawBox{NBox, TRule},
 
         # Make the mask data type-stable before entering the loop.
         ((mask_grid, mask_level) -> begin
-
             mc::Bool = false
-            for pixel in min_inclusive(box):max_inclusive(box)
-                if check_draw_box_rule(op.rule, algo_state.grid[pixel]) &&
-                    (isnothing(mask_grid) || (mask_grid[pixel] < mask_level))
+            for pixel in box_a:box_b
+                local_pixel = pixel - box_a + one(Vec{NGrid, Int32})
+                if check_draw_box_rule(op.rule, grid[pixel]) &&
+                    (isnothing(mask_grid) || (mask_grid[local_pixel] < mask_level))
                 #begin
                     mc = true
-                    algo_state.grid[pixel] = op.value
+                    grid[pixel] = op.value
                     markov_algo_tick(algo_state, 1)
                 end
             end
@@ -278,9 +278,19 @@ function parse_markovjunior_op(::Val{Symbol("@fill")},
 
     # Parse the rule.
     rule = if exists(exRuleAdd)
-        (Val(:whitelist), CellTypeSet(string(exRuleAdd)))
+        rule_set = try
+            CellTypeSet(string(exRuleAdd))
+        catch e
+            raise_parse_error(nothing, inputs, "Invalid colors in rule `+", exRuleAdd, "`")
+        end
+        (Val(:whitelist), rule_set)
     elseif exists(exRuleSub)
-        (Val(:blacklist), CellTypeSet(string(exRuleSub)))
+        rule_set = try
+            CellTypeSet(string(exRuleSub))
+        catch e
+            raise_parse_error(nothing, inputs, "Invalid colors in rule `-", exRuleSub, "`")
+        end
+        (Val(:blacklist), rule_set)
     else
         nothing
     end
@@ -353,9 +363,11 @@ function parse_markovjunior_op(::Val{Symbol("@fill")},
 
     # Get the value of the fill color.
     if !haskey(CELL_CODE_BY_CHAR, exCol)
-        raise_parse_error(loc, inputs,
-                       "Unsupported color value '", exCol, "'! ",
-                         "Supported are [ ", iter_join(keys(CELL_CODE_BY_CHAR), ", ")..., "]")
+        raise_parse_error(
+            loc, inputs,
+            "Unsupported color value '", exCol, "'! ",
+              "Supported are [ ", iter_join(keys(CELL_CODE_BY_CHAR), ", ")..., "]"
+        )
     end
     col = CELL_CODE_BY_CHAR[exCol]
 

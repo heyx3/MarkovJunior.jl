@@ -284,6 +284,10 @@ function markov_algo_run(algo::MarkovAlgorithm,
         error("Can't start a ", length(initial_size), "D MarkovJunior run with a ",
               algo.fixed_dimension, "D algorithm")
     end
+    if length(initial_size) < algo.min_dimension
+        error("Can't start a ", length(initial_size), "D MarkovJunior run with a ",
+              algo.min_dimension, "+D algorithm")
+    end
 
     rng::PRNG = (seeds isa Real) ? PRNG(seeds) : PRNG(seeds...)
     data_store = Dict{Symbol, Any}()

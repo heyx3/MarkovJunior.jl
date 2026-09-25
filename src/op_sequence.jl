@@ -10,35 +10,36 @@ function markov_algo_run(sequence::MarkovOpSequence{NSelfBiases},
                          algo::MarkovAlgorithm, algo_state::AlgoState,
                          inherited_biases::NTuple{NInheritedBiases, AbstractMarkovBias},
                          inherited_bias_states::NTuple{NInheritedBiases, Any},
-                         ::Val{NGrid} = Val(ndims(algo_state.grid))
-                        )::Tuple{Bool, typeof(inherited_bias_states)} where {NGrid, NInheritedBiases, NSelfBiases}
+                         grid::TGrid = algo_state.grid
+                        )::Tuple{Bool, typeof(inherited_bias_states)} where {
+                            TGrid<:CellGrid,
+                            NInheritedBiases, NSelfBiases
+                        }
     # Set up the repetition counter.
-    repetitions_left = if isnothing(s.threshold)
+    repetitions_left = if isnothing(sequence.threshold)
         typemax(Int)
-    elseif s.threshold isa SequenceRepeatModeTag
-        s.threshold
-    elseif s.threshold isa Threshold
-        get_threshold(s.threshold, ThresholdInputs(
-            convert(Float32, prod(size(grid))),
-            convert(Float32, sum(size(grid), init=0) / N),
-            rng
-        )) - 1
+    elseif sequence.threshold isa SequenceRepeatModeTag
+        sequence.threshold
+    elseif sequence.threshold isa Threshold
+        get_threshold(sequence.threshold, grid, algo_state.rng)
     else
-        error("Unhandled: ", typeof(s.threshold))
+        error("Unhandled: ", typeof(sequence.threshold))
     end
     if (repetitions_left isa Int) && (repetitions_left < 0)
-        return false
+        return (false, inherited_bias_states)
     end
 
     # Initialize our own biases.
     all_biases = tuple(
         inherited_biases...,
-        biases...
+        sequence.biases...
     )
     all_bias_states = tuple(
         inherited_bias_states...,
-        markov_bias_initialize.(biases, Ref(algo), Ref(algo_state))...
+        markov_bias_initialize.(sequence.biases, Ref(algo), Ref(algo_state))...
     )
+    # Make sure bias states get cleaned up at the end (or else we leak allocations).
+    try
 
     # Run the loop.
     @logic_logln("Starting sequence with threshold `", repetitions_left, "`")
@@ -59,25 +60,30 @@ function markov_algo_run(sequence::MarkovOpSequence{NSelfBiases},
                 sequence.ops[op_i], algo, algo_state,
                 all_biases, all_bias_states
             )
+            stop_early::Bool = false
             made_any_changes |= op_made_changes
             if !op_made_changes && (op_i == 1) && (repetitions_left isa SequenceRepeatModeTag)
                 @logic_logln("Inner op did nothing! The outer sequence will end now")
+                stop_early = true
                 repetitions_left = 0
             end
 
             @logic_tab_out()
-            (repetitions_left == 0) && break
+            stop_early && break
         end
     end
 
-    foreach(ntuple(identity, Val(NSelfBiases))) do i
-        markov_bias_cleanup(all_biases[i + NInheritedBiases],
-                            all_bias_states[i + NInheritedBiases],
-                            algo, algo_state)
-    end
-
     markov_algo_tick(algo_state, STANDARD_END_OF_OP_TICK_PRIORITY + 1)
-    return (made_any_changes, all_bias_states[1:NInheritedBiases])
+    return (made_any_changes, ntuple(i -> all_bias_states[i], Val(NInheritedBiases)))
+
+    # Finish the bias cleanup logic:
+    finally
+        foreach(ntuple(identity, Val(NSelfBiases))) do i
+            markov_bias_cleanup(all_biases[i + NInheritedBiases],
+                                all_bias_states[i + NInheritedBiases],
+                                algo, algo_state)
+        end
+    end
 end
 
 dsl_format(s::MarkovOpSequence) = string(

@@ -58,12 +58,21 @@ Base.length(s::CellTypeSet) = count_ones(s.bitfield)
 Base.isempty(s::CellTypeSet) = iszero(s.bitfield)
 
 function cell_set_index_of(s::CellTypeSet, value::UInt8)::Optional{Int}
-    for (i, v) in enumerate(s)
-        if v == value
-            return i
-        end
+    # If the index exists, finding it is equivalent to counting the 1 bits below it.
+    mask = cell_type_to_bitmask(value)
+    return if iszero(s.bitfield & mask)
+        nothing
+    else
+        return cell_set_index_of_guaranteed(s, value)
     end
-    return nothing
+end
+@inline function cell_set_index_of_guaranteed(s::CellTypeSet, known_value::UInt8)::Int
+    mask = cell_type_to_bitmask(known_value)
+    @markovjunior_assert(!iszero(s.bitfield & mask),
+                         "Guarantee was violated! ", known_value, " not in ", s)
+
+    predecessor_mask = mask - one(UInt16)
+    return 1 + count_ones(s.bitfield & predecessor_mask)
 end
 
 Base.empty(::CellTypeSet) = CellTypeSet()

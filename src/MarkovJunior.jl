@@ -64,7 +64,7 @@ include("compatibility.jl")
 
 @make_toggleable_asserts markovjunior_
 @decentralized_module_init
-const BUILT_WITH_TOOL = something(tryparse(Bool, get(ENV, "JMJ_BUILD_WITH_TOOL", "0")), true)
+const BUILT_WITH_TOOL = parse(Bool, get(ENV, "JMJ_BUILD_WITH_TOOL", "1"))
 
 
 # Core library:
@@ -76,7 +76,7 @@ include("dsl.jl")
 include("thresholds.jl")
 include("algo_interfaces.jl")
 include("op_rewrite.jl")
-include("op_draw_box.jl")
+include("op_fill.jl")
 include("op_sequence.jl")
 include("bias_temperature.jl")
 include("bias_field.jl")

@@ -24,7 +24,7 @@ match_rewrite_source(::RewriteRuleCell_Wildcard, ::UInt8) = true
 # 1D lookups provide the source values as a Tuple.
 pick_rewrite_value(dest::UInt8,                       src::RewriteRuleCellSource, src_values::Tuple{Vararg{UInt8}}, self_idx::Int, rng::PRNG) = dest
 pick_rewrite_value(dest::RewriteRuleCell_Set,         src::RewriteRuleCellSource, src_values::Tuple{Vararg{UInt8}}, self_idx::Int, rng::PRNG) = rand(rng, dest)
-pick_rewrite_value(dest::RewriteRuleCell_List,        src::RewriteRuleCell_Set,   src_values::Tuple{Vararg{UInt8}}, self_idx::Int, rng::PRNG) = dest[cell_set_index_of(src, src_values[self_idx])]
+pick_rewrite_value(dest::RewriteRuleCell_List,        src::RewriteRuleCell_Set,   src_values::Tuple{Vararg{UInt8}}, self_idx::Int, rng::PRNG) = dest[cell_set_index_of_guaranteed(src, src_values[self_idx])]
 pick_rewrite_value(dest::RewriteRuleCell_Lookup{Int}, src::RewriteRuleCellSource, src_values::Tuple{Vararg{UInt8}}, self_idx::Int, rng::PRNG) = src_values[dest.source_idx]
 pick_rewrite_value(dest::RewriteRuleCell_Wildcard,    src::RewriteRuleCellSource, src_values::Tuple{Vararg{UInt8}}, self_idx::Int, rng::PRNG) = src_values[self_idx]
 
@@ -32,7 +32,7 @@ pick_rewrite_value(dest::RewriteRuleCell_Wildcard,    src::RewriteRuleCellSource
 #    (correcting for symmetry, meaning the first array axis is the first rule axis and so on).
 pick_rewrite_value(dest::UInt8,                                  src::RewriteRuleCellSource, src_values::AbstractArray{UInt8, N}, self_idx::NTuple{N, Int}, rng::PRNG) where {N} = dest
 pick_rewrite_value(dest::RewriteRuleCell_Set,                    src::RewriteRuleCellSource, src_values::AbstractArray{UInt8, N}, self_idx::NTuple{N, Int}, rng::PRNG) where {N} = rand(rng, dest)
-pick_rewrite_value(dest::RewriteRuleCell_List,                   src::RewriteRuleCell_Set,   src_values::AbstractArray{UInt8, N}, self_idx::NTuple{N, Int}, rng::PRNG) where {N} = dest[cell_set_index_of(src, src_values[self_idx...])]
+pick_rewrite_value(dest::RewriteRuleCell_List,                   src::RewriteRuleCell_Set,   src_values::AbstractArray{UInt8, N}, self_idx::NTuple{N, Int}, rng::PRNG) where {N} = dest[cell_set_index_of_guaranteed(src, src_values[self_idx...])]
 pick_rewrite_value(dest::RewriteRuleCell_Lookup{NTuple{N, Int}}, src::RewriteRuleCellSource, src_values::AbstractArray{UInt8, N}, self_idx::NTuple{N, Int}, rng::PRNG) where {N} = src_values[dest.source_idx...]
 pick_rewrite_value(dest::RewriteRuleCell_Wildcard,               src::RewriteRuleCellSource, src_values::AbstractArray{UInt8, N}, self_idx::NTuple{N, Int}, rng::PRNG) where {N} = src_values[self_idx...]
 
@@ -65,6 +65,19 @@ pick_mask_impl(::Nothing, ::PRNG) = 1.0f0
 pick_mask_impl(f::Float32, ::PRNG) = f
 pick_mask_impl((a, b)::NTuple{2, Float32}, rng::PRNG) = lerp(a, b, rand(rng, Float32))
 
+# Global tail-recursive matching of individaul strip-rule cells; needed for efficiency.
+@inline strip_matches(cells::Tuple, grid, c_start, dir, offset_along_rule::Int32) = if isempty(cells)
+    true
+else
+    c_next = grid_dir_pos_along(dir, c_start, offset_along_rule)
+    if match_rewrite_source(first(cells)[1], grid[c_next])
+        #NOTE: tail() with no module prefix calls DataStructures.tail, which is incorrect
+        strip_matches(Base.tail(cells), grid, c_start, dir, offset_along_rule + one(Int32))
+    else
+        false
+    end
+end
+
 "
 Checks for a rule matching against the given grid when applied to the given cell.
 Assumes for performance that the rule does fit into the grid.
@@ -78,10 +91,10 @@ function rule_matches(r::RewriteRule_Strip{NCells, TCells}, grid::CellGrid{NDims
         (c_start in grid_range) && (c_end in grid_range)
     end "Rule is outside grid bounds! $c_start along $dir by $(NCells-1) vs $(vsize(grid))"
 
-    return all(ntuple(Val(NCells)) do i
-        c_next = grid_dir_pos_along(dir, c_start, i-1)
-        return match_rewrite_source(r.cells[i][1], grid[c_next])
-    end)
+    # We need to test that each individual cell matches the grid.
+    # To encourage unrolling of that loop, while still being able to exit early when one cell fails to match,
+    #    we use tail-recursion.
+    return strip_matches(r.cells, grid, c_start, dir, zero(Int32))
 end
 
 "
@@ -488,7 +501,7 @@ function find_all_md_symmetries(def::RewriteRule_MD_Symmetry_Definition,
     end end
 
     # If there are no options then the output type can't be deduced automatically :(
-    result = isempty(options) ? Matrix{GridDir}(undef, n_rule_dims, 0) : hcat(options...)
+    result = isempty(options) ? Matrix{GridDir}(undef, n_rule_dims, 0) : reduce(hcat, options)
 
     @md_symm_logln("Final symmetry output: [")
     for i_rule_axis in 1:size(result, 1)
@@ -503,6 +516,7 @@ end
 
 
 const RewriteCell_MD{NDims} = RewriteCell{NTuple{NDims, Int}}
+println("#TODO: A tuple of unions causes boxing of each element! Split into two arrays, 'sources' and 'destinations'.")
 
 "
 An optimized lookup of the symmetries for a multidimensional rule embedded in a specific grid.
@@ -669,14 +683,14 @@ function RewriteRule_MD_Orientations(rule_array::Array{RewriteCell_MD{NRuleDims}
         allocator
     )
 end
-Base.close(o::RewriteRule_MD_Orientations) = markov_allocator_release_array.(Ref(o.allocator), (
+Base.close(o::RewriteRule_MD_Orientations) = markov_allocator_release_array.(Ref(o.allocator), [
     o.rule_to_grid,
     o.grid_to_rule,
     o.rule_permutations...,
     o.rule_permutations,
     o.rule_permutation_cells_buffer...,
     o.rule_permutation_cells_buffer
-))
+])
 
 "The concrete type of a view into one orientation of a multidimensional rewrite rule"
 const RewriteRule_MD_OrientationView = let m = Matrix{GridDir}(undef, 3, 3)
@@ -837,7 +851,7 @@ function RewriteCache(grid::CellGrid{NDims}, mask_grid::Optional{MaskGrid{NDims}
         set = markov_allocator_acquire_ordered_set(allocator, CachedRuleApplication{NDims})
         empty!(set)
 
-        @logic_logln("Masked ", mask, ", rule ", rules)
+        @logic_logln("Masked ", mask, ", rule ", rule)
         @logic_tab_in()
         function process_rule_match(cell::CellIdx{NDims}, dir, is_matching::Bool)
             if is_matching
@@ -1003,13 +1017,34 @@ pick_rule_using_rewrite_priority(priority::AbstractMarkovRewritePriority,
     "Unimplemented: ", typeof(priority)
 )
 parse_markovjunior_rewrite_priority(::Val{Name}, expr_args, inputs::MacroParserInputs) where {Name} =
-    error("Unimplemented: ", Name)
+    raise_parse_error(nothing, inputs, "Unknown rewrite priority '", Name, "'")
 
 dsl_format(p::AbstractMarkovRewritePriority) = error("Unimplemented: ", typeof(p))
 
 
 ##################
 #  Rewrite Op
+
+"Computes the sum of desirabilities from each bias, early-existing with `nothing` if any bias returns that"
+@inline sum_bias_desirabilities(::Tuple{}, ::Tuple{}, algo, algo_state, at)::Optional{Float32} = zero(Float32)
+@inline function sum_bias_desirabilities(biases::Tuple, bias_states::Tuple,
+                                         algo, algo_state, at
+                                        )::Optional{Float32}
+    next_value = markov_bias_calculate(first(biases), first(bias_states), algo, algo_state, at)
+    if isnothing(next_value)
+        return nothing
+    end
+    @markovjunior_assert(next_value >= 0,
+                         "Bias ", typeof(first(biases)), " returned a negative value: ", next_value)
+
+    rest_values = sum_bias_desirabilities(Base.tail(biases), Base.tail(bias_states),
+                                          algo, algo_state, at)
+    if isnothing(rest_values)
+        return nothing
+    end
+
+    return rest_values + next_value
+end
 
 struct MarkovOpRewrite{TRules <: Tuple{Vararg{Union{RewriteRule_Strip, RewriteRule_MD}}},
                        TBias <: Tuple{Vararg{AbstractMarkovBias}},
@@ -1048,6 +1083,8 @@ function markov_algo_run(rewrite::MarkovOpRewrite{TRules, TBias, TPriority},
                          algo_state.allocator)
     if all(isempty, cache.applications)
         @logic_logln("MarkovOpRewrite has no options at the start; canceling...")
+        exists(mask_grid) && markov_allocator_release_array(algo_state.allocator, mask_grid)
+        close_rewrite_cache(cache, algo_state.allocator)
         return (false, inherited_bias_states)
     end
 
@@ -1097,7 +1134,7 @@ function markov_algo_run(rewrite::MarkovOpRewrite{TRules, TBias, TPriority},
             end
 
             markov_algo_tick(algo_state, STANDARD_END_OF_OP_TICK_PRIORITY)
-            return (made_modifications, bias_states[1:NInheritedBiases])
+            return (made_modifications, ntuple(i -> bias_states[i], Val(NInheritedBiases)))
         end
 
         while true
@@ -1117,21 +1154,17 @@ function markov_algo_run(rewrite::MarkovOpRewrite{TRules, TBias, TPriority},
                         CellLine(start_cell, dir, convert(Int32, length(rule.cells)))
                     elseif rule isa RewriteRule_MD
                         rule_size = vsize((dir::RewriteRule_MD_Orientation{NGridDims}).rule_permutation)
-                        CellRegion(start_cell:(start_cell + rule_size))
+                        CellRegion(start_cell:(start_cell + rule_size - one(Int32)))
                     else
                         error("Unhandled: ", typeof(rule))
                     end
-                    bias_values::NTuple{NBiases, Optional{Float32}} = markov_bias_calculate.(
-                        biases, bias_states,
-                        Ref(algo), Ref(algo_state),
-                        Ref(cell_at)
-                    )
-                    @markovjunior_assert(all(b -> something(b, 1.0f0) >= 0, bias_values),
-                                        "Some biases returned negative values! ",
-                                        collect(zip(typeof.(biases), bias_values)))
 
-                    if all(exists, bias_values)
-                        desirability = rule.weight * (iszero(NBiases) ? 1.0f0 : sum(bias_values, init=zero(Float32)))
+                    # This was originally a tuple of the individual sums, but sadly
+                    #   a tuple of Optional{Float32}s gets boxed.
+                    total_bias = sum_bias_desirabilities(biases, bias_states, algo, algo_state, cell_at)
+
+                    if exists(total_bias)
+                        desirability = rule.weight * (iszero(NBiases) ? 1.0f0 : total_bias)
                         push!(weighted_applications, RewritePotentialApplication(
                             rule_i, desirability,
                             start_cell, dir
@@ -1190,7 +1223,7 @@ function markov_algo_run(rewrite::MarkovOpRewrite{TRules, TBias, TPriority},
             pick_options_range = rewrite_rule_option_indices(priority_inputs, pick_rule_i)
             if isempty(pick_options_range)
                 @logic_logln("It chose a rule with no options, meaning the Op is finished.")
-                return assemble_return_values()
+                return finish_op()
             end
             picked_options = @view weighted_applications[pick_options_range]
             @markovjunior_assert(all(o -> o.rule_idx == pick_rule_i, picked_options),
@@ -1232,14 +1265,15 @@ function markov_algo_run(rewrite::MarkovOpRewrite{TRules, TBias, TPriority},
             #    we should add a layer of dispatch when executing it.
             (rule -> begin
                 (affected_area, original_values) = if rule isa RewriteRule_Strip
-                    source_values = Tuple(
+                    NCells = length(rule.cells)
+                    source_values = ntuple(Val(NCells)) do i
                         grid[grid_dir_pos_along(pick_dir, pick_start_cell, i-1)]
-                        for i in 1:length(rule.cells)
-                    )
+                    end
                     # Each rule's rewrite cell is also a different type known at compile-time.
                     foreach(rule.cells, 1:length(rule.cells)) do (rewrite_source, rewrite_dest), cell_i
                         cell_pos = grid_dir_pos_along(pick_dir, pick_start_cell, cell_i-1)
-                        prev_1D_pixels[cell_i] = grid[cell_pos]
+                        cell_write_i = (pick_dir.sign > 0) ? cell_i : (NCells - cell_i + 1)
+                        prev_1D_pixels[cell_write_i] = grid[cell_pos]
                         grid[cell_pos] = pick_rewrite_value(
                             rewrite_dest, rewrite_source,
                             source_values, cell_i,
@@ -1248,8 +1282,7 @@ function markov_algo_run(rewrite::MarkovOpRewrite{TRules, TBias, TPriority},
                     end
 
                     # Calculate the affected area.
-                    rule_len = convert(Int32, length(rule.cells))
-                    pick_end_cell = grid_dir_pos_along(pick_dir, pick_start_cell, rule_len-1)
+                    pick_end_cell = grid_dir_pos_along(pick_dir, pick_start_cell, NCells-1)
                     (pick_start_cell, pick_end_cell) = minmax(pick_start_cell, pick_end_cell)
                     b = Box(pick_start_cell:pick_end_cell)
 
@@ -1261,7 +1294,7 @@ function markov_algo_run(rewrite::MarkovOpRewrite{TRules, TBias, TPriority},
                             1
                         end
                     end
-                    source_view = reshape(@view(prev_1D_pixels[1:end]),
+                    source_view = reshape(@view(prev_1D_pixels[1:NCells]),
                                           source_view_shape...)
 
                     b, source_view
@@ -1325,6 +1358,7 @@ function markov_algo_run(rewrite::MarkovOpRewrite{TRules, TBias, TPriority},
             markov_allocator_release_array(alloc, weighted_applications)
             markov_allocator_release_array(alloc, weighted_applications_first_indices)
             markov_allocator_release_array(alloc, desirability_per_rule)
+            exists(mask_grid) && markov_allocator_release_array(alloc, mask_grid)
             markov_allocator_release_array(alloc, final_choices)
             markov_allocator_release_array(alloc, prev_1D_pixels)
             close_rewrite_cache(cache, alloc)
@@ -1405,7 +1439,7 @@ function dsl_format_rewrite_md_array(array::Array{RewriteCell_MD{NDims}, NDims},
     return String(output)
 end
 
-dsl_format_rewrite_axis(a::Integer) = if a < 5
+dsl_format_rewrite_axis(a::Integer) = if a in 1:4
     ('x', 'y', 'z', 'w')[a]
 else
     a
@@ -1897,6 +1931,11 @@ function parse_markovjunior_rewrite_rule_strip_symmetry(inputs::MacroParserInput
                                           " and "))
         end
 
+        # Explicit mention of a symmetry axis implies the grid must be at least that dimensionality.
+        for g in s_explicit
+            inputs.min_dims = max(inputs.min_dims, g.axis)
+        end
+
         return s_explicit, s_tail
     finally
         pop!(inputs.op_stack_trace)
@@ -2130,7 +2169,7 @@ function parse_markovjunior_rewrite_rule_md_symmetry(inputs::MacroParserInputs,
         return RewriteRule_MD_Symmetry_Definition()
     end
 
-    with_parser_stacktrace(inputs, "symmetry statement") do
+    return with_parser_stacktrace(inputs, "symmetry statement") do
         s_permutations = Vector{Pair{Matrix{Int}, RewriteRule_TailSymmetry}}()
         s_chiralities = Vector{Set{Int}}()
         for expr in exprs
@@ -2295,6 +2334,18 @@ function parse_markovjunior_rewrite_rule_md_symmetry(inputs::MacroParserInputs,
             end
         end
 
+        # Explicit mention of a symmetry axis implies the grid must be at least that dimensionality.
+        for cg in s_chiralities
+            for a in cg
+                inputs.min_dims = max(inputs.min_dims, a)
+            end
+        end
+        for (perm, tails) in s_permutations
+            for a in @view perm[:, 1]
+                inputs.min_dims = max(inputs.min_dims, a)
+            end
+        end
+
         RewriteRule_MD_Symmetry_Definition(s_permutations, s_chiralities)
     end
 end
@@ -2413,9 +2464,10 @@ function parse_markovjunior_rewrite_rule_md(inputs::MacroParserInputs, loc, expr
             end
         end
 
-        # 
-
         #TODO: Find symmetric axes (watch out for Lookup cells that reference one side!) and eliminate redundant explicit+tail-symmetrt options
+
+        # The dimensionality of each block rule puts a floor on the dimensionality of the grid itself.
+        inputs.min_dims = max(inputs.min_dims, ndims(lhs))
 
         return RewriteRule_MD(
             collect(
@@ -2520,11 +2572,20 @@ function pick_rule_using_rewrite_priority(::MarkovRewritePriority_Everything,
                                           op::MarkovOpRewrite, inputs::RewritePriorityInputs,
                                           algo::MarkovAlgorithm, algo_state::AlgoState
                                          )::Int
-    return weighted_random_array_element(
-        (d.sum for d in inputs.desirability_per_rule),
-        inputs.desirability_overall.sum,
-        rand(algo_state.rng, Float32)
-    )
+    # Edge-case: if all options' desirability is 0, treat them as all being 1.
+    if iszero(inputs.desirability_overall.sum)
+        return weighted_random_array_element(
+            (length(rewrite_rule_option_indices(inputs, i)) for i in 1:length(inputs.desirability_per_rule)),
+            length(inputs.weighted_applications),
+            rand(algo_state.rng, Float32)
+        )
+    else
+        return weighted_random_array_element(
+            (d.sum for d in inputs.desirability_per_rule),
+            inputs.desirability_overall.sum,
+            rand(algo_state.rng, Float32)
+        )
+    end
 end
 function parse_markovjunior_rewrite_priority(::Val{:everything}, expr_args, inputs::MacroParserInputs)
     if !isempty(expr_args)
@@ -2620,7 +2681,7 @@ end
 function parse_markovjunior_rewrite_priority(::Val{:common}, expr_args, inputs::MacroParserInputs)
     if !isempty(expr_args)
         raise_parse_error(nothing, inputs,
-                       "`common` priority should have no arguments! Got ", length(expr_args))
+                          "`common` priority should have no arguments! Got ", length(expr_args))
     end
     return MarkovRewritePriority_Common()
 end
@@ -2636,7 +2697,7 @@ function pick_rule_using_rewrite_priority(::MarkovRewritePriority_Rare,
     for (i, rule) in zip(1:length(op.rules), op.rules)
         n_options = length(rewrite_rule_option_indices(inputs, i))
         next_count = n_options * rule.weight
-        if next_count < smallest_count
+        if (next_count > 0) && (next_count < smallest_count)
             smallest_count = next_count
             smallest_i = i
         end
@@ -2646,7 +2707,7 @@ end
 function parse_markovjunior_rewrite_priority(::Val{:rare}, expr_args, inputs::MacroParserInputs)
     if !isempty(expr_args)
         raise_parse_error(nothing, inputs,
-                       "`rare` priority should have no arguments! Got ", length(expr_args))
+                          "`rare` priority should have no arguments! Got ", length(expr_args))
     end
     return MarkovRewritePriority_Rare()
 end

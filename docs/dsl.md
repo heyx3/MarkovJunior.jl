@@ -116,8 +116,8 @@ Our built-in GUI tool checks pragmas for the 3D materials of different cell type
 @pragma GuiMaterial Y light_source  (5.0, 5.0, 1.0)
 ````
 
-As another example, the `@fill` Op looks for `@pragma fast_fills`
-  and, if it finds it, will always finish itself in a single tick.
+As another example, previous versions of the `@fill` Op looked for `@pragma fast_fills`
+  and, if found, would always finish in a single tick.
 
 ## `@event`
 
@@ -157,7 +157,7 @@ We'll go into detail on everything, but here is a quick cheat sheet of **all** t
     # Rules go here.
     # If you only have one, you don't need to wrap it in this `begin end` block!
 
-    # You may set a Priority before providing any rules.
+    # You may set a Priority for the rules.
     # These have higher precedence than anything else, including biases and weights.
     PRIORITIZE(earliest)
 
@@ -297,7 +297,7 @@ This is called the Priority, and it has higher precedence than other things whic
   (e.g. biases and weights).
 In fact, weights are completely ignored under certain Priorities!
 
-To select a Priority `x`, add it to the beginning of the rules block with `PRIORITIZE(x)`.
+To select a Priority `x`, add it to the rules block (conventionally at the top) with `PRIORITIZE(x)`.
 Priorities may have extra arguments, e.g. `PRIORITIZE(x, 1, "hello")`,
   but none of the built-in ones actually use this feature.
 
@@ -716,9 +716,6 @@ You can still provide fractional values, in which case coordinates will be round
 For example `-RGB` means to affect every pixel in the box except Red Green and Blue;
 `+RGB` means to affect *no* pixels in the box except Red Green and Blue.
 * `[mask]` is an optional mask statement which randomly forbids some of the pixels in the same way as for [rewrite rules](#), for example `%0.75` forbids 25% of all pixels.
-
-By default this op will sometimes finish in a single tick, and sometimes spread itself out over several ticks.
-You can force it to always complete in a single tick by adding a pragma to the algorithm: `@pragma fast_fills`.
 
 Note that a 1D vector like `(5, )` has different behavior than a scalar like `5`
   when extrapolating to higher dimensions.

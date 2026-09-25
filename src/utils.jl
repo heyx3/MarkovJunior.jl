@@ -1,4 +1,4 @@
-"Returns the chosen index, or 0 if there are no weights"
+"Returns the chosen index, or 0 if there are no weights. Result is undefined if sum of weights is 0."
 function weighted_random_array_element(weights_iter, total_sum_weight, uniform_random_float)::Int
     F = typeof(uniform_random_float)
     if !isempty(weights_iter)
