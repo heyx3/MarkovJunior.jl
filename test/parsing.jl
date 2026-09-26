@@ -235,7 +235,7 @@ end
 
 DEFAULT_PRIORITY = MJ.MarkovRewritePriority_Everything()
 
-BIG_TEST = @markovjunior 3 'R' begin
+BIG_TEST = @markovjunior 4 'R' begin
     @pragma Hi 1 3 22
     @pragma hello
     @pragma Hi "abcd"
@@ -356,7 +356,7 @@ CELL_CODE = MJ.CELL_CODE_BY_CHAR
 WILDCARD = MJ.RewriteRuleCell_Wildcard()
 BIG_TEST_ANSWER = MJ.MarkovAlgorithm(
     CELL_CODE['R'],
-    3, 3,
+    4, 4,
 
     [
         MJ.MarkovOpRewrite(

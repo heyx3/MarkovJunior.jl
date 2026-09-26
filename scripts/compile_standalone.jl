@@ -215,8 +215,8 @@ if MODE == :exe
         #define $HEADER_GUARD_NAME_2
 
         #define JMJ_IPC_NAMED_PIPE "$NAMED_PIPE_ESCAPED"
-        #define JMJ_IPC_DEFAULT_MAX_GRID_BYTES $(MJ.IPC_DEFAULT_MAX_GRID_BYTE_SIZE)
-        #define JMJ_IPC_DEFAULT_MAX_CLIENT_NAME $(MJ.IPC_DEFAULT_MAX_CLIENT_NAME_BYTES)
+        #define JMJ_IPC_DEFAULT_MAX_GRID_BYTES $(MJ.IPC_DEFAULT_SAFETY_CAPS.max_grid_byte_size)
+        #define JMJ_IPC_DEFAULT_MAX_CLIENT_NAME $(MJ.IPC_DEFAULT_SAFETY_CAPS.max_client_name_len)
         #define JMJ_IPC_STDOUT_START_CODE $(MJ.IPC_MAIN_START_CODE)
         #define JMJ_IPC_STDOUT_STOP_CODE $(MJ.IPC_MAIN_STOP_CODE)
 
@@ -235,8 +235,8 @@ if MODE == :exe
             //Note: the null-terminator *is* there, but the string_view does not include it
             inline constexpr std::string_view NamedPipe = "$NAMED_PIPE_ESCAPED";
 
-            constexpr size_t DefaultMaxGridBytes = $(MJ.IPC_DEFAULT_MAX_GRID_BYTE_SIZE);
-            constexpr size_t DefaultMaxClientName = $(MJ.IPC_DEFAULT_MAX_CLIENT_NAME_BYTES);
+            constexpr size_t DefaultMaxGridBytes = $(MJ.IPC_DEFAULT_SAFETY_CAPS.max_grid_byte_size);
+            constexpr size_t DefaultMaxClientName = $(MJ.IPC_DEFAULT_SAFETY_CAPS.max_client_name_len);
 
             constexpr uint32_t StdoutStartCode = $(MJ.IPC_MAIN_START_CODE);
             constexpr uint32_t StdoutStopCode = $(MJ.IPC_MAIN_STOP_CODE);
@@ -248,8 +248,8 @@ if MODE == :exe
     open(joinpath(INCLUDE_DIR, "jmj_ipc.json"), "w") do file
         print(file, """{
             "named_pipe": "$NAMED_PIPE_ESCAPED",
-            "default_max_grid_bytes": $(MJ.IPC_DEFAULT_MAX_GRID_BYTE_SIZE),
-            "default_max_client_name": $(MJ.IPC_DEFAULT_MAX_CLIENT_NAME_BYTES),
+            "default_max_grid_bytes": $(MJ.IPC_DEFAULT_SAFETY_CAPS.max_grid_byte_size),
+            "default_max_client_name": $(MJ.IPC_DEFAULT_SAFETY_CAPS.max_client_name_len),
             "stdout_start_code": $(MJ.IPC_MAIN_START_CODE),
             "stdout_stop_code": $(MJ.IPC_MAIN_STOP_CODE)
         }""")

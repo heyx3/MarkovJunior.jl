@@ -35,3 +35,24 @@ end
 
 "Contains the state of the UI, serialized to disk"
 const MEMORY_FILE_NAME = "UserSession.json"
+
+
+function show_file_to_user(path::AbstractString)
+    path = abspath(path)
+
+    cmd = if Sys.iswindows()
+        `cmd /C start "" $path`
+    elseif Sys.isapple()
+        `open $path`
+    else
+        `xdg-open $path`
+    end
+
+    try
+        run(cmd; wait=false)
+    catch e
+        @warn "Couldn't open $path in a default application" exception=e
+    end
+
+    return nothing
+end

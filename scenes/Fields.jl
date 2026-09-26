@@ -13,7 +13,7 @@
 
 	# The randomization can be finely controlled.
 	@rewrite 1 G=>B
-	@rewrite G=>w field(B, randomness=0.2)
+	@rewrite G=>w field(B, randomness=0.1)
 	@rewrite B=>w
 
 	# The fields can be constrained to specific path cells.

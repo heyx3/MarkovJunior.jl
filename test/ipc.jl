@@ -280,11 +280,12 @@ sleep(1)
 # Also try some false starts.
 ipc_start(1, (6, 6), (1, 4.5),   2, false,   true, nothing,   0, false) # Failed due to algo ID
 ipc_start(2, (4, ), (1, 4.5),  2, false,   true, nothing,  0, false) # Failed due to algo being 2D and grid being 1D
-ipc_start(2, ntuple(i -> Int(ceil(sqrt(MJ.IPC_DEFAULT_MAX_GRID_BYTE_SIZE)) + 1), 2),
+ipc_start(2, ntuple(i -> Int(ceil(sqrt(MJ.IPC_DEFAULT_SAFETY_CAPS.max_grid_byte_size)) + 1), 2),
           (1, 4.5),
           2, false,
           false, nothing,
           0, false) # Failed due to memory cap
+ipc_start(2, ntuple(i->1, 100), (1, 4.5),   2, false,    false, nothing, 0, false) # Failed due to dimension cap
 ipc_start(2, (3, 12), (1, 4.5),   2, false,    true, nothing,    1, true)
 # Get the grid for the first time, and verify it.
 let g = ipc_grid(1, true)

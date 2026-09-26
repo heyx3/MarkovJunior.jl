@@ -363,9 +363,6 @@ function markov_bias_calculate(field::MarkovBiasField, state::MarkovBiasField_St
         elseif combo_to_use == BiasFieldComboMode.max
             maximum(state.biases_buffer)
         elseif combo_to_use == BiasFieldComboMode.deviation
-            # Edge-case: rule has only one cell -- std() of one element is NaN.
-            if length(state.biases_buffer) < 2
-                return 
             # std can at most be half the range, so the value should be doubled for normalization.
             # However in practice it'll be much less, except when some pixels are outside of the path,
             #   so also provide an exponential weighting.
@@ -406,11 +403,11 @@ function markov_bias_calculate(field::MarkovBiasField, state::MarkovBiasField_St
         #    to uniform-random (extremely light weights, curve approaches 0.0).
         # We already handled randomness <= 0 and >= 1, so here we can ignore extremes.
 
-        # Empirically it seems randomness values below 0.2 cause numeric problems.
-        # In those cases we switch over to a different method equivalent to the Temperature bias.
-        RANDOMNESS_NUMERIC_FLOOR = 0.2f0
+        # Significant numeric problems creep in with low randomness, so
+        #    below a certain randomness we switch to a Temperature-like bias.
+        RANDOMNESS_NUMERIC_FLOOR = 0.13f0
         if field.randomness < RANDOMNESS_NUMERIC_FLOOR
-            max_temp = 5.0f0 * log(convert(Float32, sum(size(algo_state.grid))))
+            max_temp = 30.0f0
             temp_t = (field.randomness / RANDOMNESS_NUMERIC_FLOOR)
             @logic_log " ...  using temperature(" temp_t " * " max_temp ") to simulate heavy weights"
             bias += rand(algo_state.rng, Float32) * temp_t * max_temp
@@ -424,7 +421,7 @@ function markov_bias_calculate(field::MarkovBiasField, state::MarkovBiasField_St
                 1.0f0 - inv_lerp(0.5f0, 1.0f0, field.randomness)
             end
 
-            bias = rand(algo_state.rng, Float32) ^ weight_curve
+            bias = rand(algo_state.rng, Float64) ^ weight_curve
 
             # Preserve the magnitude range of 0 - max_path_length.
             bias *= state.largest_dist

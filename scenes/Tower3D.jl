@@ -10,8 +10,7 @@
 	@pragma GuiMaterial E dielectric  1.0 (1, 0.9, 0.8)
     #   Y: lamps
 	@pragma GuiMaterial Y light_source   (10, 10, 6)
-    #   g: furniture/ceiling
-/stairs
+    #   g: furniture/ceiling/stairs
 	@pragma GuiMaterial g dielectric  1.0  0.5
 	#   I: windows/guidelines
 	@pragma GuiMaterial I glass  0.4  1.0 (0, 0.2, 0.5)

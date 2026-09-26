@@ -1336,11 +1336,9 @@ function markov_algo_run(rewrite::MarkovOpRewrite{TRules, TBias, TPriority},
                 )
 
                 # Issue a tick event.
-                if prod(size(affected_area)) == 1
-                    markov_algo_tick(algo_state, STANDARD_MIN_COMPILE_TIME_TICK_PRIORITY - 1)
-                else
-                    markov_algo_tick(algo_state, STANDARD_MIN_COMPILE_TIME_TICK_PRIORITY)
-                end
+                # NOTE: I used to issue less-important priorities for simple rules, but
+                #       checking that a set of rewrite rules is "simple" is actually non-trivial.
+                markov_algo_tick(algo_state, STANDARD_MIN_COMPILE_TIME_TICK_PRIORITY)
             end)(rewrite.rules[pick_rule_i])
 
             # Update outer bookkeeping.

@@ -33,6 +33,9 @@ gui_tool_imgui_denying_mouse_control()::Bool = let io = CImGui.GetIO()
     unsafe_load(io.WantCaptureKeyboard) || unsafe_load(io.WantCaptureMouse)
 end
 
+"Stores an ImGUI config string for the lifetime of the program, preventing GC"
+imgui_config_path::String = ""
+
 
 function markovjunior_run_gui()
     @game_loop begin
@@ -50,7 +53,7 @@ function markovjunior_run_gui()
 
             # Put the Dear ImGUI config inside the locals directory.
             # We must store the path string in a variable so the underlying char array can't be GC-ed.
-            imgui_config_path = path_local("imgui.ini")
+            global imgui_config_path = path_local("imgui.ini")
             imgui_config_path_c = Base.unsafe_convert(Ptr{Int8}, imgui_config_path)
             unsafe_store!(CImGui.GetIO().IniFilename, imgui_config_path_c)
 

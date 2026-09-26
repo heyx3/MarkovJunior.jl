@@ -154,7 +154,7 @@ mutable struct MarkovTickSettings{MinCompileTimePriority}
     # An empty stack represents 'false'.
     animated::Vector{Bool}
 
-    MarkovTickSettings(min_tick_priority::Integer = STANDARD_MIN_COMPILE_TIME_TICK_PRIORITY + 1
+    MarkovTickSettings(min_tick_priority::Integer = STANDARD_MIN_COMPILE_TIME_TICK_PRIORITY
                        ;
                        skip_most_tagged_events = false
                       ) = new{min(convert(Int, min_tick_priority), STANDARD_MIN_COMPILE_TIME_TICK_PRIORITY)}(
