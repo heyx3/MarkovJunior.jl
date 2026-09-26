@@ -237,9 +237,6 @@ They are heavily commented to help you learn.
 
 ## Optimizing the standalone builds
 
-**This section is for anyone who really wants to integrate the DLL release directly into a project.**
-**You should prefer the IPC executable instead.**
-
 Due to Julia's unique JIT architecture, it essentially needs a whole compiler inside its runtime.
 Due to our GUI tool, there are many sub-sub-dependencies compiled into the package.
 As a result the executable and dll are much larger than is ideal and also don't play well with mobile.
@@ -279,6 +276,17 @@ So you should clone BplusCore, BplusApp, BplusTools, and Bplus,
 # Add local B+ to MarkovJunior
 ] activate .
 ] dev ../Bplus.jl
+````
+
+### Skipping precompilation
+
+Normally we use *PrecompileTools.jl* to precompile significant amounts of our code.
+However if you're developing this package then you'll make frequent changes and probably do not want this.
+You can disable compilation by adding the file *LocalPreferences.toml* to this project root:
+
+````toml
+[MarkovJunior]
+precompile_workload = false
 ````
 
 ### Building standalone binaries
