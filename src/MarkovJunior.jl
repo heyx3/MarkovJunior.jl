@@ -3,46 +3,34 @@ A reimplementation of [https://github.com/mxgmn/MarkovJunior](mxgmn/MarkovJunior
 
 To run the GUI editor/player, simply call `markovjunior_run_gui()`.
 
+# Usage within Julia
 
-# Algorithm Definition
+An algorithm instance can be defined with the macro `@markovjunior [options] begin ... end`.
+The specific syntax is already [documented elsewhere](docs/dsl.md).
+To parse the algorithm from a string (or existing AST), call `markov_algo_parse(source)`.
 
-Use `@markovjunior` to generate an algorithm instance.
-The following functions allow you to work with an instance:
+The algorithm runs as a coroutine within its own Task.
+Start the task with `commsChannel::AlgoCommsChannel = markov_algo_run(algo, initial_state_or_resolution, [tick_settings]; ...)`
+The `MarkovTickSettings` struct allows you to control how the algorithm runs, and can even be changed during the run.
+For example you can signal the algorithm to cancel itself with `ticking.cancel_algo = true`,
+  or fast-forward to the end by setting `ticking.skip_most_tagged_events = true` and
+  `ticking.min_tick_priority = 99999999`.
 
-* `markov_algo_start` to start running it
-* `markov_algo_step` to update it
-* `markov_algo_is_finished` to check if it's done
-* `markov_algo_finish` to run all the way to the end (no timeout for infinite loops)
-* `markov_algo_grid` to read the current state of the grid
+The returned `Channel` is used to communicate with the coroutine;
+  it's recommended to use `markov_algo_complete()` or `markov_algo_next()` to do that for you,
+  but you can also control it manually through the protocol outlined in `markov_algo_run()`.
+You can cancel the algorithm by simply closing the channel,
+  or for a faster/cleaner finish (avoiding `catch` blocks) update its `MarkovTickSettings` as mentioned above.
 
-## Custom Ops
+In between some ticks are special tagged events.
+There are a few important built-in events, and you can dispatch custom ones at certain points in your algorithm.
+Built-in tags are stored in the following global variables:
 
-To define a new `AbstractMarkovOp` (like `@rewrite`), implement the following
-  un-exported interface (see their doc-strings for more info):
-
-* `markov_op_state_type`
-* `markov_op_initialize`
-* `markov_op_iterate`
-* `markov_op_cancel` if you have any resources/allocations to release;
-you may want to call this when your op finishes as well
-* `markov_op_min_dimension` if your op implies the grid must have a certain number of dimensions
-* `dsl_string`; note that ops are represented with macro call syntax
-* `parse_markovjunior_op` is the inverse of `dsl_string`
-
-## Custom Biases
-
-To define a new `AbstractMarkovBias`, implement the following
-  un-exported interface (see their doc-strings for more info):
-
-* `markov_bias_state_type`
-* `markov_bias_initialize`
-* `markov_bias_update`
-* `markov_bias_cleanup`
-* `markov_bias_calculate`
-* `dsl_string`; note that biases are represented with function call syntax
-* `parse_markovjunior_bias` is the inverse of `dsl_string`
-* `check_markovjunior_biases` if your new bias has rules
-  that need to be validated after parsing (e.g. only one instance allowed)
+* `TAG_ALGO_STARTING` for when the algorithm is about to start running.
+* `TAG_NEW_GRID` for when an Op has reallocated (resized) the output grid.
+This is also raised for the initial grid, immediately before `TAG_ALGO_STARTING`.
+* `TAG_ALGO_COMPLETED` for when the algorithm completes successfully and is about to deallocate the grid.
+* `TAG_ALGO_CANCELED` for when you canceled the algorithm and it's about to deallocate the grid.
 
 # GUI runner Tool
 
@@ -76,7 +64,7 @@ include("compatibility.jl")
 
 @make_toggleable_asserts markovjunior_
 @decentralized_module_init
-const BUILT_WITH_TOOL = convert(Bool, get(ENV, "JMJ_BUILD_WITH_TOOL", 1))
+const BUILT_WITH_TOOL = parse(Bool, get(ENV, "JMJ_BUILD_WITH_TOOL", "1"))
 
 
 # Core library:
@@ -85,18 +73,17 @@ include("cells.jl")
 include("allocator.jl")
 include("algo.jl")
 include("dsl.jl")
-include("interface.jl")
+include("thresholds.jl")
+include("algo_interfaces.jl")
 include("op_rewrite.jl")
-include("op_draw_box.jl")
+include("op_fill.jl")
 include("op_sequence.jl")
-include("bias_temperatue.jl")
+include("bias_temperature.jl")
 include("bias_field.jl")
-export AbstractMarkovAllocator, AbstractMarkovBias, AbstractMarkovOp,
-       MarkovAlgorithm, MarkovAlgoState, MarkovOpContext,
-       markov_algo_grid, markov_algo_n_iterations,
-       markov_algo_start, markov_algo_step, markov_algo_finish,
-       markov_algo_is_started, markov_algo_is_finished,
-       @markovjunior, markov_algo_parse, markov_algo_to_string
+export @markovjunior, markov_algo_parse,
+       MarkovAlgorithm, MarkovTickSettings,
+       markov_algo_run, markov_algo_next, markov_algo_complete, markov_algo_cleanup,
+       markov_algo_to_string
 
 # Tooling:
 if BUILT_WITH_TOOL
@@ -108,7 +95,7 @@ if BUILT_WITH_TOOL
 end
 
 # Library:
-include("lib_interface.jl")
+# include("lib_interface.jl")
 include("ipc_interface.jl")
 export markovjunior_run_ipc
 

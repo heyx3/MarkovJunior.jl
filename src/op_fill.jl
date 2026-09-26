@@ -97,125 +97,93 @@ struct MarkovOpDrawBox{N, TRule<:DrawBoxRule} <: AbstractMarkovOp
     mask::Union{Nothing, Float32, NTuple{2, Float32}}
 end
 
-struct MarkovOpDrawBox_State{N, TMask<:Optional{MaskGrid{N}}}
-    pixels::Bplus.Math.VecRange{N, Int32}
-    next_pixel::Optional{Vec{N, Int32}}
-    mask_grid::TMask
-    mask_level::Float32
-end
-
-markov_op_state_type(op::MarkovOpDrawBox, ::Type{<:CellGrid{NDims}}, ::PRNG, ::MarkovOpContext) where {NDims} =
-    MarkovOpDrawBox_State{NDims, isnothing(op.mask) ? Nothing : Array{Float32, NDims}}
-function markov_op_initialize(b::MarkovOpDrawBox{NBox, TRule},
-                              state_type::Type{<:MarkovOpDrawBox_State},
-                              grid::CellGrid{NGrid},
-                              rng::PRNG, context::MarkovOpContext
-                             )::Optional{state_type} where {NBox, NGrid, TRule}
+function markov_algo_run(op::MarkovOpDrawBox{NBox, TRule},
+                         algo::MarkovAlgorithm, algo_state::AlgoState,
+                         inherited_bias_tuple::Tuple{Vararg{AbstractMarkovBias}},
+                         inherited_bias_state_tuple::Tuple,
+                         grid::CellGrid{NGrid} = algo_state.grid
+                        )::Tuple{Bool, typeof(inherited_bias_state_tuple)} where {NBox, TRule, NGrid}
     box = get_draw_box_pixels(
-        b.space, b.box,
+        op.space, op.box,
         convert(Vec{NGrid, Int32}, vsize(grid)),
-        b.box_is_1D_scalar
+        op.box_is_1D_scalar
     )
-    pixel_range = min_inclusive(box):max_inclusive(box)
+    box_a = min_inclusive(box)
+    box_b = max_inclusive(box)
+    grid_slice_idcs = ntuple(i -> box_a[i]:box_b[i], Val(NGrid))
 
-    iter_start = iterate(pixel_range)
-    if isnothing(iter_start)
-        return nothing
+    mask_grid = if isnothing(op.mask)
+        nothing
     else
-        (next_pos, next_state) = iter_start
-        @markovjunior_assert(next_pos == next_state, "Iterator works differently than I thought")
+        a::Array{Float32, NGrid} = markov_allocator_acquire_array(algo_state.allocator,
+                                                                  size(box).data, Float32)
+        rand!(algo_state.rng, a)
+        a
+    end
+    previous_value_grid = if isempty(inherited_bias_tuple)
+        nothing
+    else
+        a2 = markov_allocator_acquire_array(algo_state.allocator, size(box).data, UInt8)
+        a2 .= @view grid[grid_slice_idcs...]
+        a2
+    end
 
-        mask_grid = if isnothing(b.mask)
-            nothing
-        else
-            a::Array{Float32, NGrid} = markov_allocator_acquire_array(context.allocator, size(grid), Float32)
-            rand!(rng, a)
-            a
-        end
+    # Make sure to de-allocate the arrays no matter what.
+    made_changes::Bool = try
 
-        mask_level = if isnothing(b.mask)
+        # Pick a mask.
+        mask_level = if isnothing(op.mask)
             # Value doesn't matter
             1.0f0
-        elseif b.mask isa Float32
-            b.mask
-        elseif b.mask isa NTuple{2, Float32}
-            lerp(b.mask..., rand(rng, Float32))
+        elseif op.mask isa Float32
+            op.mask
+        elseif op.mask isa NTuple{2, Float32}
+            lerp(op.mask..., rand(algo_state.rng, Float32))
         else
-            error("Unhandled ", typeof(b.mask))
+            error("Unhandled ", typeof(op.mask))
         end
 
-        return MarkovOpDrawBox_State(pixel_range, next_pos, mask_grid, mask_level)
-    end
-end
-function markov_op_iterate(b::MarkovOpDrawBox{NBox, TRule},
-                           state::MarkovOpDrawBox_State{NGrid, TMaskGrid},
-                           grid::CellGrid{NGrid},
-                           rng::PRNG, context::MarkovOpContext,
-                           ticks_left::Ref{Optional{Int}}
-                          ) where {NBox, NGrid, TRule, TMaskGrid}
-    function apply_at(cell_idx)
-        if check_draw_box_rule(b.rule, grid[cell_idx]) &&
-           (TMaskGrid == Nothing || state.mask_grid[cell_idx] < state.mask_level)
-        #begin
-            grid[cell_idx] = b.value
-        end
-    end
-
-    # In some circumstances we want to finish quickly.
-    finish_quickly = isnothing(ticks_left[]) ||
-                     (first(state.pixels) == one(Vec{NGrid, Int32}) && last(state.pixels) == vsize(grid)) ||
-                     haskey(context.pragmas_map, :fast_fills)
-    if finish_quickly && (state.next_pixel == first(state.pixels))
-        foreach(apply_at, first(state.pixels):last(state.pixels))
-        markov_op_cancel(b, state, context)
-        return nothing
-    # Otherwise apply to the next pixel and try to advance.
-    else
-        apply_at(state.next_pixel)
-        if exists(ticks_left[])
-            ticks_left[] -= 1
-        end
-
-        try_iterate = iterate(state.pixels, state.next_pixel)
-        return if isnothing(try_iterate)
-            markov_op_cancel(b, state, context)
-            nothing
-        else
-            @markovjunior_assert(try_iterate[1] == try_iterate[2],
-                                 "Iterator works differently than I thought")
-            typeof(state)(
-                state.pixels,
-                try_iterate[1],
-                state.mask_grid, state.mask_level
+        # Make the mask data type-stable before entering the loop.
+        ((mask_grid, mask_level) -> begin
+            mc::Bool = false
+            for pixel in box_a:box_b
+                local_pixel = pixel - box_a + one(Vec{NGrid, Int32})
+                if check_draw_box_rule(op.rule, grid[pixel]) &&
+                    (isnothing(mask_grid) || (mask_grid[local_pixel] < mask_level))
+                #begin
+                    mc = true
+                    grid[pixel] = op.value
+                    markov_algo_tick(algo_state, 1)
+                end
+            end
+            inherited_bias_state_tuple = markov_bias_update.(
+                inherited_bias_tuple, inherited_bias_state_tuple,
+                Ref(algo), Ref(algo_state),
+                Ref(box), Ref(previous_value_grid)
             )
-        end
+            return mc
+
+        end)(mask_grid, mask_level)
+
+    finally
+        exists(previous_value_grid) && markov_allocator_release_array(algo_state.allocator, previous_value_grid)
+        exists(mask_grid) && markov_allocator_release_array(algo_state.allocator, mask_grid)
     end
-end
-function markov_op_cancel(b::MarkovOpDrawBox{NBox, TRule},
-                          state::MarkovOpDrawBox_State{NGrid, TMaskGrid},
-                          context::MarkovOpContext
-                         ) where {NBox, NGrid, TRule, TMaskGrid}
-    if TMaskGrid != Nothing
-        markov_allocator_release_array(context.allocator, state.mask_grid)
-    end
-    return nothing
-end
-markov_op_min_dimension(b::MarkovOpDrawBox{NBox}) where {NBox} = if b.box_is_1D_scalar
-    1
-else
-    NBox
+
+    markov_algo_tick(algo_state, STANDARD_END_OF_OP_TICK_PRIORITY - 1)
+    return (made_changes, inherited_bias_state_tuple)
 end
 
 
 #############
 #  DSL
 
-dsl_string_box_rule(r::Nothing) = ""
-dsl_string_box_rule(r::Tuple{Val{:whitelist}, CellTypeSet}) = "+$(dsl_string(r[2]))"
-dsl_string_box_rule(r::Tuple{Val{:blacklist}, CellTypeSet}) = "-$(dsl_string(r[2]))"
+dsl_format_box_rule(r::Nothing) = ""
+dsl_format_box_rule(r::Tuple{Val{:whitelist}, CellTypeSet}) = "+$(dsl_format(r[2]))"
+dsl_format_box_rule(r::Tuple{Val{:blacklist}, CellTypeSet}) = "-$(dsl_format(r[2]))"
 
-dsl_string(b::MarkovOpDrawBox) = string(
-    "@fill '", dsl_string(b.value), "'",
+dsl_format(b::MarkovOpDrawBox) = string(
+    "@fill '", dsl_format(b.value), "'",
     " ", b.space, "(",
     "min=",
         if b.box_is_1D_scalar
@@ -230,8 +198,8 @@ dsl_string(b::MarkovOpDrawBox) = string(
             size(b.box).data
         end,
     ")",
-    " ", dsl_string_box_rule(b.rule),
-    " ", dsl_string_rewrite_mask(b.mask)
+    " ", dsl_format_box_rule(b.rule),
+    " ", dsl_format_rewrite_mask(b.mask)
 )
 
 function parse_markovjunior_op(::Val{Symbol("@fill")},
@@ -310,9 +278,19 @@ function parse_markovjunior_op(::Val{Symbol("@fill")},
 
     # Parse the rule.
     rule = if exists(exRuleAdd)
-        (Val(:whitelist), CellTypeSet(string(exRuleAdd)))
+        rule_set = try
+            CellTypeSet(string(exRuleAdd))
+        catch e
+            raise_parse_error(nothing, inputs, "Invalid colors in rule `+", exRuleAdd, "`")
+        end
+        (Val(:whitelist), rule_set)
     elseif exists(exRuleSub)
-        (Val(:blacklist), CellTypeSet(string(exRuleSub)))
+        rule_set = try
+            CellTypeSet(string(exRuleSub))
+        catch e
+            raise_parse_error(nothing, inputs, "Invalid colors in rule `-", exRuleSub, "`")
+        end
+        (Val(:blacklist), rule_set)
     else
         nothing
     end
@@ -385,11 +363,20 @@ function parse_markovjunior_op(::Val{Symbol("@fill")},
 
     # Get the value of the fill color.
     if !haskey(CELL_CODE_BY_CHAR, exCol)
-        raise_parse_error(loc, inputs,
-                       "Unsupported color value '", exCol, "'! ",
-                         "Supported are [ ", iter_join(keys(CELL_CODE_BY_CHAR), ", ")..., "]")
+        raise_parse_error(
+            loc, inputs,
+            "Unsupported color value '", exCol, "'! ",
+              "Supported are [ ", iter_join(keys(CELL_CODE_BY_CHAR), ", ")..., "]"
+        )
     end
     col = CELL_CODE_BY_CHAR[exCol]
 
+    inputs.min_dims = max(inputs.min_dims,
+        if box_is_1D_scalar
+            1
+        else
+            length(min_inclusive(space_box))
+        end
+    )
     return MarkovOpDrawBox(col, space, box_is_1D_scalar, space_box, rule, mask)
 end

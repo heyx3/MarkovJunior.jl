@@ -279,7 +279,7 @@ mutable struct Scene
     old_textures::Vector{Pair{Texture, Int}} # Elements are cleaned up after X frames,
                                              #   to prevent crashes from Dear ImGUI trying to draw with it.
 end
-function Scene(; sun_dir::v3f = norm(v3f(1, -1, -1)),
+function Scene(; sun_dir::v3f = vnorm(v3f(1, -1, -1)),
                  sun_color::v3f = v3f(1, 1, 1),
                  sun_shadow_resolution::Int = 2048)
     return Scene(

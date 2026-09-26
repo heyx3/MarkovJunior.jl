@@ -1,6 +1,4 @@
 @markovjunior 3 begin
-	@pragma fast_fills
-
     # Finalized colors:
     #   L: grass/leaves
 	@pragma GuiMaterial L dielectric  0.75 (0, 0.5, 0.2)

@@ -7,28 +7,28 @@ struct MarkovBiasTemperature <: AbstractMarkovBias
 end
 
 markov_bias_calculate(t::MarkovBiasTemperature, ::Nothing,
-                      ::CellGrid{N}, ::Union{CellLine{N}, CellRegion{N}},
-                      rng::PRNG
-                     ) where {N} = rand(rng, Float32) * t.amount
+                      algo::MarkovAlgorithm, algo_state::AlgoState,
+                      ::Union{CellLine{N}, CellRegion{N}}
+                     ) where {N} = rand(algo_state.rng, Float32) * t.amount
 
-dsl_string(b::MarkovBiasTemperature) = "temperature($(b.amount))"
+dsl_format(b::MarkovBiasTemperature) = "temperature($(b.amount))"
 
 function parse_markovjunior_bias(::Val{:temperature}, inputs::MacroParserInputs,
                                  loc::LineNumberNode, args
                                 )::MarkovBiasTemperature
-    push!(inputs.op_stack_trace, "temperature(...)")
-    if length(args) != 1
-        raise_parse_error(loc, inputs, "Expected one parameter, got ", length(args))
-    elseif !isa(args[1], Real)
-        raise_parse_error(loc, inputs, "Expected a number, got ", type(args[1]))
-    else
-        pop!(inputs.op_stack_trace)
-        return MarkovBiasTemperature(args[1])
+    return with_parser_stacktrace(inputs, "temperature(...)") do
+        if length(args) != 1
+            raise_parse_error(loc, inputs, "Expected one parameter, got ", length(args))
+        elseif !isa(args[1], Real)
+            raise_parse_error(loc, inputs, "Expected a number, got ", typeof(args[1]))
+        else
+            MarkovBiasTemperature(args[1])
+        end
     end
 end
 
-function check_markovjunior_biases(::Type{<:MarkovBiasTemperature},
-                                   inputs::MacroParserInputs)
+function markov_bias_validate(::Type{<:MarkovBiasTemperature},
+                              inputs::MacroParserInputs)
     # Within a single group, there should only be one temperature parameter.
     # Across inherited groups, it's fine to have multiple.
     if count(t -> t isa MarkovBiasTemperature, top(inputs.bias_stack)) > 1

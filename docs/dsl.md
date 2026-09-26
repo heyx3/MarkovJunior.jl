@@ -10,10 +10,18 @@ This represents a sequence of operations that generate a grid of colored pixels,
 You could also think of it as defining an *animation*,
   which transforms a blank grid into an image/scene.
 
-You can turn a parsed algorithm back into a DSL string with `dsl_string(algo)`.
+You can turn a parsed algorithm back into a DSL string with `dsl_format(algo)`.
 However the result looks much worse than the original -- whitespace, comments and other niceties are lost!
 
 ## Notes about Julia
+
+The DSL parser is written on top of Julia's own built-in ability to parse Julia code.
+DSL statements do not have to be valid compilable Julia code,
+  but they DO have to be made of parseable Julia syntax structures.
+For example `4 = 5` is absurd code but totally valid to the parser,
+  so it could in theory show up in our DSL.
+Some operations, especially `@rewrite`, stretch this to the limit with pretty tortured syntax,
+  but it's all parseable Julia at the end of the day.
 
 For convenience, Julia allows macros (code statements with the `@` symbol) to be written two ways:
 
@@ -68,6 +76,14 @@ For example:
         wRG_GRw  => wwwwwww # Stomp over whatever was between the two walls, to make things interesting
         wRG__GRw => wwwwwwww # Slightly larger stomp
     end
+
+    # Emit a "tagged event", which pauses the algorithm for users to view its current state.
+    @event BeforeFinalSteps
+    # If users need to *modify* the grid during a tagged event, prepend the name with '!'.
+    # There's no special checking around this, so it's up to you to be vigilant!
+    @event !BeforeFinalSteps
+
+    # Emit another tagged event which gives users 
     # Finally, place a "player start" square.
     @fill B pixel(min=0, size=4)
     @fill T pixel(min=0, size=1)
@@ -100,8 +116,29 @@ Our built-in GUI tool checks pragmas for the 3D materials of different cell type
 @pragma GuiMaterial Y light_source  (5.0, 5.0, 1.0)
 ````
 
-As another example, the `@fill` Op looks for `@pragma fast_fills`
-  and, if it finds it, will always finish itself in a single tick.
+As another example, previous versions of the `@fill` Op looked for `@pragma fast_fills`
+  and, if found, would always finish in a single tick.
+
+## `@event`
+
+This is a no-op which inserts a "tagged event", sort of like a named tick.
+It signals to users that the algorithm has reached a certain point,
+   and those users may wish to read the grid state before the algorithm continues to modify it.
+
+````julia
+@event BeforeSpawnPlacement
+````
+
+When done this way, users should *not* modify the grid! Only read from it.
+To support modification, prepend the event name with `!`:
+
+````julia
+@event !BeforeSpawnPlacement
+````
+
+This will give secondary state, like all active [Biases](#bias-and-weights),
+  a chance to update themselves after your modifications.
+It can have a big performance impact under really active Biases, so use it sparingly.
 
 ## `@rewrite`
 
@@ -120,7 +157,7 @@ We'll go into detail on everything, but here is a quick cheat sheet of **all** t
     # Rules go here.
     # If you only have one, you don't need to wrap it in this `begin end` block!
 
-    # You may set a Priority before providing any rules.
+    # You may set a Priority for the rules.
     # These have higher precedence than anything else, including biases and weights.
     PRIORITIZE(earliest)
 
@@ -190,8 +227,8 @@ We'll go into detail on everything, but here is a quick cheat sheet of **all** t
 end begin
     # Biases go here (see below).
     # If you only have one, you don't need to put it in a `begin end` block!
-    field(G <- R <- b)
-    field(G -> Y -> R, recompute)
+    field(G <- R, soft)
+    field(G -> Y, recompute)
 end
 ````
 
@@ -260,7 +297,7 @@ This is called the Priority, and it has higher precedence than other things whic
   (e.g. biases and weights).
 In fact, weights are completely ignored under certain Priorities!
 
-To select a Priority `x`, add it to the beginning of the rules block with `PRIORITIZE(x)`.
+To select a Priority `x`, add it to the rules block (conventionally at the top) with `PRIORITIZE(x)`.
 Priorities may have extra arguments, e.g. `PRIORITIZE(x, 1, "hello")`,
   but none of the built-in ones actually use this feature.
 
@@ -303,8 +340,8 @@ However you can provide a *threshold* as the first argument, to limit this.
 * If you want to make it relative to the average length of the grid along each axis,
   pass a simple multiplication or division statement (**in parentheses** if using the simpler macro syntax):
   `@rewrite (0.5*length) R=>G`. It's automatically rounded and clamped >=1.
-* If you want a randomized threshold value, pass a range between two of the above terms.
-  `@rewrite (area/)
+* If you want a randomized threshold value, pass a range: `@rewrite (area/100):20`.
+It's OK if the "max" is greater than the "min".
 
 ### Symmetry
 
@@ -354,7 +391,7 @@ You can change this behavior by adding weights to each rule,
 
 ````julia
 # A single bias term:
-@rewrite R=>G   field(R<-Y<-B, 4.5)
+@rewrite R=>G   field(R->Y & B)
 
 # Weighted rules, no bias term:
 @rewrite begin
@@ -365,8 +402,8 @@ end
 
 # Several bias terms:
 @rewrite R=>G  begin
-    field(R->Y->B, 4.5)
-    field(R<-G<-Y, recompute)
+    field(R->Y & B)
+    field(G->R, live)
 end
 ````
 
@@ -680,19 +717,12 @@ For example `-RGB` means to affect every pixel in the box except Red Green and B
 `+RGB` means to affect *no* pixels in the box except Red Green and Blue.
 * `[mask]` is an optional mask statement which randomly forbids some of the pixels in the same way as for [rewrite rules](#), for example `%0.75` forbids 25% of all pixels.
 
-By default this op will sometimes finish in a single tick, and sometimes spread itself out over several ticks.
-You can force it to always complete in a single tick by adding a pragma to the algorithm: `@pragma fast_fills`.
-
 Note that a 1D vector like `(5, )` has different behavior than a scalar like `5`
   when extrapolating to higher dimensions.
 The 1D vector lets every axis from 2 onward take up the entire grid,
   while the scalar value is used for every axis.
 
 ## `@sequence`
-
-The op `@sequence [threshold] begin ... end` describes a chronological sequence of actions,
-  similar to the algorithm itself but with Thresholding options.
-For example:
 
 ````julia
 @sequence (length/10) begin
@@ -705,9 +735,13 @@ For example:
 end path(G<-R<-w) # Add a pathing bias
 ````
 
+The op `@sequence [threshold] begin ... end` describes a chronological sequence of actions,
+  similar to the algorithm itself but with Thresholding options.
+For example:
+
 The `threshold` is identical to [the Threshold for `@rewrite` statements](#threshold),
   determining how many times to run, but with an extra option:
- `repeat` makes the sequence repeat until the first inner operation fails to have any matches.
+ `repeat` makes the sequence repeat until the first inner operation fails to do anything.
 
 The last argument to a sequence is a bias statement or block of statements,
   identical to [bias for `@rewrite` statements](#bias-and-weights).
@@ -715,6 +749,26 @@ These biases are inherited by all operations within it
   (primarily `@rewrite` but other ops may respect `bias` settings too).
 
 ## `@upscale`
+
+````julia
+# Simply convert each pixel into a 2x2 block of itself
+@upscale (2, 2)
+
+# Convert each pixel into a 3x2 block according to the following rules
+@upscale (3, 2) begin
+    R => [
+        w b g
+        M M M
+    ]
+    G => [ M;M;M ;; Y;Y;Y ] # Alternative Julia syntax for multidimensional arrays
+    B => [
+        # Each element that names multiple colors will pick a random one each time
+        wb wb wb
+        g  g  g
+    ]
+    # All other pixels become a 3x2 block of themselves
+end
+````
 
 This increases the size of the grid by stretching each pixel a certain number of times along each axis.
 You may also add rewrite rules that replace specific pixel colors with specific patterns.
@@ -724,11 +778,52 @@ Factors are the stretch amounts along each axis, for example `(2, 2)`.
 
 The stretch factor for any extra grid axes defaults to 1, a.k.a. no change.
 However if you add an ellipsis to the end, then those extra axes all take on the last factor.
-For example `@upscale (2...)` will double the size along all axes.
+For example `@upscale (2...)` will double the size along *all* axes.
 
-**TODO: Finish**
+The rewrite rules can be nothing, or a single rule, or a `begin ... end` block of rules.
+If no rules match a source pixel, that pixel keeps its value during upscaling.
+Rules are formatted as a source color, arrow, and destination block,
+  with individual destination values being a single color OR a group whose value is picked randomly each time.
+For example:
+
+````julia
+# This rule only works in a grid of at least two dimensions,
+#   and a rewrite rule which uses a factor of 2 for the first two axes.
+# For every grid dimension above 2D, the block is extruded along that dimension.
+# We borrow the 'set' syntax from rewrite rules to allow random outcomes for certain pixels.
+G => [
+  R  BG
+  G   M
+]
+````
+
+If the grid upscales along more dimensions than the block, that block is extruded along the extra dimensions.
+For example, in the above example rule, a 3D upscale would use that same 2D slice at each Z level.
 
 ## `@downscale`
+
+````julia
+# Simply replace each 2x2 block of pixels with a single pixel,
+#   chosen randomly from that block.
+@downscale (2, 2)
+
+# Replace each 3x2 block of pixels with a single pixel,
+#   usually with random choice but certain blocks have more specific outcomes.
+@downscale (3, 2) begin
+  # A row of RGB, followed by a greyscale row bookended with white and black,
+  #   becomes a Red pixel.
+  R <= [
+    R   G   B
+    w  wgb b
+  ]
+  # A block of Magenta becomes either Green or Blue.
+  GB <= [ M;M;M ;; M;M;M ]
+
+  # Any other blocks fall back to the usual behavior of picking a random pixel.
+  # If a grid has a size not evenly divisible by our factor (3x2),
+  #    there are partial blocks at its ends which all get the default (random) behavior.
+end
+````
 
 This decreases the size of the grid by splitting it into regular blocks of pixels,
   and shrinking each block to a single pixel.
@@ -738,8 +833,42 @@ By default the shrunken pixel chooses a random color from its block,
 The basic syntax is `@downscale (factors...) [rewrite rules]`.
 Factors are the box sizes (i.e. down-scale amounts) along each axis.
 
-The factor for any extra grid axes defaults to 1, a.k.a. no change.
-However if you add an ellipsis to the end, then those extra axes all take on the last factor.
-For example `@downscale (2...)` will halve the size along all axes.
+The factor for any unmentioned/extra grid axes defaults to 1, a.k.a. no change.
+However if you add an ellipsis to the end of your list, then those extra axes all take on the last factor.
+For example `@downscale (2...)` will halve the size along *all* axes.
 
-**TODO: Finish**
+The rule syntax is destination, then left-arrow, then source block.
+The source block must match the factor (e.g. downscaling by `(3,2)` requires that each rule have a 3x2 block),
+  though extra dimensions can be omitted and your block will simply be extruded along that axis.
+
+Both destination pixel and source pixels can use Set syntax,
+  listing multiple colors at once to indicate a random choice among them.
+
+## `@convolve`
+
+Convolution is the technical term for processing an image
+  by replacing each pixel with a particular blend of itself with its neighbors.
+The specific blend being used is called the Kernel.
+For example, blurs are defined this way and you get different kinds of blurs by using different Kernels.
+It's also a popular way to implement Cellular Automata such as the Game of Life.
+
+With MarkovJunior's extremely limited palette, convolution is defined in a simpler way:
+
+* The Kernel is an array of which neighboring pixels to include, optionally only including particular colors at particular neighbor points.
+* Different kernels can be used depending on the color of the central pixel. One color can even define multiple kernels, chosen randomly per pixel.
+* For each pixel, a Kernel is chosen and all included neighbors are counted by their color. 
+* A series of if-then statements is used to pick the new value based on integer math with the color counts (and with the color of the central pixel).
+
+**TODO: syntax**
+
+## `@not_animated`
+
+This is a small helper to tweak rendered animations.
+
+During normal algorithm runs, for optimization purposes, certain complex ops (`@rewrite`)
+  may change the order in which things happen without affecting the final result.
+However when rendering an algorithm to video,
+  these optimizations are disabled so that the frame-by-frame behavior looks correct.
+
+The nested operator `@not_animated [op]` re-enables those optmizations
+  for the duration of the given op.

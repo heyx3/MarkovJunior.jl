@@ -1,220 +1,111 @@
 const SequenceRepeatModeTag = Val{:repeat}
 
-struct MarkovOpSequence <: AbstractMarkovOp
+struct MarkovOpSequence{NBiases, TBiases<:NTuple{NBiases, AbstractMarkovBias}} <: AbstractMarkovOp
     ops::Vector{AbstractMarkovOp}
     threshold::Union{Nothing, SequenceRepeatModeTag, Threshold}
-    biases::Vector{AbstractMarkovBias}
+    biases::TBiases
 end
 
-
-struct MarkovOpSequence_State
-    repetitions_left::Union{SequenceRepeatModeTag, Int}
-    current_op_idx::Int
-    current_op_state::Any #TODO: Take advantage of markov_op_state_type() to make this type-stable
-end
-
-markov_op_state_type(::Type{MarkovOpSequence}, ::Val{NDims}) where {NDims} = MarkovOpSequence_State
-function markov_op_initialize(s::MarkovOpSequence, expected_state_type::Type{MarkovOpSequence_State},
-                              grid_ref::Ref{<:CellGrid{N}},
-                              rng::PRNG, context::MarkovOpContext) where {N}
-    grid = grid_ref[]
-
+function markov_algo_run(sequence::MarkovOpSequence{NSelfBiases},
+                         algo::MarkovAlgorithm, algo_state::AlgoState,
+                         inherited_biases::NTuple{NInheritedBiases, AbstractMarkovBias},
+                         inherited_bias_states::NTuple{NInheritedBiases, Any},
+                         grid::TGrid = algo_state.grid
+                        )::Tuple{Bool, typeof(inherited_bias_states)} where {
+                            TGrid<:CellGrid,
+                            NInheritedBiases, NSelfBiases
+                        }
     # Set up the repetition counter.
-    repetitions_left = if isnothing(s.threshold)
-        0
-    elseif s.threshold isa SequenceRepeatModeTag
-        s.threshold
-    elseif s.threshold isa Threshold
-        get_threshold(s.threshold, ThresholdInputs(
-            convert(Float32, prod(size(grid))),
-            convert(Float32, sum(size(grid), init=0) / N),
-            rng
-        )) - 1
+    repetitions_left = if isnothing(sequence.threshold)
+        typemax(Int)
+    elseif sequence.threshold isa SequenceRepeatModeTag
+        sequence.threshold
+    elseif sequence.threshold isa Threshold
+        get_threshold(sequence.threshold, grid, algo_state.rng)
     else
-        error("Unhandled: ", typeof(s.threshold))
+        error("Unhandled: ", typeof(sequence.threshold))
     end
     if (repetitions_left isa Int) && (repetitions_left < 0)
-        return nothing
+        return (false, inherited_bias_states)
     end
 
-    # Append our biases to the stack.
-    append!(context.all_biases, s.biases)
-    n_biases = length(context.all_biases)
-    n_self_biases = length(s.biases)
-    clear_biases() = deleteat!(context.all_biases, (n_biases - n_self_biases + 1):n_biases)
-
-    # Start up the first op.
-    if isempty(s.ops)
-        clear_biases()
-        return nothing
-    end
-    op_idx = 1
-    op_initial_state = markov_op_initialize(
-        s.ops[1],
-        markov_op_state_type(s.ops[1], typeof(grid), rng, context),
-        grid, rng, context
+    # Initialize our own biases.
+    all_biases = tuple(
+        inherited_biases...,
+        sequence.biases...
     )
-    # Check if the first op failed to start (e.g. because it had no matches).
-    # As long as we're not in repeat mode, we should keep moving forward until an op succeeds.
-    if !isa(repetitions_left, SequenceRepeatModeTag)
-        while isnothing(op_initial_state) && (op_idx < length(s.ops))
-            op_idx += 1
-            op_initial_state = markov_op_initialize(
-                s.ops[op_idx],
-                markov_op_state_type(s.ops[op_idx], typeof(grid), rng, context),
-                grid, rng, context
-            )
-        end
-    end
-    if isnothing(op_initial_state)
-        clear_biases()
-        return nothing
-    end
-
-    return MarkovOpSequence_State(repetitions_left, op_idx, op_initial_state)
-end
-
-function markov_op_cancel(s::MarkovOpSequence, state::MarkovOpSequence_State,
-                          context::MarkovOpContext)
-    markov_op_cancel(s.ops[state.current_op_idx], state.current_op_state, context)
-
-    n_biases = length(context.all_biases)
-    n_self_biases = length(s.biases)
-    deleteat!(context.all_biases, (n_biases - n_self_biases + 1):n_biases)
-end
-
-function markov_op_iterate(s::MarkovOpSequence, state::MarkovOpSequence_State,
-                           grid::Ref{<:CellGrid{N}}, rng::PRNG,
-                           context::MarkovOpContext,
-                           n_ticks_left::Ref{Optional{Int}}) where {N}
-    # Run each sub-op within a type-stable context.
-    function run_sub_op(sub_op::TOp, current_state::TState, idx::Int,
-                        ::Val{BInfiniteTicks}
-                       ) where {TOp, TState, BInfiniteTicks}
-        # Note that we may need to handle cases where the initial state is `nothing`.
-        @logic_logln("Running sub-op ", idx, BInfiniteTicks ? " infinitely" : "",
-                     ": ", typeof(sub_op))
-        next_state = current_state
-        while exists(next_state) && (BInfiniteTicks || (n_ticks_left[] > 0))
-            next_state = markov_op_iterate(sub_op, next_state, grid, rng, context, n_ticks_left)
-        end
-        if exists(next_state)
-            @logic_logln("    Couldn't finish the sub-op")
-        else
-            @logic_logln("    Finished the sub-op!")
-        end
-        return next_state
-    end
-    b_infinite_ticks = Val(isnothing(n_ticks_left[]))
-
-    @markovjunior_assert exists(state.current_op_state) "Iterating on a non-running Sequence!?"
-
-    # Nest the sequence logic in a loop to handle repetitions and insta-quitting ops.
-    while get_something(n_ticks_left[], 1) > 0
-        # Advance the current sub-op.
-        if exists(state.current_op_state)
-            @logic_logln("Running sub-op ", state.current_op_idx, "...")
-            @logic_tab_in()
-            @set! state.current_op_state = run_sub_op(
-                s.ops[state.current_op_idx], state.current_op_state,
-                state.current_op_idx, b_infinite_ticks
-            )
-            @logic_tab_out()
-        end
-
-        # If it ended, advance to the next one (until we find one that can actually run).
-        while isnothing(state.current_op_state) && (state.current_op_idx < length(s.ops))
-            @logic_logln("Advancing to the next sub-op...")
-            @logic_tab_in()
-            state = MarkovOpSequence_State(
-                state.repetitions_left,
-                state.current_op_idx + 1,
-                markov_op_initialize(
-                    s.ops[state.current_op_idx + 1],
-                    markov_op_state_type(s.ops[state.current_op_idx + 1],
-                                         typeof(grid[]),
-                                         rng, context),
-                    grid, rng, context
-                )
-            )
-            @logic_tab_out()
-            if isnothing(state.current_op_state)
-                @logic_logln("...and that sub-op failed to do anything.")
-            end
-        end
-
-        # If we advanced through all ops, repeat or quit.
-        if isnothing(state.current_op_state)
-            @logic_logln("Finished one repetition of this sequence!")
-            if state.repetitions_left == 0
-                @logic_logln("   Now this sequence is complete.")
-                markov_op_cancel(s, state, context)
-                return nothing
-            else
-                @logic_logln("Starting first op again with ",
-                            if state.repetitions_left isa Int
-                                state.repetitions_left
-                            elseif state.repetitions_left isa SequenceRepeatModeTag
-                                "indefinite"
-                            else
-                                error("Unhandled: ", typeof(state.repetitions_left))
-                            end,
-                            " repetitions remaining")
-                @logic_tab_in()
-                state = MarkovOpSequence_State(
-                    if state.repetitions_left isa Int
-                        state.repetitions_left - 1
-                    elseif state.repetitions_left isa SequenceRepeatModeTag
-                        state.repetitions_left
-                    else
-                        error("Unhandled: ", typeof(state.repetitions_left))
-                    end,
-                    1,
-                    markov_op_initialize(
-                        s.ops[1],
-                        markov_op_state_type(s.ops[1], typeof(grid[]), rng, context),
-                        grid, rng, context
-                    )
-                )
-                @logic_tab_out()
-
-                # If the first op failed to match and we're using the 'repeat' threshold, we're done.
-                if (state.repetitions_left isa SequenceRepeatModeTag) && isnothing(state.current_op_state)
-                    @logic_logln("The first op failed to start and we're in indefinite 'repeat' mode, so we're done!")
-                    markov_op_cancel(s, state, context)
-                    return nothing
-                end
-            end
-        end
-    end
-
-    @markovjunior_assert(
-        exists(state.current_op_state),
-        "Finished an iteration of @sequence without ending, but also without a running Op!"
+    all_bias_states = tuple(
+        inherited_bias_states...,
+        markov_bias_initialize.(sequence.biases, Ref(algo), Ref(algo_state))...
     )
-    return state
+    # Make sure bias states get cleaned up at the end (or else we leak allocations).
+    try
+
+    # Run the loop.
+    @logic_logln("Starting sequence with threshold `", repetitions_left, "`")
+    made_any_changes::Bool = false
+    rep_i::Int = 0
+    while (repetitions_left isa SequenceRepeatModeTag) || (repetitions_left > 0)
+        if repetitions_left isa Int
+            repetitions_left -= 1
+        end
+        rep_i += 1
+        @logic_logln("REPETITION ", rep_i)
+
+        for op_i in 1:length(sequence.ops)
+            @logic_logln("Inner op ", op_i, ":")
+            @logic_tab_in()
+
+            (op_made_changes, all_bias_states) = markov_algo_run(
+                sequence.ops[op_i], algo, algo_state,
+                all_biases, all_bias_states
+            )
+            stop_early::Bool = false
+            made_any_changes |= op_made_changes
+            if !op_made_changes && (op_i == 1) && (repetitions_left isa SequenceRepeatModeTag)
+                @logic_logln("Inner op did nothing! The outer sequence will end now")
+                stop_early = true
+                repetitions_left = 0
+            end
+
+            @logic_tab_out()
+            stop_early && break
+        end
+    end
+
+    markov_algo_tick(algo_state, STANDARD_END_OF_OP_TICK_PRIORITY + 1)
+    return (made_any_changes, ntuple(i -> all_bias_states[i], Val(NInheritedBiases)))
+
+    # Finish the bias cleanup logic:
+    finally
+        foreach(ntuple(identity, Val(NSelfBiases))) do i
+            markov_bias_cleanup(all_biases[i + NInheritedBiases],
+                                all_bias_states[i + NInheritedBiases],
+                                algo, algo_state)
+        end
+    end
 end
 
-dsl_string(s::MarkovOpSequence) = string(
+dsl_format(s::MarkovOpSequence) = string(
     "@sequence ",
     if isnothing(s.threshold)
         ""
     elseif s.threshold isa SequenceRepeatModeTag
         "repeat"
     elseif s.threshold isa Threshold
-        dsl_string(s.threshold)
+        dsl_format(s.threshold)
     else
         error("Unhandled: ", typeof(s.threshold))
     end,
      " ",
     "begin\n    ",
     iter_join(
-        Iterators.map(dsl_string, s.ops),
+        Iterators.map(dsl_format, s.ops),
         "\n    "
     )...,
     "\nend begin\n    ",
     iter_join(
-        Iterators.map(dsl_string, s.biases),
+        Iterators.map(dsl_format, s.biases),
         "\n    "
     )...,
     "\nend"
@@ -284,7 +175,7 @@ function parse_markovjunior_op(::Val{Symbol("@sequence")}, inputs::MacroParserIn
                 nothing
             end
         end,
-        biases
+        Tuple(biases)
     )
     return if exists(i_bias)
         with_parsed_markovjunior_bias_statement(generate_output, inputs, loc, expr_args[i_bias])

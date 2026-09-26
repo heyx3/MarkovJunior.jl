@@ -4,11 +4,11 @@ A Julia reimagining of [this awesome procedural generation algorithm](https://gi
   able to generate in any number of dimensions.
 It can build into several things:
 
-* A standalone executable running a GUI playground for testing scenes
-* A C-like DLL for other programs to integrate with
-* A standalone executable exposing the DLL interface through an IPC protocol (to avoid DLL hell).
+* A standalone executable, running a GUI playground for testing scenes
+* A C-like DLL, for other programs to integrate with
+* A standalone executable, exposing the algorithm through an IPC (to avoid DLL hell).
 
-> ***NOTE**: The IPC approach is strongly recommended over the DLL one!*
+> ***NOTE**: The DLL approach is currently deprecated over IPC!*
 
 [A plugin to integrate with Unreal Engine 5 is ongoing](https://github.com/heyx3/JMarkovJunior_Unreal5Demo).
 
@@ -55,25 +55,63 @@ If you have any thoughts on higher-dimensional tricks, share them in a Github Is
 Specific algorithms are written as [a new Julia macro `@markovjunior`](docs/dsl.md).
 If you execute this macro in a Julia environment you get a `MarkovAlgorithm` instance.
 
-### Directly in Julia
+### Running from within Julia
 
 If you have the `@markovjunior ...` macro as a string (e.g. from a file),
   call `markov_algo_parse(str)`.
 You can also convert it back to a string with `markov_algo_to_string(algo)`,
    but be aware that cosmetic details get lost in the translation.
 
-To start running an algorithm on a new grid, call `state = markov_algo_start(algo, (32, 32), 0xababcdef)`.
-The second argument is the grid size (as many dimensions as you want), and the third is the RNG seed
-  (you can provide multiple within a tuple).
+To start running an algorithm on a new grid, call
+  `channel = markov_algo_run(algo, initial, ticking=[default], allocator=[default] ; seeds=[random])`.
+The `initial` is either a resolution tuple, filling the array with the algorithm's fill color,
+  or an initial state to copy from.
+The `ticking` is an instance of `MarkovTickSettings`; see that struct for more info.
+The `seeds` are either a single number or an iterable of multiple numbers,
+  which all get mixed into the initial RNG.
 
-Iterate on the state with `markov_algo_step(algo, state)`.
-You may pass an iteration count as the third parameter;
-  operations are more efficient when running multiple steps at once.
-You can also call `markov_algo_finish(algo, state)` to immediately run to completion,
-  but be careful your algorithm isn't an infinite loop!
+The algorithm runs as a coroutine, and the returned `Channel` lets you control it.
+This low-level communication protocol is documented by the function,
+  but in practice you should use our high-level helpers:
 
-Check on a running algorithm's state with `markov_algo_is_finished(algo, state)`.
-Get the grid being operated on with `markov_algo_grid(state)::Array{UInt8}`.
+````julia
+channel = markov_algo_run(...) # Start a new run
+current_grid = nothing
+while true
+    # If desired, you can jump to the end of the algorithm.
+    if want_to_insta_finish()
+        markov_algo_complete(channel, current_grid) do final_grid
+            do_something_with_final_state(final_grid)
+        end
+        break
+    end
+
+    # Otherwise, you can run a single tick at a time.
+    result = markov_algo_next(channel)
+    # The first output after algorithm start or grid re-allocation, is a reference to the new grid.
+    if result isa MarkovJunior.CellGrid
+        current_grid = result
+    # The second output is an "algorithm starting now" tagged event.
+    elseif result == MarkovJunior.TAG_ALGO_STARTING
+        println("The first Op is about to start...")
+    # Normal ticks are returned with a value roughly representing the amount of work done.
+    elseif result isa Int
+        println("Completed a priority-", result, " tick")
+    # Most algorithms will halt at some point.
+    # You can also cancel the algorithm with `close(channel)`.
+    elseif result in (MarkovJunior.TAG_ALGO_COMPLETED, MarkovJunior.TAG_ALGO_CANCELED)
+        do_something_with_final_state(current_grid)
+        markov_algo_cleanup(channel)
+        break
+        # Note that the tick settings given on startup can filter out low-priority ticks.
+    # Along with the built-in events above, user-defined events are also possible.
+    elseif result isa Symbol
+        process_user_event(result, current_grid)
+    else
+        @assert(false, result)
+    end
+end
+````
 
 Run the GUI tool by calling `markovjunior_run_gui()`.
 Run the IPC service by calling `markovjunior_run_ipc(block_calling_thread::Bool)`.
@@ -142,42 +180,49 @@ They are numbered by the message's ID, for example you send `1` to initiate the 
    6. If you are, now write that grid state. This should have the same memory order as when you download a grid (see below).
    7. Write a 4-byte uint representing the number of bytes used to seed the RNG.
    8. Write the bytes of the RNG seed.
-   9. Read the success flag.
-   10. If it succeeded, read a 4-byte uint representing the ID of the new algo state.
+   9. Write the minimum tick priority that actually counts as a tick
+(recommend 1 or 2 for animation rendering, 3 or 4 for practical use).
+   10. Write a 1-byte flag (0 or 1) indicating whether this is for animation purposes
+(encourages more Ops to follow Biases even when it doesn't affect the final state)
+   11. Read the success flag.
+   12. If it succeeded, read a 4-byte uint representing the ID of the new algo state.
 4. **Destroy an algorithm run**
-   1. Write a 4-byte uint representing the algorithm's ID.
-   2. Write a 4-byte uint representing the algo state's ID.
-   3. Read the success flag.
+   1. Write a 4-byte uint representing the algo state's ID.
+   2. Read the success flag.
 5. **Step an algorithm run forward**
-   1. Write a 4-byte uint representing the algorithm's ID.
-   2. Write a 4-byte uint representing the running state's ID.
-   3. Write a 4-byte uint representing how many iterations to run.
-   4. Read the success flag.
-   5. If it succeeded, read a 1-byte bool (0 or 1) representing whether the algorithm is finished running.
-6. **Run an algorithm to completion**
-   1. Write a 4-byte uint representing the algorithm's ID.
-   2. Write a 4-byte uint representing the running state's ID.
-   3. Read the success flag.
-7. **Query whether an algorithm is finished**
-   1. Write a 4-byte uint representing the algorithm's ID.
-   2. Write a 4-byte uint representing the running state's ID.
-   3. Read the success flag.
-   4. If it succeeded, read a 1-byte bool (0 or 1) representing whether the algorithm is finished running.
-8. **Download the current state of the algorithm grid**
    1. Write a 4-byte uint representing the running state's ID.
-   2. Read the success flag. The rest of the steps only apply if successful.
+   2. Write some info about how to step it forward:
+      1. To run a certain number of ticks (or until the first tagged event), write the following.
+         1. `UInt8(0)`
+         2. `UInt32(lowest_tick_priority)` (capped below by the min priority you provided when starting)
+         3. `UInt32(n_ticks)`
+      2. To run until the first tagged event, write the following.
+         1. `UInt8(1)`
+      3. To run the algorithm to completion, write the following.
+         1. `UInt8(2)`
+   3. Read the success flag. If it failed, your parameters were bad and you should stop here.
+   4. Read the result of the tick:
+      1. `UInt8` bool for whether the algorithm finished.
+      2. If not finished, `UInt8` bool for whether we encountered a tagged event.
+Note that under this protocol, the built-in tagged events are handled internally --
+  you'll never see tags for "algorithm started" or "new grid allocated" or "algorithm completed".
+Only your own events.
+      1. If encountered a tagged event, read the tag using the same format as other/error strings (mentioned above).
+6. **Download the current state of the algorithm grid**
+   1. Write a 4-byte uint representing the running state's ID.
+   2. Read the success flag. If it failed, your state ID is invalid and you should stop here.
    3. Read a 4-byte uint representing the number of dimensions of the grid.
-  This will match what you originally passed when starting the run.
+  This *may not* match the original dimension you started with, depending on what your algorithm does!
    4. For each grid dimension, read a 4-byte uint representing the resolution along that axis.
   This *may not* match the original size you started with, depending on what your algorithm does!
    5. Read the bytes of the grid.
-  Each pixel is one byte so the total byte-count is the product of the grid's resolution along each axis.
-  The first axis (X) is the innermost.
-1. **Stop accepting new clients to the service** (must tell the server to support this when starting up)
+  Each pixel is one byte so the total byte-count is equal to the product of the grid's resolution along each axis.
+  The first axis (X) is innermost.
+7. **Stop accepting new clients to the service** (must tell the server to support this when starting up)
    1. Read the success flag.
-Note that multiple clients can receive success; it only fails if the server does not allow the message.
-   1. If running this service through the standalone executable,
-  then the process dies once all existing clients have disconnected.
+Note that it only fails if the server does not support this call; redundant calls always "succeed".
+   2. If it succeeded, and this service is running through the standalone executable,
+  then the IPC process automatically dies once all existing clients have disconnected.
 
 ## Scenes
 

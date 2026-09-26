@@ -1,17 +1,14 @@
 ##################
-#  dsl_string()
+#  dsl_format()
 
-dsl_string(c::Char) = c
-dsl_string(u::UInt8) = (u == CELL_CODE_INVALID) ? CELL_CHAR_INVALID : CELL_TYPES[u+1].char
-dsl_string(s::CellTypeSet) = string(dsl_string.(s)...)
+dsl_format(c::Char) = c
+dsl_format(u::UInt8) = (u == CELL_CODE_INVALID) ? CELL_CHAR_INVALID : CELL_TYPES[u+1].char
+dsl_format(s::CellTypeSet) = string(dsl_format.(s)...)
 
-dsl_string(i::Int) = i
-dsl_string(th::ThresholdByArea) = "(area*$(th.scale))"
-dsl_string(th::ThresholdByLength) = "(length*$(th.scale))"
-dsl_string(th::ThresholdRange) = "(($(dsl_string(th.a))):($(dsl_string(th.b))))"
+dsl_format(i::Int) = i
 
-dsl_string(ma::MarkovAlgorithm) = string(
-    "@markovjunior '", dsl_string(ma.initial_fill), "' ",
+dsl_format(ma::MarkovAlgorithm) = string(
+    "@markovjunior '", dsl_format(ma.initial_fill), "' ",
     exists(ma.fixed_dimension) ? "$(ma.fixed_dimension) " : "",
     "begin
     ",
@@ -22,7 +19,7 @@ dsl_string(ma::MarkovAlgorithm) = string(
     )...,
     "
     ",
-    iter_join(dsl_string.(ma.sequence), "\n    ")...,
+    iter_join(dsl_format.(ma.sequence), "\n    ")...,
     "
     end"
 )
@@ -52,7 +49,9 @@ function parse_markovjunior_op(name_symbol_val,
                                expr_args,
                                original_expr
                               )::AbstractMarkovOp
-    error("Unimplemented: ", typeof.((name_symbol_val, macro_parser_inputs, code_location, expr_args, original_expr)))
+    raise_parse_error(code_location, macro_parser_inputs,
+        "Op is unknown or failed to write its parser correctly!"
+    )
 end
 
 "
@@ -64,7 +63,9 @@ function parse_markovjunior_bias(name_symbol_val,
                                  code_location,
                                  expr_args
                                 )::AbstractMarkovBias
-    error("Unimplemented: ", typeof.((name_symbol_val, macro_parser_inputs, code_location, expr_args)))
+    raise_parse_error(code_location, macro_parser_inputs,
+        "Bias is unknown or failed to write its parser correctly!"
+    )
 end
 
 "
@@ -72,11 +73,11 @@ Called once for every group of biases, for every type of bias in that group.
 The intent is to allow new biases to add constraints on how they are used
   (e.g. throw error if more than one of themselves).
 
-This new group is implicitly stored as an in-order accumulation of every sub-group within `inputs.bias_stack`,
-  each being an inherited set of biases (e.g. nested sequences that each have a bias section).
+This new group is implicitly stored as `flatten(reverse(inputs.bias_stack))`,
+  with each layer of `bias_stack` being an inherited set of biases (from nested sequences that each have a bias section).
 Note that you must not modify the bias groups; only validate their contents!
 "
-check_markovjunior_biases(type::Type, inputs::MacroParserInputs) = nothing
+markov_bias_validate(type::Type, inputs::MacroParserInputs) = nothing
 
 
 #####################
@@ -225,13 +226,13 @@ function parse_markovjunior_sequence(try_handle_line, inputs::MacroParserInputs,
         if try_handle_line(location, line)
             # Do nothing; the line was handled.
         elseif (line isa Expr) && (line.head == :macrocall)
-            push!(inputs.op_stack_trace, "Item $(i[]) `$(line.args[1])`")
-            push!(output, parse_markovjunior_op(
-                Val(line.args[1]::Symbol), inputs,
-                line.args[2]::LineNumberNode,
-                line.args[3:end], line
-            ))
-            pop!(inputs.op_stack_trace)
+            with_parser_stacktrace(inputs, "Item $(i[]) `$(line.args[1])`") do
+                push!(output, parse_markovjunior_op(
+                    Val(line.args[1]::Symbol), inputs,
+                    line.args[2]::LineNumberNode,
+                    line.args[3:end], line
+                ))
+            end
         else
             raise_parse_error(location, inputs,
                            "Unexpected sequence expression: '", line, "'")
@@ -245,7 +246,7 @@ end
 
 "
 Processes a bias statement/block-of-statements,
-  pushing them onto the end of `inputs.bias_stack` and validating the result
+  pushing them onto the top of `inputs.bias_stack` and validating the result
   before returning it.
 
 Make sure to pop this off the stack once you're done parsing your op!
@@ -256,16 +257,13 @@ function push_parsed_markovjunior_bias_statement(inputs::MacroParserInputs, loca
     # Define how to process each statement.
     output = Vector{AbstractMarkovBias}()
     function process_line(location, line)
-        push!(inputs.op_stack_trace, "Bias \"$line\"")
-        try
+        with_parser_stacktrace(inputs, "Bias \"$line\"") do
             if @capture line f_Symbol(args__)
                 push!(output, parse_markovjunior_bias(Val(f), inputs, location, args))
             else
                 raise_parse_error(location, inputs,
                                "Invalid bias syntax! Expected a function call, got:", line)
             end
-        finally
-            pop!(inputs.op_stack_trace)
         end
     end
 
@@ -283,7 +281,7 @@ function push_parsed_markovjunior_bias_statement(inputs::MacroParserInputs, loca
     if !isempty(output)
         push!(inputs.bias_stack, output)
         for T in unique(typeof.(Iterators.flatten(inputs.bias_stack)))
-            check_markovjunior_biases(T, inputs)
+            markov_bias_validate(T, inputs)
         end
     end
 
@@ -305,68 +303,6 @@ function with_parsed_markovjunior_bias_statement(to_do, inputs::MacroParserInput
         if !isempty(biases)
             pop!(inputs.bias_stack)
         end
-    end
-end
-
-"
-Checks whether an expression looks to be a Threshold value.
-
-This doesn't guarantee the threshold is well-formed!
-It's meant to disambiguate statements containing optional thresholds and other optional things.
-You need to make sure those other things can't look like thresholds.
-"
-check_markovjunior_threshold_appearance(expr)::Bool =
-    #NOTE: The '|' operator is broken in @capture sadly.
-    (expr isa Integer) || @capture(expr, a_:b_) ||
-    @capture(expr, length/x_) || @capture(expr, length*x_) || @capture(expr, x_*length) ||
-    @capture(expr, area/x_) || @capture(expr, area*x_) || @capture(expr, x_*area)
-parse_markovjunior_threshold(inputs::MacroParserInputs, location, threshold_expr)::Threshold = parse_markovjunior_threshold(
-    expr -> nothing,
-    inputs, location, threshold_expr
-)
-function parse_markovjunior_threshold(try_handle,
-                                      inputs::MacroParserInputs, location, threshold_expr)
-    push!(inputs.op_stack_trace, "Threshold statement")
-    try # Ensure stack trace is popped at end
-        user_attempt = try_handle(threshold_expr)
-        if exists(user_attempt)
-            user_attempt
-        elseif threshold_expr isa Integer
-            return convert(Int, threshold_expr)
-        elseif @capture threshold_expr (area/x_Real)
-            return ThresholdByArea(convert(Float32, 1/x))
-        elseif @capture(threshold_expr, (area*x_Real)) || @capture(threshold_expr, (x_Real*area))
-            return ThresholdByArea(convert(Float32, x))
-        elseif @capture threshold_expr (length/x_Real)
-            return ThresholdByLength(convert(Float32, 1/x))
-        elseif @capture(threshold_expr, (length*x_Real)) || @capture(threshold_expr, (x_Real*length))
-            return ThresholdByLength(convert(Float32, x))
-        elseif @capture threshold_expr (a_:b_)
-            aa = begin
-                push!(inputs.op_stack_trace, "Range start `$a`")
-                result = parse_markovjunior_threshold(inputs, location, a)
-                if !isa(result, ThresholdScalar)
-                    raise_parse_error(location, inputs, "Value not a scalar")
-                end
-                pop!(inputs.op_stack_trace)
-                result
-            end
-            bb = begin
-                push!(inputs.op_stack_trace, "Range end `$b`")
-                result = parse_markovjunior_threshold(inputs, location, b)
-                if !isa(result, ThresholdScalar)
-                    raise_parse_error(location, inputs, "Value not a scalar")
-                end
-                pop!(inputs.op_stack_trace)
-                result
-            end
-            return ThresholdRange(aa, bb)
-        else
-            raise_parse_error(location, inputs, "Unexpected format for threshold; expected")
-        end
-    # Handle stack trace no matter what.
-    finally
-        pop!(inputs.op_stack_trace)
     end
 end
 

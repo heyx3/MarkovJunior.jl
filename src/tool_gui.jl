@@ -186,7 +186,9 @@ mutable struct GuiRunner
     elapsed_seconds::Float32
 
     algorithm::MarkovAlgorithm
-    algorithm_state::Optional{MarkovAlgoState}
+    algorithm_channel::Optional{AlgoCommsChannel}
+    algorithm_grid::CellGrid
+    algorithm_is_finished::Bool
 
     current_seed::UInt64
     current_seed_display::String
@@ -195,6 +197,7 @@ mutable struct GuiRunner
     next_algorithm::GuiText
     next_algorithm_font::Ptr{CImGui.LibCImGui.ImFont}
     algorithm_error_msg::String
+    #TODO: Store a marker of where the error came from, so that the relevant logic knows it can be cleared after fixing problems
 
     available_scenes::Vector{String}
     next_scene_name::GuiText
@@ -242,7 +245,7 @@ function GuiRunner(memory::GuiMemory,
         memory,
         0.0f0,
 
-        parsed_algo, nothing,
+        parsed_algo, nothing, zeros(UInt8, 1, 1), true,
 
         # Current seed will be parsed+stringified in a moment; we just need the textbox to be set up.
         zero(UInt64), "[UNINITIALIZED]",
@@ -312,7 +315,7 @@ function GuiRunner(memory::GuiMemory,
     if runner.rendering[1] isa Val{2}
         update_gui_runner_texture_2D(runner)
     elseif runner.rendering[1] isa Val{3}
-        update_gui_runner_render_3D(runner, true)
+        update_gui_runner_render_3D(runner, true, true)
     else
         error("Unhandled: ", typeof(runner.rendering))
     end
@@ -322,7 +325,7 @@ function GuiRunner(memory::GuiMemory,
     return runner
 end
 function Base.close(runner::GuiRunner)
-    exists(runner.algorithm_state) && close(runner.algorithm_state, runner.algorithm)
+    exists(runner.algorithm_channel) && close(runner.algorithm_channel)
     foreach(close, runner.textures_to_destroy)
     close(runner.render_3D_assets)
     close(runner.visualized_shadowmap_target)
@@ -379,10 +382,10 @@ function update_gui_runner_texture_2D(runner::GuiRunner)
 
     # Generate the pixel buffer for upload to the GPU.
     #  * Figure out the final 2D slice resolution:
-    resolution_2D = if ndims(runner.algorithm_state.grid[]) == 1
-        Vec(length(runner.algorithm_state.grid[]), 1)
+    resolution_2D = if ndims(runner.algorithm_grid) == 1
+        Vec(length(runner.algorithm_grid), 1)
     else
-        Vec(size(runner.algorithm_state.grid[])[1:2]...)
+        Vec(size(runner.algorithm_grid)[1:2]...)
     end
     #  * Reallocate if necessary:
     if vsize(array) != resolution_2D
@@ -394,18 +397,18 @@ function update_gui_runner_texture_2D(runner::GuiRunner)
     else
         CELL_TYPES[u+1].color
     end
-    N = ndims(runner.algorithm_state.grid[])
+    N = ndims(runner.algorithm_grid)
     if N < 3
-        array .= convert_pixel.(runner.algorithm_state.grid[])
+        array .= convert_pixel.(runner.algorithm_grid)
     else
-        array .= convert_pixel.(runner.algorithm_state.grid[])[
+        array .= convert_pixel.(@view runner.algorithm_grid[
             :, :,
             (1 for i in 3:N)...
-        ]
+        ])
     end
  
     # Update the GPU texture.
-    if (tex.type != TexTypes.twoD) || (tex.size.xy != vsize(runner.algorithm_state.grid[]).xy)
+    if (tex.type != TexTypes.twoD) || (tex.size.xy != vsize(array))
         push!(runner.textures_to_destroy, tex)
         tex = Texture(
             SimpleFormat(
@@ -426,11 +429,15 @@ function update_gui_runner_texture_2D(runner::GuiRunner)
     runner.rendering = (Val(2), array, tex)
     return nothing
 end
-function update_gui_runner_render_3D(runner::GuiRunner, rerender_view::Bool)
+function update_gui_runner_render_3D(runner::GuiRunner, rerender_view::Bool, is_first_time::Bool)
     (_, scene::Render3D.Scene, viewport::Render3D.FullViewport) = runner.rendering
 
+    if is_first_time
+        interpret_all_pragma_gui_materials(runner, runner.algorithm)
+    end
+
     # Get a 3D view of the grid.
-    grid_slice = runner.algorithm_state.grid[]
+    grid_slice = runner.algorithm_grid
     if ndims(grid_slice) < 3
         grid_slice = reshape(
             grid_slice,
@@ -447,6 +454,7 @@ function update_gui_runner_render_3D(runner::GuiRunner, rerender_view::Bool)
     grid_is_new = (size(grid_slice) != tuple(scene.grid_tex_3D.size.xyz...))
     Render3D.update_scene_grid!(scene, grid_slice)
     grid_is_new && Render3D.on_new_grid!(viewport, Vec(size(grid_slice)...))
+
     if rerender_view
         Render3D.render(runner.render_3D_assets, scene, viewport)
     end
@@ -458,8 +466,8 @@ end
 function interpret_all_pragma_gui_materials(runner::GuiRunner, algo::MarkovAlgorithm)
     if runner.rendering[1] isa Val{3}
         materials = runner.rendering[2].cell_materials
-        if haskey(runner.algorithm.pragmas_map, CELL_MAT_PRAGMA)
-            for statement_args in runner.algorithm.pragmas_map[CELL_MAT_PRAGMA]
+        if haskey(algo.pragmas_map, CELL_MAT_PRAGMA)
+            for statement_args in algo.pragmas_map[CELL_MAT_PRAGMA]
                 interpret_pragma_gui_material!(materials, statement_args)
             end
         end
@@ -469,11 +477,7 @@ end
 function reset_gui_runner_algo(runner::GuiRunner,
                                parse_new_seed::Bool, parse_new_algorithm::Bool, update_resolution::Bool,
                                allow_run_to_end::Bool)
-    old_grid_size::Tuple = if exists(runner.algorithm_state)
-        size(runner.algorithm_state.grid[])
-    else
-        (1, 1)
-    end
+    old_grid_size::Tuple = size(runner.algorithm_grid)
     new_resolution::Vector{Int32} = [ Int32.(old_grid_size)... ]
     new_dims = length(old_grid_size)
 
@@ -534,8 +538,21 @@ function reset_gui_runner_algo(runner::GuiRunner,
     end
 
     # Finally, we can start the algorithm!
-    runner.algorithm_state = markov_algo_start(runner.algorithm, Tuple(new_resolution), runner.current_seed)
-
+    exists(runner.algorithm_channel) && close(runner.algorithm_channel)
+    runner.algorithm_is_finished = false
+    runner.algorithm_channel = markov_algo_run(
+        runner.algorithm,
+        Tuple(new_resolution),
+        MarkovTickSettings(STANDARD_MIN_COMPILE_TIME_TICK_PRIORITY),
+        seeds=runner.current_seed
+    )
+    while true # Get the initial allocated grid
+        g = markov_algo_next(runner.algorithm_channel)
+        if g isa CellGrid
+            runner.algorithm_grid = g
+            break
+        end
+    end
     if allow_run_to_end && runner.memory.prefers_running_to_end
         finish_gui_runner_algo(runner, Ref(false))
     end
@@ -543,21 +560,21 @@ function reset_gui_runner_algo(runner::GuiRunner,
     # Configure rendering.
     if runner.rendering[1] isa Val{2}
         (_, array, tex) = runner.rendering
-        if size(runner.algorithm_state.grid[]) != size(array)
-            array = let N = ndims(runner.algorithm_state.grid[])
+        if size(runner.algorithm_grid) != size(array)
+            array = let N = ndims(runner.algorithm_grid)
                 if N == 1
-                    fill(zero(v3f), length(runner.algorithm_state.grid[]), 1)
+                    fill(zero(v3f), length(runner.algorithm_grid), 1)
                 elseif N == 2
-                    fill(zero(v3f), size(runner.algorithm_state.grid[]))
+                    fill(zero(v3f), size(runner.algorithm_grid))
                 else
-                    fill(zero(v3f), size(runner.algorithm_state.grid[])[1:2])
+                    fill(zero(v3f), size(runner.algorithm_grid)[1:2])
                 end
             end
         end
         runner.rendering = (Val(2), array, tex)
         runner.memory.rendering_dim = 2
     elseif runner.rendering[1] isa Val{3}
-        update_gui_runner_render_3D(runner, true)
+        update_gui_runner_render_3D(runner, true, true)
     else
         error("Unhandled: ", typeof(runner.rendering))
     end
@@ -565,8 +582,45 @@ function reset_gui_runner_algo(runner::GuiRunner,
     return nothing
 end
 function step_gui_runner_algo(runner::GuiRunner, n_iterations::Int)
-    if exists(runner.algorithm_state) && !markov_algo_is_finished(runner.algorithm, runner.algorithm_state)
-        markov_algo_step(runner.algorithm, runner.algorithm_state, n_iterations)
+    if exists(runner.algorithm_channel) && !runner.algorithm_is_finished
+        try # Catch errors and put them in the window pane
+            for iter_i in 1:n_iterations
+                # Pull messages until we get an actual tick.
+                while !runner.algorithm_is_finished
+                    put!(runner.algorithm_channel, zero(Int))
+                    next_msg = take!(runner.algorithm_channel)
+
+                    if next_msg isa Int
+                        break
+                    elseif next_msg in (TAG_ALGO_COMPLETED, TAG_ALGO_CANCELED)
+                        runner.algorithm_grid = copy(runner.algorithm_grid)
+                        if isopen(runner.algorithm_channel)
+                            put!(runner.algorithm_channel, zero(Int))
+                        end
+                        runner.algorithm_is_finished = true
+                        break
+                    elseif next_msg == TAG_NEW_GRID
+                        runner.algorithm_grid = take!(runner.algorithm_channel)
+                    elseif next_msg isa Symbol
+                        #TODO: Optionally halt and notify the GUI about this user event
+                    else
+                        error("Unhandled: ", typeof(next_msg), "(", next_msg, ")")
+                    end
+                end
+            end
+        catch e
+            runner.memory.is_playing = false
+            runner.memory.prefers_running_to_end = false
+
+            close(runner.algorithm_channel)
+            runner.algorithm_channel = nothing
+            runner.algorithm_is_finished = true
+
+            runner.algorithm_error_msg = string(
+                "ERROR on tick! ",
+                sprint(showerror, e, catch_backtrace())
+            )
+        end
     end
 
     return nothing
@@ -592,8 +646,8 @@ function finish_gui_runner_algo(runner::GuiRunner, grid_has_changed::Ref{Bool})
     return nothing
 end
 
-gui_runner_is_finished(runner::GuiRunner)::Bool = isnothing(runner.algorithm_state) ||
-                                                  markov_algo_is_finished(runner.algorithm, runner.algorithm_state)
+gui_runner_is_finished(runner::GuiRunner)::Bool = isnothing(runner.algorithm_channel) ||
+                                                  runner.algorithm_is_finished
 
 function gui_main(runner::GuiRunner, delta_seconds::Float32, cam_input::Cam3D_Input{Float32})
     print_wnd_sizes::Bool = false && @markovjunior_debug(rand(Float32) < 0.01, false)
@@ -681,7 +735,7 @@ function gui_main(runner::GuiRunner, delta_seconds::Float32, cam_input::Cam3D_In
                 )
                 (_, scene::Render3D.Scene, viewport::Render3D.FullViewport) = runner.rendering
 
-                update_gui_runner_render_3D(runner, true)
+                update_gui_runner_render_3D(runner, true, true)
             end
         elseif runner.rendering[1] isa Val{3}
             @markovjunior_debug(gui_with_style(CImGui.LibCImGui.ImGuiCol_Button, GUI_DEBUG_COLOR) do
@@ -881,9 +935,11 @@ function gui_main(runner::GuiRunner, delta_seconds::Float32, cam_input::Cam3D_In
             if gui_with_style(() -> CImGui.Button("Profile", BUTTON_SIZE_RUN_SPECIAL),
                               CImGui.LibCImGui.ImGuiCol_Button, BUTTON_COLOR_RUN_SPECIAL)
             #begin
+                Profile.clear()
                 Profile.start_timer()
-                step_gui_runner_algo(runner, runner.memory.ticks_for_profile)
+                step_gui_runner_algo(runner, convert(Int, runner.memory.ticks_for_profile))
                 Profile.stop_timer()
+                grid_has_changed[] = true
 
                 prof_text_path = path_local("ProfileResult.txt")
                 open(prof_text_path, "w") do io::IO
@@ -1035,11 +1091,12 @@ function gui_main(runner::GuiRunner, delta_seconds::Float32, cam_input::Cam3D_In
             else
                 CImGui.Text("UNHANDLED dim $(runner.memory.next_dimensionality)")
             end
+            runner.memory.next_resolution .= max.(runner.memory.next_resolution, Ref(one(Int32)))
         end
         resolution_is_different::Bool =
-            (runner.memory.next_dimensionality != ndims(runner.algorithm_state.grid[])) ||
+            (runner.memory.next_dimensionality != ndims(runner.algorithm_grid)) ||
             any(t -> t[1]!=t[2],
-                zip(runner.memory.next_resolution, size(runner.algorithm_state.grid[])))
+                zip(runner.memory.next_resolution, size(runner.algorithm_grid)))
         CImGui.SameLine(0, 10)
         gui_with_style(CImGui.LibCImGui.ImGuiCol_Button, v3f(0.2, 0.1, 0.1), unchanged=resolution_is_different) do
          gui_with_style(CImGui.LibCImGui.ImGuiCol_ButtonHovered, v3f(0.2, 0.1, 0.1), unchanged=resolution_is_different) do
@@ -1140,7 +1197,7 @@ function gui_main(runner::GuiRunner, delta_seconds::Float32, cam_input::Cam3D_In
             if runner.rendering[1] isa Val{2}
                 update_gui_runner_texture_2D(runner)
             elseif runner.rendering[1] isa Val{3}
-                update_gui_runner_render_3D(runner, true)
+                update_gui_runner_render_3D(runner, true, false)
             else
                 error("Unhandled: ", typeof(runner.rendering))
             end
@@ -1160,6 +1217,14 @@ function gui_main(runner::GuiRunner, delta_seconds::Float32, cam_input::Cam3D_In
         if runner.rendering[1] isa Val{3}
             CImGui.SameLine(85)
             @c CImGui.Checkbox("Edit Materials", &runner.memory.legend_edits_materials)
+            if runner.memory.legend_edits_materials
+                CImGui.Dummy(80, 0)
+                CImGui.SameLine()
+                if CImGui.Button("Reset Materials")
+                    copyto!(runner.rendering[2].cell_materials, Render3D.DEFAULT_UBO_MATERIALS)
+                    interpret_all_pragma_gui_materials(runner, runner.algorithm)
+                end
+            end
         end
         gui_within_group() do
             # If rendering 3D, this is also where we edit each cell type's Material.
@@ -1341,7 +1406,7 @@ function gui_main(runner::GuiRunner, delta_seconds::Float32, cam_input::Cam3D_In
             if runner.rendering[1] isa Val{2}
                 update_gui_runner_texture_2D(runner)
             elseif runner.rendering[1] isa Val{3}
-                update_gui_runner_render_3D(runner, true)
+                update_gui_runner_render_3D(runner, true, false)
             else
                 error("Unhandled: ", typeof(runner.rendering))
             end

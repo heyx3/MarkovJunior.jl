@@ -1,5 +1,4 @@
 @markovjunior 3 'T' begin
-	@pragma fast_fills
 	@pragma GuiMaterial b dielectric 0.85  0.01
 	@pragma GuiMaterial g dielectric 0.15  0.5
 	@pragma GuiMaterial w dielectric 0.85  1

@@ -58,12 +58,21 @@ Base.length(s::CellTypeSet) = count_ones(s.bitfield)
 Base.isempty(s::CellTypeSet) = iszero(s.bitfield)
 
 function cell_set_index_of(s::CellTypeSet, value::UInt8)::Optional{Int}
-    for (i, v) in enumerate(s)
-        if v == value
-            return i
-        end
+    # If the index exists, finding it is equivalent to counting the 1 bits below it.
+    mask = cell_type_to_bitmask(value)
+    return if iszero(s.bitfield & mask)
+        nothing
+    else
+        return cell_set_index_of_guaranteed(s, value)
     end
-    return nothing
+end
+@inline function cell_set_index_of_guaranteed(s::CellTypeSet, known_value::UInt8)::Int
+    mask = cell_type_to_bitmask(known_value)
+    @markovjunior_assert(!iszero(s.bitfield & mask),
+                         "Guarantee was violated! ", known_value, " not in ", s)
+
+    predecessor_mask = mask - one(UInt16)
+    return 1 + count_ones(s.bitfield & predecessor_mask)
 end
 
 Base.empty(::CellTypeSet) = CellTypeSet()
@@ -115,7 +124,7 @@ end
 Base.union(a::CellTypeSet, b::CellTypeSet, rest...) = union(CellTypeSet(a.bitfield | b.bitfield), rest...)
 
 function Base.iterate(s::CellTypeSet)
-    for i in UInt8(0):UInt8(N_CELL_TYPES)
+    for i in UInt8(0):UInt8(N_CELL_TYPES-1)
         if i in s
             return (i, i)
         end
@@ -123,7 +132,7 @@ function Base.iterate(s::CellTypeSet)
     return nothing
 end
 function Base.iterate(s::CellTypeSet, prev_value::UInt8)
-    for i in (prev_value+UInt8(1)):UInt8(N_CELL_TYPES)
+    for i in (prev_value+UInt8(1)):UInt8(N_CELL_TYPES-1)
         if i in s
             return (i, i)
         end
@@ -202,7 +211,7 @@ struct GridDir
 end
 
 "Gets the index of the given grid direction"
-grid_dir_index(d::GridDir)::Int32 = (d.axis * Int32(2)) + ((d.sign + 1) ÷ 2)
+grid_dir_index(d::GridDir)::Int32 = ((d.axis - 1) * Int32(2)) + ((d.sign + Int32(1)) ÷ Int32(2)) + Int32(1)
 "Gets the grid direction at the given index"
 grid_dir_index(_i) = let i = convert(Int32, _i)
     GridDir((i + 1) ÷ 2, (2 * ((i - 1) % 2)) - 1)
@@ -283,7 +292,7 @@ function cell_line_aabb(area::Union{CellLine{N}, CellRegion{N}})::Box{N, Int32} 
     elseif area isa CellLine
         start_pos = area.start_cell
         end_pos = start_pos
-        @set! end_pos[area.movement.axis] += area.movement.dir * (area.length - 1)
+        @set! end_pos[area.movement.axis] += area.movement.sign * (area.length - 1)
         (start_pos, end_pos) = Bplus.Math.minmax(start_pos, end_pos)
         return Box{N, Int32}(
             min=start_pos,

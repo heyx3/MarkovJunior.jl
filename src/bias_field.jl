@@ -59,6 +59,8 @@ struct MarkovBiasField_State{NGrid, BHasPathCells, BHasAnchors,
     biases_buffer::Vector{Float32}
 end
 
+println("#TODO: Plan a switch for field() bias from djikstra maps to BFS, which should be far faster")
+
 """
 Returns the largest distance value in the field
   (not including `typemax(UInt32)` which means 'unreachable').
@@ -80,7 +82,7 @@ function rebuild_distance_field(field::MarkovBiasField,
     end
     fn_check_anchor = if BHasAnchors
         anchor_idcs = Iterators.filter(v -> (grid[v] in field.anchors), grid_idcs_iter)
-        function path_connections(v::V, output_list::AbstractVector{v2i})
+        function path_connections(v::V, output_list::AbstractVector{V})
             function try_side(_axis::Integer, _dir_bool::Integer)
                 axis = convert(Int32, _axis)
                 dir_bool = convert(Int32, _dir_bool)
@@ -95,7 +97,7 @@ function rebuild_distance_field(field::MarkovBiasField,
 
                 # Check that the end is a path cell.
                 # Ignore the start! We're sometimes coming from a source/anchor cell, not a path one.
-                if within_edge && fn_check_path(grid[v2])
+                if within_edge && fn_check_path(v2)
                     push!(output_list, v2)
                 end
                 return nothing
@@ -185,24 +187,24 @@ function rebuild_distance_field(field::MarkovBiasField,
     return max_value
 end
 
-function markov_bias_state_type(f::MarkovBiasField, ::Type{<:CellGrid{NGrid}},
-                                ::PRNG, ::MarkovBiasContext
-                               )::Type{<:MarkovBiasField_State} where {NGrid}
-    return MarkovBiasField_State{NGrid, !isempty(f.paths), !isempty(f.anchors),
-                                 isempty(f.anchors) ? Nothing : TFieldBiasAnchorBuffers{NGrid}}
-end
-function markov_bias_initialize(f::MarkovBiasField, ::Type{TState},
-                                grid::CellGrid{NGrid}, ::PRNG,
-                                context::MarkovBiasContext
-                               ) where {NGrid, BHasPathCells, BHasAnchors,
-                                        TState<:MarkovBiasField_State{NGrid, BHasPathCells, BHasAnchors}}
+function markov_bias_initialize(f::MarkovBiasField, algo::MarkovAlgorithm,
+                                algo_state::AlgoState)
+    NGrid = ndims(algo_state.grid)
+
+    BHasAnchors = !isempty(f.anchors)
+    BHasPathCells = !isempty(f.paths)
+    TState = MarkovBiasField_State{
+        NGrid, BHasPathCells, BHasAnchors,
+        BHasAnchors ? TFieldBiasAnchorBuffers{NGrid} : Nothing
+    }
+
     # We have a lot to allocate, so dispatch on the allocator type.
     function run_with_alloc(alloc::TAlloc) where {TAlloc}
         V = Vec{NGrid, Int32}
         state = TState(
-            markov_allocator_acquire_array(alloc, size(grid), UInt32),
+            markov_allocator_acquire_array(alloc, size(algo_state.grid), UInt32),
             BHasAnchors ? tuple(
-                markov_allocator_acquire_array(alloc, size(grid), Bool),
+                markov_allocator_acquire_array(alloc, size(algo_state.grid), Bool),
                 FloodFillAllocations(
                     markov_allocator_acquire_set(alloc, V),
                     markov_allocator_acquire_array(alloc, tuple(256), V)
@@ -215,47 +217,56 @@ function markov_bias_initialize(f::MarkovBiasField, ::Type{TState},
         state = TState(
             state.distance_field,
             state.anchor_buffers,
-            rebuild_distance_field(f, state, grid),
+            rebuild_distance_field(f, state, algo_state.grid),
             state.biases_buffer
         )
         return state
     end
-    return run_with_alloc(context.allocator)
+    return run_with_alloc(algo_state.allocator)
 end
-function markov_bias_cleanup(f::MarkovBiasField, s::MarkovBiasField_State, ctx::MarkovBiasContext)
+function markov_bias_cleanup(f::MarkovBiasField, s::MarkovBiasField_State,
+                             algo::MarkovAlgorithm, algo_state::AlgoState)
     # We have a lot to release, so dispatch on the allocator type.
     function run_with_alloc(alloc::TAlloc) where {TAlloc}
         markov_allocator_release_array(alloc, s.distance_field)
         if exists(s.anchor_buffers)
             markov_allocator_release_array(alloc, s.anchor_buffers[1])
             markov_allocator_release_array(alloc, s.anchor_buffers[2].interesting_nodes)
+            markov_allocator_release_array(alloc, s.biases_buffer)
             markov_allocator_release_set(alloc, s.anchor_buffers[2].visited_nodes)
         end
         return nothing
     end
-    return run_with_alloc(ctx.allocator)
+    return run_with_alloc(algo_state.allocator)
 end
 
-function markov_bias_update(field::MarkovBiasField, state::MarkovBiasField_State{N, BPath, BAnchors},
-                            grid::CellGrid{N}, subset::BoxI{N}, old_subset_values::CellGrid{N}
-                           )::Nothing where {N, BPath, BAnchors}
+function markov_bias_update(field::MarkovBiasField, state::MarkovBiasField_State{N},
+                            algo::MarkovAlgorithm, algo_state::AlgoState,
+                            subset::BoxI{N}, old_subset_values::CellGrid{N}
+                           ) where {N}
     if field.live
         # First check whether the changed area had any relevant cell types.
         involved_cell_types = union(CellTypeSet(old_subset_values),
-                                    (grid[v] for v in min_inclusive(subset):max_inclusive(subset)))
+                                    (algo_state.grid[v] for v in min_inclusive(subset):max_inclusive(subset)))
         relevant_cell_types = union(field.sources, field.paths, field.anchors)
         if !isempty(intersect(involved_cell_types, relevant_cell_types))
-            @set! state.largest_dist = rebuild_distance_field(field, state, grid)
+            # Setfield dislikes our state type for some reason.
+            state = typeof(state)(
+                state.distance_field,
+                state.anchor_buffers,
+                rebuild_distance_field(field, state, algo_state.grid),
+                state.biases_buffer
+            )
         end
     end
     return state
 end
-function markov_bias_calculate(field::MarkovBiasField, state::MarkovBiasField_State{N, BPath, BAnchors},
-                               grid::CellGrid{N}, at::Union{CellLine{N}, CellRegion{N}},
-                               rng::PRNG,
+function markov_bias_calculate(field::MarkovBiasField, state::MarkovBiasField_State{N, BPath},
+                               algo::MarkovAlgorithm, algo_state::AlgoState,
+                               at::Union{CellLine{N}, CellRegion{N}},
                                # Convenient type-deduction of the integer vector:
                                ::V = zero(Vec{N, Int32})
-                              )::Optional{Float32} where {N, BPath, BAnchors, V<:Vec{N, Int32}}
+                              )::Optional{Float32} where {N, BPath, V<:Vec{N, Int32}}
     # First check if this move is legal.
     (on_path, off_path) = if BPath
         let on_path = Ref(false),
@@ -288,17 +299,17 @@ function markov_bias_calculate(field::MarkovBiasField, state::MarkovBiasField_St
     # If randomness is maxed-out, return a uniform-random bias.
     # This skips a lot of work and prevents float issues below.
     if field.randomness >= one(Float32)
-        return rand(rng, Float32) * state.largest_dist * field.scale
+        return rand(algo_state.rng, Float32) * state.largest_dist * field.scale
     end
 
     # Compute the overall bias.
     function pixel_bias(pos::V)::Float32
-        #NOTE: for numeric reasons the bias will approach but never be equal to 0.
-        #      Real distance field values will span 1-(max_len+1),
-        #        while cells off of the path tree are given fractional values.
+        #NOTE: for numeric reasons the bias will be calculated to approach but never equal 0.
+        #      Real distance field values will span 1 to (max_len+1),
+        #        while cells off of the path tree can be given fractional values.
         d = state.distance_field[pos]
         return convert(Float32,
-            if d == typemax(UInt32)
+            if d == typemax(UInt32) # Off the path?
                 # We already know the move is legal; just decide whether to flip its bias.
                 bias_flips::Bool = if field.outside_cell_handling in (BiasFieldOutsideCellMode.flippable, BiasFieldOutsideCellMode.soft)
                     true
@@ -338,13 +349,20 @@ function markov_bias_calculate(field::MarkovBiasField, state::MarkovBiasField_St
         for_each_cell(at) do local_idx, global_idx
             push!(state.biases_buffer, pixel_bias(global_idx))
         end
-        if field.combo == BiasFieldComboMode.average
+        # Some edge-cases cause us to switch the behavior we use.
+        combo_to_use = if (field.combo == BiasFieldComboMode.deviation && length(state.biases_buffer) < 2)
+            # std() on a one-element array is NaN; just use diff mode instead.
+            BiasFieldComboMode.diff
+        else
+            field.combo
+        end
+        if combo_to_use == BiasFieldComboMode.average
             mean(state.biases_buffer)
-        elseif field.combo == BiasFieldComboMode.min
+        elseif combo_to_use == BiasFieldComboMode.min
             minimum(state.biases_buffer)
-        elseif field.combo == BiasFieldComboMode.max
+        elseif combo_to_use == BiasFieldComboMode.max
             maximum(state.biases_buffer)
-        elseif field.combo == BiasFieldComboMode.deviation
+        elseif combo_to_use == BiasFieldComboMode.deviation
             # std can at most be half the range, so the value should be doubled for normalization.
             # However in practice it'll be much less, except when some pixels are outside of the path,
             #   so also provide an exponential weighting.
@@ -354,7 +372,7 @@ function markov_bias_calculate(field::MarkovBiasField, state::MarkovBiasField_St
                 s = ((s / Float32(state.largest_dist)) ^ STD_CURVE) * state.largest_dist
             end
             s
-        elseif field.combo == BiasFieldComboMode.diff
+        elseif combo_to_use == BiasFieldComboMode.diff
             # It can already span the whole range, however tends to have a smaller value.
             s = Float32(maximum(state.biases_buffer) - minimum(state.biases_buffer))
             if s < Float32(state.largest_dist) # Pixels outside the path tree will have overlarge values
@@ -367,7 +385,7 @@ function markov_bias_calculate(field::MarkovBiasField, state::MarkovBiasField_St
             end
             s
         else
-            error("Unhandled: ", field.combo)
+            error("Unhandled: ", combo_to_use)
         end
     end
 
@@ -385,14 +403,14 @@ function markov_bias_calculate(field::MarkovBiasField, state::MarkovBiasField_St
         #    to uniform-random (extremely light weights, curve approaches 0.0).
         # We already handled randomness <= 0 and >= 1, so here we can ignore extremes.
 
-        # Empirically it seems randomness values below 0.2 cause numeric problems.
-        # Below that, we switch over to a different method equivalent to the Temperature bias.
-        RANDOMNESS_NUMERIC_FLOOR = 0.2f0
+        # Significant numeric problems creep in with low randomness, so
+        #    below a certain randomness we switch to a Temperature-like bias.
+        RANDOMNESS_NUMERIC_FLOOR = 0.13f0
         if field.randomness < RANDOMNESS_NUMERIC_FLOOR
-            max_temp = 5.0f0 * log(convert(Float32, sum(size(grid))))
-            temp_t = (field.randomness / RANDOMNESS_NUMERIC_FLOOR) * max_temp
+            max_temp = 30.0f0
+            temp_t = (field.randomness / RANDOMNESS_NUMERIC_FLOOR)
             @logic_log " ...  using temperature(" temp_t " * " max_temp ") to simulate heavy weights"
-            bias += rand(rng, Float32) * temp_t * max_temp
+            bias += rand(algo_state.rng, Float32) * temp_t * max_temp
             @logic_logln "  ... to get a final bias of " bias
         else
             weight_curve ^= if field.randomness < 0.5f0
@@ -403,7 +421,7 @@ function markov_bias_calculate(field::MarkovBiasField, state::MarkovBiasField_St
                 1.0f0 - inv_lerp(0.5f0, 1.0f0, field.randomness)
             end
 
-            bias = rand(rng, Float32) ^ weight_curve
+            bias = rand(algo_state.rng, Float64) ^ weight_curve
 
             # Preserve the magnitude range of 0 - max_path_length.
             bias *= state.largest_dist
@@ -548,22 +566,22 @@ function parse_markovjunior_bias(::Val{:field}, inputs::MacroParserInputs,
     return convert(MarkovBiasField, field)
 end
 
-dsl_string(f::MarkovBiasField) = string("field(",
+dsl_format(f::MarkovBiasField) = string("field(",
     # Source cells:
     (f.flipped && isempty(f.paths)) ? "-" : "",
-    dsl_string(f.sources),
+    dsl_format(f.sources),
 
     # Path cells:
     isempty(f.paths) ? "" : (
         f.flipped ? "<-" : "->"
     ),
-    dsl_string(f.paths),
+    dsl_format(f.paths),
 
     # Anchors:
     isempty(f.anchors) ? "" : (
         " & "
     ),
-    dsl_string(f.anchors),
+    dsl_format(f.anchors),
 
     # Now the other arguments.
 

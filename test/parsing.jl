@@ -60,7 +60,7 @@ function test_compare(a::MJ.MarkovOpSequence, b::MJ.MarkovOpSequence, tab::Strin
         println(tab, "A has ", length(a.ops), " inner ops, but B has ", length(b.ops), "!")
     else
         for (oa, ob, i) in zip(a.ops, b.ops, 1:length(a.ops))
-            println(tab, "Op ", i, ", ", MJ.dsl_string(oa), "   (", MJ.dsl_string(ob), ")")
+            println(tab, "Op ", i, ", ", MJ.dsl_format(oa), "   (", MJ.dsl_format(ob), ")")
             test_compare(oa, ob, "$tab\t")
         end
         if a.ops != b.ops
@@ -96,7 +96,7 @@ function test_compare(a::MJ.MarkovOpRewrite, b::MJ.MarkovOpRewrite, tab::String)
         println(tab, "A has ", length(a.rules), " rules while B has ", length(b.rules), "!")
     else
         for (ra, rb, i) in zip(a.rules, b.rules, 1:length(a.rules))
-            println(tab, "Rule ", i, ", ", MJ.dsl_string(ra), "    (", MJ.dsl_string(rb), ")")
+            println(tab, "Rule ", i, ", ", MJ.dsl_format(ra), "    (", MJ.dsl_format(rb), ")")
             if typeof(ra).name != typeof(rb).name
                 println(tab, "\tA is ", typeof(ra).name, " while B is ", typeof(rb).name, "!")
                 return nothing
@@ -216,7 +216,7 @@ function test_compare(a::MJ.AbstractMarkovBias, b::MJ.AbstractMarkovBias, tab::S
     if typeof(a) != typeof(b)
         println(tab, "Mismatched/Unsupported types! A is ", typeof(a), " while B is ", typeof(b))
     else
-        println(tab, "A \"", MJ.dsl_string(a), "\"   vs B \"", MJ.dsl_string(b), "\"")
+        println(tab, "A \"", MJ.dsl_format(a), "\"   vs B \"", MJ.dsl_format(b), "\"")
         for p_name in propertynames(a)
             p_a = getproperty(a, p_name)
             p_b = getproperty(b, p_name)
@@ -235,7 +235,7 @@ end
 
 DEFAULT_PRIORITY = MJ.MarkovRewritePriority_Everything()
 
-BIG_TEST = @markovjunior 3 'R' begin
+BIG_TEST = @markovjunior 4 'R' begin
     @pragma Hi 1 3 22
     @pragma hello
     @pragma Hi "abcd"
@@ -356,7 +356,7 @@ CELL_CODE = MJ.CELL_CODE_BY_CHAR
 WILDCARD = MJ.RewriteRuleCell_Wildcard()
 BIG_TEST_ANSWER = MJ.MarkovAlgorithm(
     CELL_CODE['R'],
-    3, 3,
+    4, 4,
 
     [
         MJ.MarkovOpRewrite(
@@ -728,9 +728,7 @@ BIG_TEST_ANSWER = MJ.MarkovAlgorithm(
                 )
             ],
             nothing,
-            MJ.AbstractMarkovBias[
-
-            ]
+            ()
         ),
         MJ.MarkovOpSequence(
             MJ.AbstractMarkovOp[
@@ -750,9 +748,9 @@ BIG_TEST_ANSWER = MJ.MarkovAlgorithm(
                 )
             ],
             MJ.ThresholdByArea(0.5f0),
-            MJ.AbstractMarkovBias[
+            tuple(
                 MJ.MarkovBiasTemperature(convert(Float32, 11.2))
-            ]
+            )
         ),
         MJ.MarkovOpSequence(
             MJ.AbstractMarkovOp[
@@ -795,9 +793,9 @@ BIG_TEST_ANSWER = MJ.MarkovAlgorithm(
                 )
             ],
             nothing,
-            MJ.AbstractMarkovBias[
+            tuple(
                 MJ.MarkovBiasTemperature(0.9f0)
-            ]
+            )
         ),
 
         # Next op is 26
@@ -1089,17 +1087,17 @@ BIG_TEST_ANSWER = MJ.MarkovAlgorithm(
           "INVALID result from `@markovjunior`! ",
             "Detailed printout is above this line -- A is the actual, B is the expected")
 
-# Test dsl_string() by executing it, parsing the result, and comparing them again.
-BIG_TEST_2 = MJ.markov_algo_parse(MJ.dsl_string(BIG_TEST))
+# Test dsl_format() by executing it, parsing the result, and comparing them again.
+BIG_TEST_2 = markov_algo_parse(MJ.dsl_format(BIG_TEST))
 @bp_check(BIG_TEST_2 == BIG_TEST_ANSWER,
           test_compare(BIG_TEST_2, BIG_TEST_ANSWER),
-          "INCORRECT result from `dsl_string()`! ",
-            "Detailed printout is above this line -- A is parsed from `dsl_string()`, B is the expected")
+          "INCORRECT result from `dsl_format()`! ",
+            "Detailed printout is above this line -- A is parsed from `dsl_format()`, B is the expected")
 
 # A == B and B == C; do a sanity-check by comparing A == C.
 @bp_check(BIG_TEST == BIG_TEST_2,
           test_compare(BIG_TEST, BIG_TEST_2),
           "SANITY FAIL! Transitive equality seems to be broken (a==b and b==c, but a!=b). ",
-            "Detailed comparison printout is above this line -- A is from `@markovjunior` and B is parsed from `dsl_string()`")
+            "Detailed comparison printout is above this line -- A is from `@markovjunior` and B is parsed from `dsl_format()`")
 
 end)()
