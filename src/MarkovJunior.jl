@@ -53,7 +53,7 @@ const System = Base.Sys
 
 using MacroTools, HybridStructs, NamedTupleTools, ConcurrentUtilities
 using OrderedCollections, StaticArrays, DataStructures, Statistics, Combinatorics
-using StructTypes, JSON3, ArgParse
+using StructTypes, JSON3, ArgParse, PrecompileTools
 using GLFW, CImGui, CSyntax
 const LibCImGui = CImGui.LibCImGui
 
@@ -84,6 +84,7 @@ export @markovjunior, markov_algo_parse,
        MarkovAlgorithm, MarkovTickSettings,
        markov_algo_run, markov_algo_next, markov_algo_complete, markov_algo_cleanup,
        markov_algo_to_string
+include("precompile_core.jl")
 
 # Tooling:
 if BUILT_WITH_TOOL

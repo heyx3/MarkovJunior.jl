@@ -23,6 +23,9 @@ docs/site/
 # environment.
 Manifest.toml
 
+# Per-developer Preferences, e.g. turning off the precompilation workload
+LocalPreferences.toml
+
 # Program
 locals
 
