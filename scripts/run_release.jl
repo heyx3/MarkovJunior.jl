@@ -1,5 +1,5 @@
 using Pkg
-Pkg.activate(joinpath(@__FILE__, "../.."))
+Pkg.activate(joinpath(@__DIR__, ".."))
 println(stderr, ".")
 
 using MarkovJunior

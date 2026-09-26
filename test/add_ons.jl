@@ -79,7 +79,7 @@ MJ.parse_markovjunior_bias(::Val{:custom}, inputs::MJ.MacroParserInputs,
                   ], first_ticks_1)
         grid_1 = first_ticks_1[1]
         let tt = markov_algo_next(state_ch_1)
-            @bp_check(tt == MJ.STANDARD_MIN_COMPILE_TIME_TICK_PRIORITY-1,
+            @bp_check(tt == MJ.STANDARD_MIN_COMPILE_TIME_TICK_PRIORITY,
                       typeof(tt), "(", tt, ")")
         end
         base_idx = flipped ? size_1 : (1, 1, 1, 1, 1)
@@ -104,7 +104,7 @@ MJ.parse_markovjunior_bias(::Val{:custom}, inputs::MJ.MacroParserInputs,
         grid_2 = first_ticks_2[1]
         for i in 1:2
             let tt = markov_algo_next(state_ch_2)
-                @bp_check(tt == MJ.STANDARD_MIN_COMPILE_TIME_TICK_PRIORITY-1,
+                @bp_check(tt == MJ.STANDARD_MIN_COMPILE_TIME_TICK_PRIORITY,
                           i, ": ", typeof(tt), "(", tt, ")")
             end
         end
@@ -134,7 +134,7 @@ MJ.parse_markovjunior_bias(::Val{:custom}, inputs::MJ.MacroParserInputs,
         grid_3 = first_ticks_3[1]
         for i in 1:3
             let tt = markov_algo_next(state_ch_3)
-                @bp_check(tt == MJ.STANDARD_MIN_COMPILE_TIME_TICK_PRIORITY-1,
+                @bp_check(tt == MJ.STANDARD_MIN_COMPILE_TIME_TICK_PRIORITY,
                           i, ": ", typeof(tt), "(", tt, ")")
             end
         end

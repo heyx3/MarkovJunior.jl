@@ -95,7 +95,6 @@ if BUILT_WITH_TOOL
 end
 
 # Library:
-# include("lib_interface.jl")
 include("ipc_interface.jl")
 export markovjunior_run_ipc
 
