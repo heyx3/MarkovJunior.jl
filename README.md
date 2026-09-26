@@ -5,10 +5,8 @@ A Julia reimagining of [this awesome procedural generation algorithm](https://gi
 It can build into several things:
 
 * A standalone executable, running a GUI playground for testing scenes
-* A C-like DLL, for other programs to integrate with
-* A standalone executable, exposing the algorithm through an IPC (to avoid DLL hell).
-
-> ***NOTE**: The DLL approach is currently deprecated over IPC!*
+* A standalone executable, exposing the algorithm to other environments.
+* ~~A C-like DLL, for other programs to integrate with~~ (**now deprecated over the IPC due to DLL hell**)
 
 [A plugin to integrate with Unreal Engine 5 is ongoing](https://github.com/heyx3/JMarkovJunior_Unreal5Demo).
 
@@ -223,6 +221,14 @@ Only your own events.
 Note that it only fails if the server does not support this call; redundant calls always "succeed".
    2. If it succeeded, and this service is running through the standalone executable,
   then the IPC process automatically dies once all existing clients have disconnected.
+8. **Give ownership over an algorithm**
+   1. Write a 4-byte uint representing the algorithm's ID.
+   2. Read the success flag.
+   3. If successful, then the given algorithm will be automatically destroyed (like sending message 2) when this client connection dies.
+9. **Give ownership over a state**
+   1. Write a 4-byte uint representing the state's ID.
+   2. Read the success flag.
+   3. If successful, then the given running algorithm state will be automatically destroyed (like sending message 4) when this client connection dies.
 
 ## Scenes
 

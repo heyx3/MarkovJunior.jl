@@ -88,7 +88,11 @@ macro ipc_debug_log(args...)
     )
 end
 
-function ipc_client_loop(client_name, channel, server, safety_caps::IpcSafetyCaps, ::Val{DebugMode}) where {DebugMode}
+function ipc_client_loop(client_name, channel, server,
+                         safety_caps::IpcSafetyCaps, ::Val{DebugMode}
+                        )::Nothing where {DebugMode}
+    managed_algos = Set{IPC_Handle}()
+    managed_states = Set{IPC_Handle}()
     try
         while true
             msg_idx = read(channel, UInt32)
@@ -151,7 +155,6 @@ function ipc_client_loop(client_name, channel, server, safety_caps::IpcSafetyCap
                 @ipc_debug_log "M: Closing a parsed Algorithm..."
                 algo_id = read(channel, IPC_Handle)
                 @ipc_debug_log "    Algo " algo_id
-
                 result = ipc_remove_algorithm(algo_id)
                 @ipc_debug_log "    result: " exists(result)
                 write(channel, convert(UInt8, exists(result)))
@@ -388,7 +391,7 @@ function ipc_client_loop(client_name, channel, server, safety_caps::IpcSafetyCap
                     println(stderr, client_name, "|    ERROR: state with that ID doesn't exist")
                     write(channel, zero(UInt8))
                 end
-            # Message 7: Kill sever thread
+            # Message 7: Kill server thread
             elseif msg_idx == 7
                 @ipc_debug_log "M: Kill server thread..."
                 if isnothing(server)
@@ -401,6 +404,36 @@ function ipc_client_loop(client_name, channel, server, safety_caps::IpcSafetyCap
                 else
                     println(stderr, "Client \"", client_name, "\" tried to kill the server thread but it's already dead")
                     write(channel, one(UInt8))
+                end
+            # Message 8: Take ownership of an algorithm
+            elseif msg_idx == 8
+                @ipc_debug_log "M: Take ownership of algorithm..."
+                algo_id = read(channel, UInt32)
+                @ipc_debug_log "     Algo=" algo_id
+
+                result = ipc_get_algorithm(algo_id)
+                if exists(result)
+                    @ipc_debug_log "     Successful"
+                    write(channel, one(UInt8))
+                    push!(managed_algos, algo_id)
+                else
+                    println(stderr, client_name, "|    ERROR: algo with that ID doesn't exist")
+                    write(channel, zero(UInt8))
+                end
+            # Message 9: Take ownership of a running algo-state
+            elseif msg_idx == 9
+                @ipc_debug_log "M: Take ownership of state..."
+                state_id = read(channel, UInt32)
+                @ipc_debug_log "     State=" state_id
+
+                result = ipc_get_state(state_id)
+                if exists(result)
+                    @ipc_debug_log "     Successful"
+                    write(channel, one(UInt8))
+                    push!(managed_states, state_id)
+                else
+                    println(stderr, client_name, "|    ERROR: state with that ID doesn't exist")
+                    write(channel, zero(UInt8))
                 end
             else
                 println(stderr, "Client \"", client_name, "\" sent invalid message index ", msg_idx,
@@ -419,6 +452,15 @@ function ipc_client_loop(client_name, channel, server, safety_caps::IpcSafetyCap
             print(stderr, "\n\n")
         end
     finally
+        for s in managed_states
+            result = ipc_remove_state(s)
+            exists(result) && close(result[3])
+        end
+
+        for a in managed_algos
+            ipc_remove_algorithm(a)
+        end
+
         if isopen(channel)
             close(channel)
         end
