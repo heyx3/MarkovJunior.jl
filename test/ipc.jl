@@ -248,6 +248,27 @@ function ipc_kill(expect_success::Bool)::Nothing
 
     return nothing
 end
+#TODO: Test message 10 (writing a new grid-state during a mutable tagged event -- requires @event to be implemented)
+function ipc_grid_size(state_id::Integer, expect_success::Bool,
+                       expected_size::Vector{<:Integer})::Optional{Vector{Int}}
+    write(channel, UInt32(11))
+
+    write(channel, convert(UInt32, state_id))
+    err_code = read(channel, UInt8)
+    if err_code == 1
+        @bp_check(expect_success, "Successfully read grid resolution but the state ID shouldn't be real!")
+        N = read(channel, UInt32)
+        res = Int[ ]
+        for i in 1:N
+            push!(res, convert(Int, read(channel, UInt32)))
+        end
+        @bp_check(res == expected_size, "Resolution was ", res, ", but expected ", expected_size)
+        return res
+    else
+        @bp_check(!expect_success, "Failed to read grid size; ID was invalid!")
+        return nothing
+    end
+end
 
 # Parse a new algorithm.
 # Sprinkle in some bogus delete ops that should fail.
@@ -288,14 +309,17 @@ ipc_start(2, ntuple(i -> Int(ceil(sqrt(MJ.IPC_DEFAULT_SAFETY_CAPS.max_grid_byte_
 ipc_start(2, ntuple(i->1, 100), (1, 4.5),   2, false,    false, nothing, 0, false) # Failed due to dimension cap
 ipc_start(2, (3, 12), (1, 4.5),   2, false,    true, nothing,    1, true)
 # Get the grid for the first time, and verify it.
+ipc_grid_size(1, true, [ 3, 12 ])
 let g = ipc_grid(1, true)
     @bp_check(size(g) == (3, 12), "Grid is ", size(g))
     @bp_check(all(iszero, g), "Grid: ", g)
 end
+ipc_grid_size(2, false, Int[ ])
 ipc_grid(2, false)
 
 # Run some iterations and check that there are now changed pixels.
 ipc_advance(1, (2, 1), true, false, nothing)
+ipc_grid_size(1, true, [ 3, 12 ])
 let grid = ipc_grid(1, true)
     @bp_check(size(grid) == (3, 12), "Grid is ", size(grid))
     @bp_check(count(i->i==2, grid) == 1, "Grid: ", grid)
@@ -303,12 +327,15 @@ let grid = ipc_grid(1, true)
 end
 ipc_advance(2, (2, 3), false, false, nothing) # Failed due to state ID
 ipc_advance(1, (2, 3), true, false, nothing)
+ipc_grid_size(1, true, [ 3, 12 ])
 let grid = ipc_grid(1, true)
     @bp_check(size(grid) == (3, 12), "Grid is ", size(grid))
     @bp_check(count(i->i==2, grid) == 4, "Grid: ", grid)
     @bp_check(count(iszero, grid) == 32, "Grid: ", grid)
 end
 ipc_advance(1, Val(:completed), true, true, nothing)
+ipc_advance(1, (2, 3), true, true, nothing) # Ticking after it finished should yield another "it finished" signal
+ipc_grid_size(1, true, [ 3, 12 ])
 let grid = ipc_grid(1, true)
     @bp_check(size(grid) == (3, 12), "Grid is ", size(grid))
     @bp_check(count(i->i==2, grid) == 30, "Grid: ", grid)
@@ -319,10 +346,12 @@ end
 ipc_destroy(2, false)
 ipc_destroy(1, true)
 ipc_destroy(1, false)
+ipc_grid_size(1, false, Int[ ])
 ipc_grid(1, false)
 
 # Verify the "finish" message and ability to write an initial state.
 ipc_start(2, (4, 2), (1, 4.5),  2, false,  true, [ 0, 1, 1, 0, 1, 0, 1, 0 ],    2, true)
+ipc_grid_size(2, true, [ 4, 2 ])
 let grid = ipc_grid(2, true)
     @bp_check(size(grid) == (4, 2), "Grid is ", size(grid))
     @bp_check(grid == UInt8[
@@ -334,7 +363,10 @@ let grid = ipc_grid(2, true)
 end
 ipc_advance(1, Val(:tags), false, false, nothing) # Failed due to state ID
 ipc_advance(2, Val(:tags), true, true, nothing) # Finishes due to no tagged events
+ipc_advance(2, Val(:tags), true, true, nothing) # Ticking after it finished should yield another "it finished" signal
+ipc_grid_size(1, false, Int[ ])
 ipc_grid(1, false)
+ipc_grid_size(2, true, [ 4, 2 ])
 let grid = ipc_grid(2, true)
     @bp_check(size(grid) == (4, 2), "Grid is ", size(grid))
     @bp_check(grid == UInt8[
