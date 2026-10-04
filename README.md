@@ -159,6 +159,8 @@ If it failed, something was wrong with your parameters.
 The protocol for each message is as follows.
 They are numbered by the message's ID, for example you send `1` to initiate the first message in the list.
 
+> *NOTE: We do not check for race conditions! Don't let two different client connections update the same algorithm state at the same time.*
+
 1. **Parse a new algorithm**
    1. Write a 4-byte uint for the length of the string containing the algorithm
   (UTF-8 with optional null-terminator).
@@ -178,10 +180,10 @@ They are numbered by the message's ID, for example you send `1` to initiate the 
    6. If you are, now write that grid state. This should have the same memory order as when you download a grid (see below).
    7. Write a 4-byte uint representing the number of bytes used to seed the RNG.
    8. Write the bytes of the RNG seed.
-   9. Write the minimum tick priority that actually counts as a tick
-(recommend 1 or 2 for animation rendering, 3 or 4 for practical use).
+   9. Write a 4-byte uint representing the minimum tick priority that actually counts as a tick.
+Recommend 1 or 2 for animation rendering, and 3 or 4 for practical use.
    10. Write a 1-byte flag (0 or 1) indicating whether this is for animation purposes
-(encourages more Ops to follow Biases even when it doesn't affect the final state)
+(disables some optimizations and encourages new behavior, so that the grid state looks good when animated from tick to tick)
    11. Read the success flag.
    12. If it succeeded, read a 4-byte uint representing the ID of the new algo state.
 4. **Destroy an algorithm run**
@@ -200,13 +202,13 @@ They are numbered by the message's ID, for example you send `1` to initiate the 
          1. `UInt8(2)`
    3. Read the success flag. If it failed, your parameters were bad and you should stop here.
    4. Read the result of the tick:
-      1. `UInt8` bool for whether the algorithm finished.
+      1. `UInt8` bool for whether the algorithm finished (including if it was already finished by an earlier tick)
       2. If not finished, `UInt8` bool for whether we encountered a tagged event.
 Note that under this protocol, the built-in tagged events are handled internally --
   you'll never see tags for "algorithm started" or "new grid allocated" or "algorithm completed".
 Only your own events.
       1. If encountered a tagged event, read the tag using the same format as other/error strings (mentioned above).
-6. **Download the current state of the algorithm grid**
+6. **Download the current state of the algorithm grid** (see below for a message to only query the grid's resolution)
    1. Write a 4-byte uint representing the running state's ID.
    2. Read the success flag. If it failed, your state ID is invalid and you should stop here.
    3. Read a 4-byte uint representing the number of dimensions of the grid.
@@ -229,6 +231,17 @@ Note that it only fails if the server does not support this call; redundant call
    1. Write a 4-byte uint representing the state's ID.
    2. Read the success flag.
    3. If successful, then the given running algorithm state will be automatically destroyed (like sending message 4) when this client connection dies.
+10. **Set a state grid's values** (*NOTE: only allowed at particular named events! E.g. `@event !GoAhead`*)
+   1. Write a 4-byte uint representing the state's ID.
+   2. Write a 4-byte uint representing the number of bytes incoming (to make sure we agree on grid size).
+   3. Read a success flag, for whether the ID and grid length was valid.
+   4. Write the new grid data
+   5. Read another success flag (always 1; it just helps us agree that the message has ended).
+11. (11) **Get the resolution of a state's grid**
+   1. Write a 4-byte uint representing the state's ID.
+   2. Read a success flag, for whether the state ID was valid. If unsuccessful then stop.
+   3. Read a 4-byte uint representing the grid's number of dimensions.
+   4. For each grid axis, read a 4-byte uint representing its size along that axis.
 
 ## Scenes
 
