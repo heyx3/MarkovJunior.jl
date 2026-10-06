@@ -118,13 +118,16 @@ Run the IPC service by calling `markovjunior_run_ipc(block_calling_thread::Bool)
 
 IPC is preferred to using the package as a DLL, because Julia pulls in many sub-sub-dependencies and causes DLL hell.
 Especially when working in a large codebase like Unreal Engine!
-
 Our IPC server communicates using a "named pipe", a fast OS feature for communication between processes.
 Named pipes are a two-way binary stream; extemely similar to TCP sockets but more efficient and not networked.
+
 Provided with the IPC executable is a C header, C++ header, and JSON file, containing all relevant constants.
 The most important constant is the name of the pipe, also stored in Julia under `MarkovJunior.IPC_PIPE_PATH`.
+Also provided is a small C++ library which
+  manages the IPC process to match the lifetime of the calling process,
+  and offer connections to it as thread-local singletons.
 
-The executable has several command-line arguments which you can read by passing `--help`.
+The IPC executable has several command-line arguments which you can read by passing `--help`.
 It will also write two signals to stdout, as 4-byte uints:
   a "start" code when the named pipe is ready for clients,
   and a "stop" code when it's no longer accepting clients (happens after you send a kill message).
@@ -133,7 +136,6 @@ Once all clients are gone *and* it's no longer accepting new ones, the process d
 > *The IPC protocol is perfectly functional but still subject to change.*
 > *The pipe name has a number on the end of it, which will be incremented every time a breaking change is made.*
 
-Currently each client's algo states and parsed algorithms are **not** automatically cleaned up when they disconnect!
 
 #### IPC Protocol
 
