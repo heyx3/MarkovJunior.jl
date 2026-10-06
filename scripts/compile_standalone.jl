@@ -98,6 +98,7 @@ println()
 # Generate headers containing project constants.
 println("Generating general headers...")
 const INCLUDE_DIR = joinpath(OUTPUT_DIR, "include")
+const CPP_DEST_DIR = joinpath(OUTPUT_DIR, "src")
 const CONSTS_FILE_NAME = "jmj_consts"
 const HEADER_GUARD_NAME_1 = "JMARKOVJUNIOR_GENERATED_CONSTS_H"
 const BASIC_ALGO_ESC = escape_string("""@markovjunior begin
@@ -106,6 +107,7 @@ const BASIC_ALGO_ESC = escape_string("""@markovjunior begin
     @rewrite g=>w
 end""")
 mkpath(INCLUDE_DIR)
+mkpath(CPP_DEST_DIR)
 open(joinpath(INCLUDE_DIR, "$CONSTS_FILE_NAME.h"), "w") do file
     print(file, """
     #ifndef $HEADER_GUARD_NAME_1
@@ -292,6 +294,20 @@ if MODE in (:exe, :data)
             "stdout_start_code": $(MJ.IPC_MAIN_START_CODE),
             "stdout_stop_code": $(MJ.IPC_MAIN_STOP_CODE)
         }""")
+    end
+
+    # Copy our pre-written header and source file as well.
+    CPP_FROM_DIR = joinpath(PROJECT_DIR, "src_cpp")
+    for file_name in readdir(CPP_FROM_DIR)
+        if endswith(file_name, ".hpp")
+            cp(joinpath(CPP_FROM_DIR, file_name),
+               joinpath(INCLUDE_DIR, file_name);
+               force=true)
+        elseif endswith(file_name, ".cpp")
+            cp(joinpath(CPP_FROM_DIR, file_name),
+               joinpath(CPP_DEST_DIR, file_name),
+               force=true)
+        end
     end
 end
 
