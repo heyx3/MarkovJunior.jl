@@ -117,6 +117,12 @@ const IMPORTANT_BUILTIN_TAGS = Set{Symbol}([
     TAG_ALGO_COMPLETED, TAG_ALGO_CANCELED
 ])
 
+"The leading character of a tag which marks it as a mutable event (users may modify the grid while it's paused)"
+const MUTABLE_EVENT_TAG_PREFIX = '!'
+"Checks whether the given tag represents a mutable event, without allocating a String"
+@inline is_mutable_event_tag(tag::Symbol)::Bool =
+    unsafe_load(Base.unsafe_convert(Ptr{UInt8}, tag)) == UInt8(MUTABLE_EVENT_TAG_PREFIX)
+
 "
 Ticks level 1 and 2 are very minor events
   that we usually don't want to waste any CPU cycles on checking.
@@ -134,6 +140,17 @@ This is caught at the top of the algorithm loop; all Ops/Biases/etc.
 struct ErrorCancelAlgo <: Exception end
 Base.showerror(io::IO, ::ErrorCancelAlgo) = error("ErrorCancelAlgo should never go uncaught!")
 
+# Which tagged events get skipped instead of being sent to users.
+# The important built-in ones (new grid, and canceled/completed) are never skipped.
+#   * `none_skippable`: all tagged events happen.
+#   * `immutable_skippable`: only mutable events (see `is_mutable_event_tag()`) happen.
+#   * `all_skippable`: no other tagged events happen.
+@bp_enum(SkipTaggedEvents,
+    none_skippable,
+    immutable_skippable,
+    all_skippable
+)
+
 "
 Controls ticking, tagged events, and cancellation.
 You may edit any of these settings mid-run.
@@ -143,8 +160,7 @@ mutable struct MarkovTickSettings{MinCompileTimePriority}
     #   this removes further ones with runtime checks.
     min_runtime_priority::Int
 
-    # Only "new grid" and "canceled/completed" will happen; the rest will not.
-    skip_most_tagged_events::Bool
+    skip_tagged_events::E_SkipTaggedEvents
     cancel_algo::Bool
 
     # A hint to algorithm logic that the visual output matters;
@@ -156,14 +172,27 @@ mutable struct MarkovTickSettings{MinCompileTimePriority}
 
     MarkovTickSettings(min_tick_priority::Integer = STANDARD_MIN_COMPILE_TIME_TICK_PRIORITY
                        ;
-                       skip_most_tagged_events = false
+                       skip_tagged_events::E_SkipTaggedEvents = SkipTaggedEvents.none_skippable
                       ) = new{min(convert(Int, min_tick_priority), STANDARD_MIN_COMPILE_TIME_TICK_PRIORITY)}(
         convert(Int, min_tick_priority),
-        convert(Bool, skip_most_tagged_events),
+        skip_tagged_events,
         false, preallocated_vector(Bool, 2)
     )
 end
 is_animated(t::MarkovTickSettings)::Bool = !isempty(t.animated) && t.animated[end]
+
+"Checks whether the given tagged event would be sent to users, rather than skipped"
+function is_tagged_event_emitted(t::MarkovTickSettings, tag::Symbol)::Bool
+    if (t.skip_tagged_events == SkipTaggedEvents.none_skippable) || in(tag, IMPORTANT_BUILTIN_TAGS)
+        return true
+    elseif t.skip_tagged_events == SkipTaggedEvents.immutable_skippable
+        return is_mutable_event_tag(tag)
+    elseif t.skip_tagged_events == SkipTaggedEvents.all_skippable
+        return false
+    else
+        error("Unhandled: ", t.skip_tagged_events)
+    end
+end
 
 const AlgoCommsChannel = Channel{Union{Int, Symbol, CellGrid}}
 
@@ -207,7 +236,7 @@ Implements our internal coroutine logic for tagged events,
 Also does some other bookkeeping like checking for algorithm cancellation.
 "
 function markov_algo_tick(s::AlgoState, tag::Symbol)
-    if !s.ticking.skip_most_tagged_events || in(tag, IMPORTANT_BUILTIN_TAGS)
+    if is_tagged_event_emitted(s.ticking, tag)
         put!(s.channel, tag)
         if tag == TAG_NEW_GRID
             put!(s.channel, s.grid)

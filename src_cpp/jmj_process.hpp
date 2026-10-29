@@ -66,10 +66,11 @@ namespace jmj
 		};
 
 		//Launches and watches the IPC process on a background thread.
-		//The process is killed when this object is destroyed,
-		//   and on Windows/Linux the OS also kills it if our own process dies first.
-		//Destroy this only after you're done with every 'PipeConnection',
-		//   otherwise their next call hits the fatal-error handler.
+		//That process is killed when this object is destroyed
+		//   (or, on most platforms, if this owning process is destroyed).
+	    //
+	    //Make sure not to destroy this until after you're done with every 'PipeConnection'!
+		//Otherwise their next call hits the fatal-error handler.
 		class JMJ_MODULE_EXPORT ProcessManager
 		{
 		public:

@@ -81,15 +81,19 @@ namespace jmj
 		{
 			//The name of these connection clients to the IPC, only for logging purposes.
 			//Each individual client appends a unique index to this name.
-			static std::u8string& ClientLoggingName() { static std::u8string name{ u8"C++ Client" }; return name; }
+			static std::u8string& ClientLoggingName();
 			//The name of the pipe to connect to; defaults to the IPC's own default pipe name.
 			//Users can change this *before* the IPC starts and the first connection is made!
-			static std::string& UsedPipeName() { static std::string name{ jmj::ipc::NamedPipe }; return name; }
+		    //Only includes the "file name"; the platform-specific path is prepended automatically.
+			static std::string& UsedPipeName();
 			//The callback to invoke when there is a fatal IPC error (e.g. the IPC process died).
 			//Default behavior uses Unreal fatal-error logging in Unreal projects,
 			//  or else an exception in exception-enabled code,
 			//  or else prints to stderr and then exits.
 			static std::function<void(const std::string&)>& ErrorHandler();
+
+		    //The OS-specific named pipe path, which 'UsedPipeName()' should be appended to.
+		    static std::string GetPipePrefix();
 
 			//Gets (or sets up) an IPC connection for the calling thread.
 			//All interaction with it must *stay* on this thread!

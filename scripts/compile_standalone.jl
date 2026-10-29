@@ -234,7 +234,7 @@ if MODE in (:exe, :data)
     # Generate headers containing important constants for the IPC server.
     println("Generating IPC headers...")
     const HEADER_GUARD_NAME_2 = "JMARKOVJUNIOR_IPC_GENERATED_H"
-    const NAMED_PIPE_ESCAPED = escape_string(MJ.IPC_PIPE_PATH)
+    const NAMED_PIPE_ESCAPED = escape_string(MJ.IPC_PIPE_NAME)
     open(joinpath(INCLUDE_DIR, "jmj_ipc.h"), "w") do file
         print(file, """
         #ifndef $HEADER_GUARD_NAME_2
@@ -251,6 +251,9 @@ if MODE in (:exe, :data)
 
         #define JMJ_IPC_STDOUT_START_CODE $(MJ.IPC_MAIN_START_CODE)
         #define JMJ_IPC_STDOUT_STOP_CODE $(MJ.IPC_MAIN_STOP_CODE)
+
+        //Tagged events whose name starts with this char let you write to the grid while paused.
+        #define JMJ_IPC_MUTABLE_EVENT_PREFIX '$(MJ.MUTABLE_EVENT_TAG_PREFIX)'
 
         #endif
         """)
@@ -277,6 +280,9 @@ if MODE in (:exe, :data)
 
             constexpr uint32_t StdoutStartCode = $(MJ.IPC_MAIN_START_CODE);
             constexpr uint32_t StdoutStopCode = $(MJ.IPC_MAIN_STOP_CODE);
+
+            //Tagged events whose name starts with this char let you write to the grid while paused.
+            inline constexpr char8_t MutableEventPrefix = u8'$(MJ.MUTABLE_EVENT_TAG_PREFIX)';
         } }
 
         #endif
@@ -292,7 +298,9 @@ if MODE in (:exe, :data)
             "default_max_client_name": $(MJ.IPC_DEFAULT_SAFETY_CAPS.max_client_name_len),
 
             "stdout_start_code": $(MJ.IPC_MAIN_START_CODE),
-            "stdout_stop_code": $(MJ.IPC_MAIN_STOP_CODE)
+            "stdout_stop_code": $(MJ.IPC_MAIN_STOP_CODE),
+
+            "mutable_event_prefix": "$(MJ.MUTABLE_EVENT_TAG_PREFIX)"
         }""")
     end
 
@@ -380,4 +388,6 @@ for (path, dirs, files) in walkdir(OUTPUT_DIR)
         global dir_size_bytes += filesize(joinpath(path, file))
     end
 end
-println("Done! Total size is ", Base.format_bytes(dir_size_bytes))
+if MODE in (:exe, :dll)
+    println("Done! Total size is ", Base.format_bytes(dir_size_bytes))
+end
