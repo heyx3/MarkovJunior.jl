@@ -80,10 +80,10 @@ For example:
     # Emit a "tagged event", which pauses the algorithm for users to view its current state.
     @event BeforeFinalSteps
     # If users need to *modify* the grid during a tagged event, prepend the name with '!'.
-    # There's no special checking around this, so it's up to you to be vigilant!
+    # The IPC server only accepts grid writes during these events;
+    #    in native Julia it's up to you to avoid modifying the grid except during these events!
     @event !BeforeFinalSteps
 
-    # Emit another tagged event which gives users 
     # Finally, place a "player start" square.
     @fill B pixel(min=0, size=4)
     @fill T pixel(min=0, size=1)
@@ -136,9 +136,17 @@ To support modification, prepend the event name with `!`:
 @event !BeforeSpawnPlacement
 ````
 
-This will give secondary state, like all active [Biases](#bias-and-weights),
-  a chance to update themselves after your modifications.
-It can have a big performance impact under really active Biases, so use it sparingly.
+The `!` stays part of the tag that users receive (e.g. `Symbol("!BeforeSpawnPlacement")`),
+  so they can tell that the grid is writable.
+When the algorithm resumes, it checks what users changed so that secondary state,
+  like all active [Biases](#bias-and-weights), can update itself.
+This costs a copy and scan of the whole grid each time, plus whatever the Biases need to do,
+  so use it sparingly.
+
+Read-only events are cosmetic, for example `@sequence repeat` does not count it as the first Op
+  when deciding whether to repeat.
+Mutable events are not cosmetic -- if a mutable event is the first Op of a `@sequence repeat`
+  and the user doesn't actually change the grid, then the sequence will exit.
 
 ## `@rewrite`
 
@@ -737,13 +745,15 @@ end path(G<-R<-w) # Add a pathing bias
 
 The op `@sequence [threshold] begin ... end` describes a chronological sequence of actions,
   similar to the algorithm itself but with Thresholding options.
-For example:
-
 The `threshold` is identical to [the Threshold for `@rewrite` statements](#threshold),
   determining how many times to run, but with an extra option:
- `repeat` makes the sequence repeat until the first inner operation fails to do anything.
+ `repeat` makes the sequence repeat until its first non-cosmetic inner operation
+  (i.e. ignoring things like read-only `@event`s) fails to do anything.
+If every inner operation is cosmetic, it stops after one pass.
+If no threshold is given, then (unlike `@rewrite`) the sequence runs exactly once --
+  in this case it's simply a tool to group several operations, e.g. to apply a shared bias to all of them.
 
-The last argument to a sequence is a bias statement or block of statements,
+The optional last argument to a sequence is a bias statement or block of statements,
   identical to [bias for `@rewrite` statements](#bias-and-weights).
 These biases are inherited by all operations within it
   (primarily `@rewrite` but other ops may respect `bias` settings too).

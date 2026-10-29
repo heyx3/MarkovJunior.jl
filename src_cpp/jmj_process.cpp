@@ -451,7 +451,7 @@ ProcessManager::ProcessManager(ProcessSettings _settings)
 	}
 	auto log = [&](const std::string& msg) { EmitLine(msg); };
 
-	if (settings.ReuseExistingServer && IsServerListening(PipeConnection::UsedPipeName()))
+	if (settings.ReuseExistingServer && IsServerListening(PipeConnection::GetPipePrefix() + PipeConnection::UsedPipeName()))
 	{
 		log("[client] Found an existing IPC server, so we won't launch our own");
 		isManagingProcess = false;

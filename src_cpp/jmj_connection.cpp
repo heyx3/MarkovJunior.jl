@@ -29,14 +29,22 @@ using namespace jmj::ipc;
 
 	static_assert(sizeof(void*) == sizeof(HANDLE), "Can't cast between HANDLE and pimpl!");
 
+    std::string PipeConnection::GetPipePrefix() { return "\\\\.\\pipe\\"; }
+
     void* PipeConnection::GetNullPipeValue() { return static_cast<void*>(INVALID_HANDLE_VALUE); }
 
 	void* PipeConnection::MakePipe()
-	{
+    {
+        if (UsedPipeName().empty())
+        {
+            InvokeErrorHandler(std::string("The JMJ IPC pipe name is empty!"));
+            return GetNullPipeValue();
+        }
+        
         //Windows uses UTF-16 for modern API calls; we need to convert the pipe name to that.
 		std::wstring wPipeName;
-		const auto& asciiPipeName = UsedPipeName();
-		if (!asciiPipeName.empty())
+		auto asciiPipeName = GetPipePrefix() + UsedPipeName();
+		if (!UsedPipeName().empty())
 		{
 			const auto* asciiPipeNameBytes = reinterpret_cast<const char*>(asciiPipeName.data());
 			int asciiPipeNameByteCount = static_cast<int>(asciiPipeName.size());
@@ -168,15 +176,18 @@ using namespace jmj::ipc;
        std::string ErrnoText(int e) { return std::to_string(e) + " (" + std::strerror(e) + ")"; }
     }
 
+    std::string PipeConnection::GetPipePrefix() { return "/tmp/"; }
+
     void* PipeConnection::MakePipe()
     {
-       //Unix socket paths are raw bytes, so ASCII needs no conversion -- only a length check.
-       const auto& asciiPipeName = UsedPipeName();
-       if (asciiPipeName.empty())
+       if (UsedPipeName().empty())
        {
           InvokeErrorHandler(std::string("The JMJ IPC pipe name is empty!"));
           return GetNullPipeValue();
        }
+
+       //Unix socket paths are raw bytes, so ASCII needs no conversion -- only a length check.
+       auto asciiPipeName = GetPipePrefix() + UsedPipeName();
 
        sockaddr_un addr{ };
        addr.sun_family = AF_UNIX;
@@ -337,6 +348,17 @@ const PipeConnection& PipeConnection::GetOrMakeThreadLocal()
 void PipeConnection::CheckThread() const
 {
 	JMJ_ASSERT(std::this_thread::get_id() == owningThreadId, "Called from the wrong thread!");
+}
+
+std::u8string& PipeConnection::ClientLoggingName()
+{
+    static std::u8string name{ u8"C++ Client" };
+    return name;
+}
+std::string& PipeConnection::UsedPipeName()
+{
+    static std::string name{ jmj::ipc::NamedPipe };
+    return name;
 }
 std::function<void(const std::string&)>& PipeConnection::ErrorHandler()
 {

@@ -11,13 +11,13 @@ function markov_algo_run(sequence::MarkovOpSequence{NSelfBiases},
                          inherited_biases::NTuple{NInheritedBiases, AbstractMarkovBias},
                          inherited_bias_states::NTuple{NInheritedBiases, Any},
                          grid::TGrid = algo_state.grid
-                        )::Tuple{Bool, typeof(inherited_bias_states)} where {
+                        )::Tuple{OpChangedGrid, typeof(inherited_bias_states)} where {
                             TGrid<:CellGrid,
                             NInheritedBiases, NSelfBiases
                         }
     # Set up the repetition counter.
     repetitions_left = if isnothing(sequence.threshold)
-        typemax(Int)
+        1
     elseif sequence.threshold isa SequenceRepeatModeTag
         sequence.threshold
     elseif sequence.threshold isa Threshold
@@ -25,8 +25,9 @@ function markov_algo_run(sequence::MarkovOpSequence{NSelfBiases},
     else
         error("Unhandled: ", typeof(sequence.threshold))
     end
-    if (repetitions_left isa Int) && (repetitions_left < 0)
-        return (false, inherited_bias_states)
+    if isempty(sequence.ops) ||
+       ((repetitions_left isa Int) && (repetitions_left <= 0))
+        return (isempty(sequence.ops) ? nothing : false, inherited_bias_states)
     end
 
     # Initialize our own biases.
@@ -43,7 +44,7 @@ function markov_algo_run(sequence::MarkovOpSequence{NSelfBiases},
 
     # Run the loop.
     @logic_logln("Starting sequence with threshold `", repetitions_left, "`")
-    made_any_changes::Bool = false
+    result::OpChangedGrid = nothing
     rep_i::Int = 0
     while (repetitions_left isa SequenceRepeatModeTag) || (repetitions_left > 0)
         if repetitions_left isa Int
@@ -52,29 +53,38 @@ function markov_algo_run(sequence::MarkovOpSequence{NSelfBiases},
         rep_i += 1
         @logic_logln("REPETITION ", rep_i)
 
+        # In 'repeat' mode, the first non-cosmetic op decides whether to keep going.
+        pass_result::OpChangedGrid = nothing
         for op_i in 1:length(sequence.ops)
             @logic_logln("Inner op ", op_i, ":")
             @logic_tab_in()
 
-            (op_made_changes, all_bias_states) = markov_algo_run(
+            (op_result, all_bias_states) = markov_algo_run(
                 sequence.ops[op_i], algo, algo_state,
                 all_biases, all_bias_states
             )
             stop_early::Bool = false
-            made_any_changes |= op_made_changes
-            if !op_made_changes && (op_i == 1) && (repetitions_left isa SequenceRepeatModeTag)
+            if (repetitions_left isa SequenceRepeatModeTag) && isnothing(pass_result) && (op_result === false)
                 @logic_logln("Inner op did nothing! The outer sequence will end now")
                 stop_early = true
                 repetitions_left = 0
             end
+            pass_result = combine_op_results(pass_result, op_result)
 
             @logic_tab_out()
             stop_early && break
         end
+        result = combine_op_results(result, pass_result)
+
+        # If every op was cosmetic, repeating would never end.
+        if (repetitions_left isa SequenceRepeatModeTag) && isnothing(pass_result)
+            @logic_logln("Every inner op was cosmetic! The outer sequence will end now")
+            repetitions_left = 0
+        end
     end
 
     markov_algo_tick(algo_state, STANDARD_END_OF_OP_TICK_PRIORITY + 1)
-    return (made_any_changes, ntuple(i -> all_bias_states[i], Val(NInheritedBiases)))
+    return (result, ntuple(i -> all_bias_states[i], Val(NInheritedBiases)))
 
     # Finish the bias cleanup logic:
     finally

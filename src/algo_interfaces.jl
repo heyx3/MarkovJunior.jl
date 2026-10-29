@@ -1,15 +1,28 @@
 ##   Ops  ##
 
+"Whether an Op changed the grid, using `nothing` to mean 'cosmetic event which could never change the grid'"
+const OpChangedGrid = Union{Bool, Nothing}
+
+"Combines the results of two Ops, where `nothing` doesn't count either way"
+combine_op_results(a::OpChangedGrid, b::OpChangedGrid)::OpChangedGrid = if isnothing(a)
+    b
+elseif isnothing(b)
+    a
+else
+    a | b
+end
+
+
 "
 Executes the given op within an algorithm.
 Returns two things:
 
-1. Whether it was able to make any changes to the grid
+1. Whether it changed the grid (see `OpChangedGrid`)
 2. The new states of the inherited biases
 "
 function markov_algo_run(op::AbstractMarkovOp, algo, algo_state,
                          inherited_bias_tuple, inherited_bias_state_tuple
-                        )::Tuple{Bool, typeof(inherited_bias_state_tuple)}
+                        )::Tuple{OpChangedGrid, typeof(inherited_bias_state_tuple)}
     throw(MethodError(markov_algo_run, (
         op, algo, algo_state, inherited_bias_tuple, inherited_bias_state_tuple
     )))

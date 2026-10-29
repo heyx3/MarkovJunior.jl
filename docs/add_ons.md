@@ -151,8 +151,10 @@ function MJ.markov_algo_run(
     grid::TGrid = algo_state.grid,
     alloc::TAllocator = algo_state.allocator
 )::Tuple{
-    # Your function returns `(changed_anything, new_inherited_bias_states)`
-    Bool, typeof(inherited_bias_states)
+    # Your function returns `(changed_anything, new_inherited_bias_states)`.
+    # Return `nothing` for `changed_anything` if your Op is cosmetic
+    #    and could never change the grid (see `MJ.OpChangedGrid`).
+    MJ.OpChangedGrid, typeof(inherited_bias_states)
 } where {
     NGridDims, TGrid<:MJ.CellGrid{NGridDims},
     TAllocator<:MarkovJunior.AbstractMarkovAllocator

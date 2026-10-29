@@ -7,15 +7,12 @@
 
 (() -> begin # Wrap the test in a function to avoid global weirdness
 
-PIPE_PATH = if Sys.iswindows()
-    "\\\\.\\pipe\\jmj_ipc_unittest"
-else
-    "/tmp/jmj_ipc_unittest"
-end
+PIPE_NAME = "jmj_ipc_unittest"
+PIPE_PATH = MJ.ipc_pipe_path(PIPE_NAME)
 server = markovjunior_run_ipc(
     false, Val(false),
     allow_kill_message = true,
-    pipe_path = PIPE_PATH
+    pipe_name = PIPE_NAME
 )
 sleep(5) #TODO: Some kind of signal to know that the server has started
 println("  !!  If you see this before the server says it's ready to accept clients, the test will fail due to race condition  !!")
@@ -48,7 +45,7 @@ function ipc_parse_algo(algo_str::String, expected_algo_id::Integer, expect_succ
                   "Failed to parse algorithm: (", err_code, ") ",
                     err_str, "\n", algo_str, "\n")
         println(stderr, "\nVVVVVVVVVVVVVVVVVVVVVVV\n",
-                        "Successful test that parsing fails. Here's the error message for reference: ", err_str,
+                        "Successful test that parsing fails. Here's the error message for reference:\n\n", err_str,
                         "\n^^^^^^^^^^^^^^^^^^^^^\n")
         return zero(UInt32)
     elseif (err_code == 1)
@@ -248,7 +245,23 @@ function ipc_kill(expect_success::Bool)::Nothing
 
     return nothing
 end
-#TODO: Test message 10 (writing a new grid-state during a mutable tagged event -- requires @event to be implemented)
+function ipc_write_grid(state_id::Integer, new_grid::Array{UInt8}, expect_success::Bool)::Nothing
+    write(channel, UInt32(10))
+    write(channel, convert(UInt32, state_id))
+    write(channel, convert(UInt32, length(new_grid)))
+
+    err_code = read(channel, UInt8)
+    if err_code == 1
+        @bp_check(expect_success, "ipc_write_grid succeeded when it shouldn't have!")
+        write(channel, new_grid)
+        @bp_check(read(channel, UInt8) == 1, "ipc_write_grid didn't finish with the 'end' flag")
+    elseif err_code == 0
+        @bp_check(!expect_success, "ipc_write_grid failed!")
+    else
+        error("Unexpected error code: ", err_code)
+    end
+    return nothing
+end
 function ipc_grid_size(state_id::Integer, expect_success::Bool,
                        expected_size::Vector{<:Integer})::Optional{Vector{Int}}
     write(channel, UInt32(11))
@@ -378,6 +391,43 @@ let grid = ipc_grid(2, true)
 end
 ipc_destroy(2, true)
 ipc_destroy(2, false)
+
+# Test tagged events, including writing to the grid during a mutable one.
+ipc_parse_algo("""@markovjunior 2 begin
+    @event BeforeEdits
+    @event !Edits
+    @rewrite R => G
+    @event AfterEdits
+end""", 3, true)
+ipc_start(3, (4, 2), (1, 4.5),  2, false,  true, nothing,  3, true)
+ipc_write_grid(3, zeros(UInt8, 4, 2), false) # Failed due to not being at any event
+ipc_advance(3, Val(:tags), true, false, :BeforeEdits)
+ipc_write_grid(3, zeros(UInt8, 4, 2), false) # Failed due to read-only event
+ipc_advance(3, Val(:tags), true, false, Symbol("!Edits"))
+let edited = UInt8[
+        0 3
+        3 0
+        0 0
+        3 3
+    ]
+    ipc_write_grid(3, zeros(UInt8, 3), false) # Failed due to byte size
+    ipc_write_grid(4, edited, false) # Failed due to state ID
+    ipc_write_grid(3, edited, true)
+    @bp_check(ipc_grid(3, true) == edited, "Grid: ", ipc_grid(3, true))
+end
+ipc_advance(3, Val(:tags), true, false, :AfterEdits)
+ipc_write_grid(3, zeros(UInt8, 4, 2), false) # Failed due to read-only event
+let grid = ipc_grid(3, true) # The user's red pixels should have been turned green
+    @bp_check(grid == UInt8[
+        0 4
+        4 0
+        0 0
+        4 4
+    ], "Grid: ", grid)
+end
+ipc_advance(3, Val(:tags), true, true, nothing)
+ipc_write_grid(3, zeros(UInt8, 4, 2), false) # Failed due to algorithm being finished
+ipc_destroy(3, true)
 
 close(channel)
 catch e

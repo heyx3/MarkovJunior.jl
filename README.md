@@ -122,7 +122,7 @@ Our IPC server communicates using a "named pipe", a fast OS feature for communic
 Named pipes are a two-way binary stream; extemely similar to TCP sockets but more efficient and not networked.
 
 Provided with the IPC executable is a C header, C++ header, and JSON file, containing all relevant constants.
-The most important constant is the name of the pipe, also stored in Julia under `MarkovJunior.IPC_PIPE_PATH`.
+The most important constant is the name of the pipe, also stored in Julia under `MarkovJunior.IPC_PIPE_NAME`.
 Also provided is a small C++ library which
   manages the IPC process to match the lifetime of the calling process,
   and offer connections to it as thread-local singletons.
@@ -210,6 +210,7 @@ Note that under this protocol, the built-in tagged events are handled internally
   you'll never see tags for "algorithm started" or "new grid allocated" or "algorithm completed".
 Only your own events.
       1. If encountered a tagged event, read the tag using the same format as other/error strings (mentioned above).
+  Tags starting with `!` are mutable events, during which you may upload grid changes using message 10.
 6. **Download the current state of the algorithm grid** (see below for a message to only query the grid's resolution)
    1. Write a 4-byte uint representing the running state's ID.
    2. Read the success flag. If it failed, your state ID is invalid and you should stop here.
@@ -233,10 +234,10 @@ Note that it only fails if the server does not support this call; redundant call
    1. Write a 4-byte uint representing the state's ID.
    2. Read the success flag.
    3. If successful, then the given running algorithm state will be automatically destroyed (like sending message 4) when this client connection dies.
-10. **Set a state grid's values** (*NOTE: only allowed at particular named events! E.g. `@event !GoAhead`*)
+10. **Set a state grid's values** (*Only allowed while the algorithm is paused at a mutable event, i.e. one whose tag starts with `!` like `@event !GoAhead`*)
    1. Write a 4-byte uint representing the state's ID.
    2. Write a 4-byte uint representing the number of bytes incoming (to make sure we agree on grid size).
-   3. Read a success flag, for whether the ID and grid length was valid.
+   3. Read a success flag, for whether the ID and grid length were valid and the state is paused at a mutable event. If unsuccessful then stop.
    4. Write the new grid data
    5. Read another success flag (always 1; it just helps us agree that the message has ended).
 11. (11) **Get the resolution of a state's grid**
