@@ -1,4 +1,4 @@
-# How the Field Bias should handle rewrite actions outside its pathing tree.
+"How the Field Bias should handle rewrite actions outside its pathing tree."
 @bp_enum(BiasFieldOutsideCellMode,
     # Rewrite actions that stray outside the pathing tree are strictly forbidden;
     #    reversing the field does not affect this behavior (they are still forbidden).

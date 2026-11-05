@@ -770,10 +770,10 @@ These biases are inherited by all operations within it
         w b g
         M M M
     ]
-    G => [ M;M;M ;; Y;Y;Y ] # Alternative Julia syntax for multidimensional arrays
+    G => [ M;Y ;; M;Y ;; M;Y ] # Alternative Julia syntax for multidimensional arrays
     B => [
         # Each element that names multiple colors will pick a random one each time
-        wb wb wb
+        {wb} {wb} {wb}
         g  g  g
     ]
     # All other pixels become a 3x2 block of themselves
@@ -798,17 +798,21 @@ For example:
 
 ````julia
 # This rule only works in a grid of at least two dimensions,
-#   and a rewrite rule which uses a factor of 2 for the first two axes.
+#   on an `@upscale` op which uses a factor of 2 for the first two axes.
+#
 # For every grid dimension above 2D, the block is extruded along that dimension.
 # We borrow the 'set' syntax from rewrite rules to allow random outcomes for certain pixels.
 G => [
-  R  BG
+  R  {BG}
   G   M
 ]
 ````
 
-If the grid upscales along more dimensions than the block, that block is extruded along the extra dimensions.
-For example, in the above example rule, a 3D upscale would use that same 2D slice at each Z level.
+For any grid dimensions which the block doesn't cover (or for which the block has size 1),
+  it is extruded along those dimensions.
+For example, in the above rule a 3D upscale would use that same 2D slice at each Z level.
+And if you rewrote the block to use the YZ axes (`[ R;{BG} ;;; G;M ]`),
+  it'd use that block at every X coordinate.
 
 ## `@downscale`
 
@@ -824,10 +828,10 @@ For example, in the above example rule, a 3D upscale would use that same 2D slic
   #   becomes a Red pixel.
   R <= [
     R   G   B
-    w  wgb b
+    w  {wgb} b
   ]
   # A block of Magenta becomes either Green or Blue.
-  GB <= [ M;M;M ;; M;M;M ]
+  {GB} <= [ M;M ;; M;M ;; M;M ]
 
   # Any other blocks fall back to the usual behavior of picking a random pixel.
   # If a grid has a size not evenly divisible by our factor (3x2),
@@ -843,16 +847,18 @@ By default the shrunken pixel chooses a random color from its block,
 The basic syntax is `@downscale (factors...) [rewrite rules]`.
 Factors are the box sizes (i.e. down-scale amounts) along each axis.
 
-The factor for any unmentioned/extra grid axes defaults to 1, a.k.a. no change.
-However if you add an ellipsis to the end of your list, then those extra axes all take on the last factor.
+The factor for any unmentioned/unused grid axes defaults to 1, a.k.a. no change.
+However if you add an ellipsis to the end of your list, then extra grid axes all take on the last factor.
 For example `@downscale (2...)` will halve the size along *all* axes.
 
 The rule syntax is destination, then left-arrow, then source block.
-The source block must match the factor (e.g. downscaling by `(3,2)` requires that each rule have a 3x2 block),
-  though extra dimensions can be omitted and your block will simply be extruded along that axis.
+The source block must match the factor (e.g. downscaling by `(3,2)` requires that each rule have a 3x2 block).
+For any grid dimensions which the block doesn't cover (or for which the block has size 1),
+  it is extruded along those dimensions.
 
 Both destination pixel and source pixels can use Set syntax,
   listing multiple colors at once to indicate a random choice among them.
+If more than one rule can match a given part of the grid, the first match is taken.
 
 ## `@convolve`
 
