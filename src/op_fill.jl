@@ -102,7 +102,7 @@ function markov_algo_run(op::MarkovOpDrawBox{NBox, TRule},
                          inherited_bias_tuple::Tuple{Vararg{AbstractMarkovBias}},
                          inherited_bias_state_tuple::Tuple,
                          grid::CellGrid{NGrid} = algo_state.grid
-                        )::Tuple{Bool, typeof(inherited_bias_state_tuple)} where {NBox, TRule, NGrid}
+                        )::Bool where {NBox, TRule, NGrid}
     box = get_draw_box_pixels(
         op.space, op.box,
         convert(Vec{NGrid, Int32}, vsize(grid)),
@@ -156,11 +156,8 @@ function markov_algo_run(op::MarkovOpDrawBox{NBox, TRule},
                     markov_algo_tick(algo_state, 1)
                 end
             end
-            inherited_bias_state_tuple = markov_bias_update.(
-                inherited_bias_tuple, inherited_bias_state_tuple,
-                Ref(algo), Ref(algo_state),
-                Ref(box), Ref(previous_value_grid)
-            )
+            markov_bias_update_all!(inherited_bias_tuple, inherited_bias_state_tuple,
+                                    algo, algo_state, box, previous_value_grid)
             return mc
 
         end)(mask_grid, mask_level)
@@ -171,7 +168,7 @@ function markov_algo_run(op::MarkovOpDrawBox{NBox, TRule},
     end
 
     markov_algo_tick(algo_state, STANDARD_END_OF_OP_TICK_PRIORITY - 1)
-    return (made_changes, inherited_bias_state_tuple)
+    return made_changes
 end
 
 

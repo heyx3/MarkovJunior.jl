@@ -1061,7 +1061,7 @@ function markov_algo_run(rewrite::MarkovOpRewrite{TRules, TBias, TPriority},
                          inherited_biases::NTuple{NInheritedBiases, AbstractMarkovBias},
                          inherited_bias_states::NTuple{NInheritedBiases, Any},
                          grid::CellGrid{NGridDims} = algo_state.grid
-                        )::Tuple{Bool, typeof(inherited_bias_states)} where {
+                        )::Bool where {
                             TRules, TBias, TPriority,
                             NGridDims, NInheritedBiases
                         }
@@ -1085,11 +1085,13 @@ function markov_algo_run(rewrite::MarkovOpRewrite{TRules, TBias, TPriority},
         @logic_logln("MarkovOpRewrite has no options at the start; canceling...")
         exists(mask_grid) && markov_allocator_release_array(algo_state.allocator, mask_grid)
         close_rewrite_cache(cache, algo_state.allocator)
-        return (false, inherited_bias_states)
+        return false
     end
 
-    biases = tuple(inherited_biases..., rewrite.biases...)
-    bias_states = tuple(inherited_bias_states..., markov_bias_initialize.(rewrite.biases, Ref(algo), Ref(algo_state))...)
+    # Run the rest of the Op with our own biases set up (and eventually cleaned up).
+    return markov_bias_with_states(rewrite.biases, algo, algo_state,
+                                   inherited_biases, inherited_bias_states
+                                  ) do biases, bias_states
     NBiases = length(biases)
 
     threshold = if isnothing(rewrite.threshold)
@@ -1126,15 +1128,8 @@ function markov_algo_run(rewrite::MarkovOpRewrite{TRules, TBias, TPriority},
     try
         made_modifications::Bool = false
         function finish_op()
-            # Clean up this Op's biases.
-            foreach(ntuple(identity, Val(length(rewrite.biases)))) do bias_i
-                markov_bias_cleanup(biases[bias_i + NInheritedBiases],
-                                    bias_states[bias_i + NInheritedBiases],
-                                    algo, algo_state)
-            end
-
             markov_algo_tick(algo_state, STANDARD_END_OF_OP_TICK_PRIORITY)
-            return (made_modifications, ntuple(i -> bias_states[i], Val(NInheritedBiases)))
+            return made_modifications
         end
 
         while true
@@ -1329,11 +1324,8 @@ function markov_algo_run(rewrite::MarkovOpRewrite{TRules, TBias, TPriority},
 
                 # Update inner bookkeeping.
                 update_rewrite_cache!(cache, affected_area)
-                bias_states = markov_bias_update.(
-                    biases, bias_states,
-                    Ref(algo), Ref(algo_state),
-                    Ref(affected_area), Ref(original_values)
-                )
+                markov_bias_update_all!(biases, bias_states, algo, algo_state,
+                                        affected_area, original_values)
 
                 # Issue a tick event.
                 # NOTE: I used to issue less-important priorities for simple rules, but
@@ -1361,6 +1353,9 @@ function markov_algo_run(rewrite::MarkovOpRewrite{TRules, TBias, TPriority},
             markov_allocator_release_array(alloc, prev_1D_pixels)
             close_rewrite_cache(cache, alloc)
         end)(algo_state.allocator)
+    end
+
+    # Finish the bias setup/cleanup logic:
     end
 end
 

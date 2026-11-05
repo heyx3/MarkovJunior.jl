@@ -150,23 +150,24 @@ function MJ.markov_algo_run(
     # The best way to do that is with hidden extra arguments:
     grid::TGrid = algo_state.grid,
     alloc::TAllocator = algo_state.allocator
-)::Tuple{
-    # Your function returns `(changed_anything, new_inherited_bias_states)`.
-    # Return `nothing` for `changed_anything` if your Op is cosmetic
-    #    and could never change the grid (see `MJ.OpChangedGrid`).
-    MJ.OpChangedGrid, typeof(inherited_bias_states)
-} where {
+)::MJ.OpChangedGrid where {
+    # Your function returns whether it changed the grid.
+    # Return `nothing` if your Op is cosmetic and could never change the grid.
     NGridDims, TGrid<:MJ.CellGrid{NGridDims},
     TAllocator<:MarkovJunior.AbstractMarkovAllocator
 }
     VI = Vec{NGridDims, Int32} # typedef for grid index
 
     # Some Ops want to reallocate the grid with a new size or dimensionality.
-    # The proper way to do this is to call our helper function:
-    grid = MJ.markov_algo_new_grid(algo_state, size(grid) .÷ 2) do old_grid, new_grid
+    # The proper way to do this is to call our helper function, which also updates the biases.
+    # Bias states may get replaced in the process;
+    #    if you still need them afterwards, get the new ones with `MJ.markov_bias_current_states()`.
+    grid = MJ.markov_algo_new_grid(algo, algo_state, size(grid) .÷ 2,
+                                   inherited_biases, inherited_bias_states) do old_grid, new_grid
         # (fill in 'new_grid', referencing 'old_grid')
         return nothing
     end
+    inherited_bias_states = MJ.markov_bias_current_states(algo_state)
 
     # Inherited biases need to be notified as you make changes to the grid.
     # You must pass the specific rectangular area you modified, and the grid's previous values there.
@@ -207,17 +208,18 @@ function MJ.markov_algo_run(
         end
         MJ.markov_algo_tick(algo_state, MJ.STANDARD_END_OF_OP_TICK_PRIORITY)
 
-        # Lastly, we need to report any changes and update the Biases to know about our changes.
-        return if isempty(my_area)
-            (false, inherited_bias_states)
+        # Lastly, we need to update the Biases to know about our changes, and report whether we made any.
+        if isempty(my_area)
+            return false
         else
-            (true, MJ.markov_bias_update.(
-                inherited_biases,  inherited_bias_states,
+            MJ.markov_bias_update_all!(
+                inherited_biases, inherited_bias_states,
                 algo, algo_state,
                 # Our update changed the entire grid, more or less
                 BoxI{NGridDims}(min=one(VI), size=vsize(grid)),
                 old_grid
-            ))
+            )
+            return true
         end
     end
 end
@@ -275,7 +277,10 @@ New custom Ops may choose to use biases as well.
 The workflow for new Biases is more complicated than new Ops:
 
 1. "Initialize" the Bias and return the initial state: `markov_bias_initialize`
-2. "Update" the Bias after a grid modification, and return its new state: `markov_bias_update`
+  If the state ever changes afterwards, it must be a mutable object.
+2. "Update" the Bias's state *in place* after a grid modification: `markov_bias_update`
+  1. Optionally, handle the grid being reallocated (e.g. resized) by returning a new state: `markov_bias_new_grid`.
+  By default this cleans up the old state and initializes a new one.
 3. Get the bias value for a potential change to the grid: `markov_bias_calculate`
   The output must be a non-negative number, or `nothing` if the change is strictly forbidden.
 4. "Cleanup" the Bias's allocations: `markov_bias_cleanup`

@@ -211,6 +211,11 @@ mutable struct AlgoState{MinCompileTimeTickPriority}
     #    see https://github.com/JuliaLang/julia/issues/62598)
 
     ticking::MarkovTickSettings{MinCompileTimeTickPriority}
+
+    # The state of every active bias, in the same order as the inherited-bias tuples.
+    bias_state_stack::Vector{Any}
+    # Incremented every time the grid is reallocated (which may also replace bias states).
+    grid_generation::Int
 end
 
 "
@@ -251,24 +256,44 @@ function markov_algo_tick(s::AlgoState, tag::Symbol)
     return nothing
 end
 
-"Reallocates the algorithm grid and issues a tagged event for it"
+"
+Reallocates the algorithm grid, lets the given biases react, then issues a tagged event for it.
+Returns the new grid.
+
+You must pass *all* your inherited biases, as their states get replaced too
+  (get the new ones with `markov_bias_current_states()`).
+Bias states are passed in here for type-stability, even though they're stored in the algo state.
+"
 function markov_algo_new_grid(new_state_setup_fn,
-                              state::AlgoState,
-                              new_size::Union{NTuple{NGrid, Integer}, Vec{NGrid, <:Integer}}
-                             )::CellGrid{NGrid} where {NGrid}
+                              algo::MarkovAlgorithm, state::AlgoState,
+                              new_size::Union{NTuple{NGrid, Integer}, Vec{NGrid, <:Integer}},
+                              biases::NTuple{NBiases, AbstractMarkovBias},
+                              bias_states::NTuple{NBiases, Any}
+                             )::CellGrid{NGrid} where {NGrid, NBiases}
+    @markovjunior_assert(length(state.bias_state_stack) == NBiases &&
+                           all(i -> state.bias_state_stack[i] === bias_states[i], 1:NBiases),
+                         "You must pass all inherited biases to markov_algo_new_grid()")
+
     # Dispatch on the grid and allocator type:
     return ((old_grid, alloc) -> begin
-        # Note that on failure, we'd like the current allocated state to always be avalable.
-
+        # On failure, the old grid should remain the current one.
         new_grid::CellGrid{NGrid} = markov_allocator_acquire_array(alloc, (new_size...), UInt8)
         try
             new_state_setup_fn(old_grid, new_grid)
-            state.grid = new_grid
-        catch e
+        catch
             markov_allocator_release_array(alloc, new_grid)
+            rethrow()
         end
 
+        state.grid = new_grid
+        state.grid_generation += 1
         try
+            # Replace each bias's state as soon as it's ready, so cleanup always sees the live one.
+            foreach(1:NBiases) do i
+                state.bias_state_stack[i] = markov_bias_new_grid(biases[i], bias_states[i],
+                                                                 algo, state, old_grid)
+            end
+
             markov_algo_tick(state, TAG_NEW_GRID)
             return new_grid
         finally
@@ -329,7 +354,7 @@ function markov_algo_run(algo::MarkovAlgorithm,
         else
             fill!(initial_grid, algo.initial_fill)
         end
-        algo_state = AlgoState(initial_grid, rng, allocator, data_store, ch, ticking)
+        algo_state = AlgoState(initial_grid, rng, allocator, data_store, ch, ticking, Any[ ], 0)
 
         try
             @logic_logln "Starting algorithm of size " size(algo_state.grid)
