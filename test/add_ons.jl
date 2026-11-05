@@ -175,7 +175,7 @@ function MJ.markov_algo_run(co::CustomOp, algo::MJ.MarkovAlgorithm, algo_state::
                             # Turn some data into compile-time knowledge.
                             ::Val{N} = Val(ndims(algo_state.grid)),
                             ::Type{TGrid} = typeof(algo_state.grid)
-                           )::Tuple{Bool, typeof(inherited_bias_states)} where {N, TGrid}
+                           )::Bool where {N, TGrid}
     # Look for pragma statements that force checkerboard values over the ones in the Op.
     a = co.a
     b = co.b
@@ -193,8 +193,8 @@ function MJ.markov_algo_run(co::CustomOp, algo::MJ.MarkovAlgorithm, algo_state::
 
     # Technically we are supposed to update biases after we're done changing pixels;
     #    even though we don't use biases in this test we may as well do it right.
-    inherited_bias_states = MJ.markov_allocator_with_array(algo_state.allocator,
-                                                           size(grid), eltype(grid)) do old_grid
+    MJ.markov_allocator_with_array(algo_state.allocator,
+                                   size(grid), eltype(grid)) do old_grid
     #begin
         old_grid .= grid
 
@@ -209,16 +209,14 @@ function MJ.markov_algo_run(co::CustomOp, algo::MJ.MarkovAlgorithm, algo_state::
             MJ.markov_algo_tick(algo_state, 2)
         end
 
-        MJ.markov_bias_update.(
-            inherited_biases, inherited_bias_states,
-            Ref(algo), Ref(algo_state),
-            Ref(BoxI{N}(min=one(MJ.CellIdx{N}), size=vsize(grid))),
-            Ref(old_grid)
-        )
+        MJ.markov_bias_update_all!(inherited_biases, inherited_bias_states,
+                                   algo, algo_state,
+                                   BoxI{N}(min=one(MJ.CellIdx{N}), size=vsize(grid)),
+                                   old_grid)
     end
 
     MJ.markov_algo_tick(algo_state, MJ.STANDARD_END_OF_OP_TICK_PRIORITY)
-    return (!isempty(grid), inherited_bias_states)
+    return !isempty(grid)
 end
 MJ.dsl_format(co::CustomOp) = "@cust $(MJ.dsl_format(co.a)) $(MJ.dsl_format(co.b))"
 function MJ.parse_markovjunior_op(::Val{Symbol("@cust")},
@@ -287,16 +285,16 @@ end
 function MJ.markov_algo_run(op::CustomOp2{N}, algo::MJ.MarkovAlgorithm, algo_state::MJ.AlgoState,
                             inherited_biases::NTuple{NB, MJ.AbstractMarkovBias},
                             inherited_bias_states::NTuple{NB, Any}
-                           )::Tuple{Bool, typeof(inherited_bias_states)} where {N, NB}
+                           )::Bool where {N, NB}
     if any(op.location <= 0) || any(op.location > vsize(algo_state.grid))
-        return (false, inherited_bias_states)
+        return false
     end
 
     # Technically we are supposed to update biases after we're done changing pixels;
     #    even though we don't use biases in this test we may as well do it right.
-    inherited_bias_states = MJ.markov_allocator_with_array(algo_state.allocator,
-                                                           ntuple(i->1, ndims(algo_state.grid)),
-                                                           eltype(algo_state.grid)) do old_grid
+    MJ.markov_allocator_with_array(algo_state.allocator,
+                                   ntuple(i->1, ndims(algo_state.grid)),
+                                   eltype(algo_state.grid)) do old_grid
     #begin
         old_grid[1] = algo_state.grid[op.location]
 
@@ -304,15 +302,13 @@ function MJ.markov_algo_run(op::CustomOp2{N}, algo::MJ.MarkovAlgorithm, algo_sta
         algo_state.grid[op.location] = counter[]
         counter[] += 1
 
-        MJ.markov_bias_update.(
-            inherited_biases, inherited_bias_states,
-            Ref(algo), Ref(algo_state),
-            Ref(BoxI{N}(min=one(MJ.CellIdx{N}), size=vsize(algo_state.grid))),
-            Ref(old_grid)
-        )
+        MJ.markov_bias_update_all!(inherited_biases, inherited_bias_states,
+                                   algo, algo_state,
+                                   BoxI{N}(min=one(MJ.CellIdx{N}), size=vsize(algo_state.grid)),
+                                   old_grid)
     end
 
-    return (true, inherited_bias_states)
+    return true
 end
 MJ.dsl_format(co2::CustomOp2) = "@cust2 $(iter_join(co2.location, " ")...)"
 function MJ.parse_markovjunior_op(::Val{Symbol("@cust2")},

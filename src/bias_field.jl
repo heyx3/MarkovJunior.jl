@@ -51,12 +51,12 @@ const TFieldBiasAnchorBuffers{NGrid} = Tuple{
     Array{Bool, NGrid},
     FloodFillAllocations{VecI{NGrid}, Set{VecI{NGrid}}, Vector{VecI{NGrid}}}
 }
-struct MarkovBiasField_State{NGrid, BHasPathCells, BHasAnchors,
-                             TAnchorBuffers<:Optional{TFieldBiasAnchorBuffers{NGrid}}}
-    distance_field::Array{UInt32, NGrid} # typemax represents "no path"
-    anchor_buffers::TAnchorBuffers
+mutable struct MarkovBiasField_State{NGrid, BHasPathCells, BHasAnchors,
+                                     TAnchorBuffers<:Optional{TFieldBiasAnchorBuffers{NGrid}}}
+    const distance_field::Array{UInt32, NGrid} # typemax represents "no path"
+    const anchor_buffers::TAnchorBuffers
     largest_dist::UInt32
-    biases_buffer::Vector{Float32}
+    const biases_buffer::Vector{Float32}
 end
 
 println("#TODO: Plan a switch for field() bias from djikstra maps to BFS, which should be far faster")
@@ -213,13 +213,7 @@ function markov_bias_initialize(f::MarkovBiasField, algo::MarkovAlgorithm,
             zero(UInt32),
             markov_allocator_acquire_array(alloc, (), Float32)
         )
-        # Setfield package isn't working properly here, for some reason.
-        state = TState(
-            state.distance_field,
-            state.anchor_buffers,
-            rebuild_distance_field(f, state, algo_state.grid),
-            state.biases_buffer
-        )
+        state.largest_dist = rebuild_distance_field(f, state, algo_state.grid)
         return state
     end
     return run_with_alloc(algo_state.allocator)
@@ -229,10 +223,10 @@ function markov_bias_cleanup(f::MarkovBiasField, s::MarkovBiasField_State,
     # We have a lot to release, so dispatch on the allocator type.
     function run_with_alloc(alloc::TAlloc) where {TAlloc}
         markov_allocator_release_array(alloc, s.distance_field)
+        markov_allocator_release_array(alloc, s.biases_buffer)
         if exists(s.anchor_buffers)
             markov_allocator_release_array(alloc, s.anchor_buffers[1])
             markov_allocator_release_array(alloc, s.anchor_buffers[2].interesting_nodes)
-            markov_allocator_release_array(alloc, s.biases_buffer)
             markov_allocator_release_set(alloc, s.anchor_buffers[2].visited_nodes)
         end
         return nothing
@@ -250,16 +244,10 @@ function markov_bias_update(field::MarkovBiasField, state::MarkovBiasField_State
                                     (algo_state.grid[v] for v in min_inclusive(subset):max_inclusive(subset)))
         relevant_cell_types = union(field.sources, field.paths, field.anchors)
         if !isempty(intersect(involved_cell_types, relevant_cell_types))
-            # Setfield dislikes our state type for some reason.
-            state = typeof(state)(
-                state.distance_field,
-                state.anchor_buffers,
-                rebuild_distance_field(field, state, algo_state.grid),
-                state.biases_buffer
-            )
+            state.largest_dist = rebuild_distance_field(field, state, algo_state.grid)
         end
     end
-    return state
+    return nothing
 end
 function markov_bias_calculate(field::MarkovBiasField, state::MarkovBiasField_State{N, BPath},
                                algo::MarkovAlgorithm, algo_state::AlgoState,
