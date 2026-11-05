@@ -140,11 +140,13 @@ This is caught at the top of the algorithm loop; all Ops/Biases/etc.
 struct ErrorCancelAlgo <: Exception end
 Base.showerror(io::IO, ::ErrorCancelAlgo) = error("ErrorCancelAlgo should never go uncaught!")
 
-# Which tagged events get skipped instead of being sent to users.
+"""
+Which tagged events get skipped instead of being sent to users.
 # The important built-in ones (new grid, and canceled/completed) are never skipped.
 #   * `none_skippable`: all tagged events happen.
 #   * `immutable_skippable`: only mutable events (see `is_mutable_event_tag()`) happen.
 #   * `all_skippable`: no other tagged events happen.
+"""
 @bp_enum(SkipTaggedEvents,
     none_skippable,
     immutable_skippable,
