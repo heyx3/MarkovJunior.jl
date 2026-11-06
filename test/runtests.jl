@@ -20,6 +20,7 @@ include("utils.jl")
 include("parsing.jl")
 include("md_symmetries.jl")
 include("sequence.jl")
+include("scale.jl")
 include("add_ons.jl")
 include("ipc.jl")
 

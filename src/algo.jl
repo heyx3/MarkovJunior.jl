@@ -277,7 +277,7 @@ function markov_algo_new_grid(new_state_setup_fn,
     # Dispatch on the grid and allocator type:
     return ((old_grid, alloc) -> begin
         # On failure, the old grid should remain the current one.
-        new_grid::CellGrid{NGrid} = markov_allocator_acquire_array(alloc, (new_size...), UInt8)
+        new_grid::CellGrid{NGrid} = markov_allocator_acquire_array(alloc, Tuple(new_size), UInt8)
         try
             new_state_setup_fn(old_grid, new_grid)
         catch

@@ -79,6 +79,7 @@ include("op_rewrite.jl")
 include("op_fill.jl")
 include("op_sequence.jl")
 include("op_event.jl")
+include("op_scale.jl")
 include("bias_temperature.jl")
 include("bias_field.jl")
 export @markovjunior, markov_algo_parse,

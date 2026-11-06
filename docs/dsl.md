@@ -794,6 +794,9 @@ The rewrite rules can be nothing, or a single rule, or a `begin ... end` block o
 If no rules match a source pixel, that pixel keeps its value during upscaling.
 Rules are formatted as a source color, arrow, and destination block,
   with individual destination values being a single color OR a group whose value is picked randomly each time.
+The source can be one color or a `{...}` set of colors; the first matching rule is used.
+A wildcard `_` in a block copies the source pixel's color.
+Each block must match the factor along each axis, or have size 1 there to be extruded.
 For example:
 
 ````julia
@@ -821,6 +824,9 @@ And if you rewrote the block to use the YZ axes (`[ R;{BG} ;;; G;M ]`),
 #   chosen randomly from that block.
 @downscale (2, 2)
 
+# Replace each 2x2 block with its most common color.
+@downscale (2, 2) common
+
 # Replace each 3x2 block of pixels with a single pixel,
 #   usually with random choice but certain blocks have more specific outcomes.
 @downscale (3, 2) begin
@@ -835,7 +841,19 @@ And if you rewrote the block to use the YZ axes (`[ R;{BG} ;;; G;M ]`),
 
   # Any other blocks fall back to the usual behavior of picking a random pixel.
   # If a grid has a size not evenly divisible by our factor (3x2),
-  #    there are partial blocks at its ends which all get the default (random) behavior.
+  #    there are partial blocks at its ends which can only match `has()` rules (see below)
+  #    and otherwise get the fallback behavior.
+end
+
+# Make a minimap that keeps small but important details.
+@downscale (4, 4) begin
+  # Any block containing a town becomes a town, then any block containing a road becomes a road.
+  w <= has(w)
+  N <= has(N)
+  # Any other block with water in it becomes Blue or Teal.
+  {BT} <= has(BT)
+  # Everything else takes its most common color.
+  common
 end
 ````
 
@@ -845,6 +863,9 @@ By default the shrunken pixel chooses a random color from its block,
   but you may add rewrite rules to catch certain patterns and map to a specific color.
 
 The basic syntax is `@downscale (factors...) [rewrite rules]`.
+The rules can be nothing, a single rule, or a `begin ... end` block of rules,
+  optionally ending with a fallback (see below).
+A fallback with no rules can be written on its own, for example `@downscale (2, 2) common`.
 Factors are the box sizes (i.e. down-scale amounts) along each axis.
 
 The factor for any unmentioned/unused grid axes defaults to 1, a.k.a. no change.
@@ -856,9 +877,27 @@ The source block must match the factor (e.g. downscaling by `(3,2)` requires tha
 For any grid dimensions which the block doesn't cover (or for which the block has size 1),
   it is extruded along those dimensions.
 
-Both destination pixel and source pixels can use Set syntax,
-  listing multiple colors at once to indicate a random choice among them.
+Both destination pixel and source pixels can use Set syntax, listing multiple colors at once.
+In the destination this means a random choice among them, while in the source it means any of them will match.
+A wildcard `_` in the source block matches any color; it isn't allowed as the destination.
 If more than one rule can match a given part of the grid, the first match is taken.
+
+Instead of a source block, a rule can use `has(colors)` to match any block containing at least one of those colors,
+  for example `w <= has(w)` or `R <= has(MP)`.
+Note that the colors are written without braces.
+Unlike block rules, these can also match the partial blocks at the grid's far edges.
+A list of them gives you a priority order, such as "any block with a town becomes a town,
+  otherwise any block with a road becomes a road".
+
+The fallback goes after all the rules, and decides the color of blocks that no rule matches:
+
+* `random` (the default): a random pixel from the block.
+* `common`: the block's most common color.
+* `rare`: the block's least common color (among the colors it has).
+* `first`: the block's first pixel (its minimum corner).
+* `always(colors)`: randomly selects one of the given colors. E.g. `always(g)`; `always(gb)`.
+
+Ties within the fallback are broken randomly.
 
 ## `@convolve`
 

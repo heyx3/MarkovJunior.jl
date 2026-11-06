@@ -84,7 +84,10 @@ function markovjunior_run_gui()
             gui_editor_font = gui_add_font_from_memory_ttf(
                 get_editor_font_bytes(), [ 19 ]
             )[1]
-            gui = GuiRunner(memory, gui_editor_font)
+            gui_title_font = gui_add_font_from_memory_ttf(
+                get_editor_font_bytes(), [ 32 ]
+            )[1]
+            gui = GuiRunner(memory, gui_editor_font, gui_title_font)
 
             setup_gui_tool_inputs()
         end

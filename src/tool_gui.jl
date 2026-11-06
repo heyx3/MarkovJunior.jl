@@ -188,11 +188,16 @@ mutable struct GuiRunner
     algorithm::MarkovAlgorithm
     algorithm_channel::Optional{AlgoCommsChannel}
     algorithm_grid::CellGrid
+    algorithm_grid_initial_size::Tuple{Vararg{Int}}
     algorithm_is_finished::Bool
+    algorithm_last_named_event::Symbol
+    algorithm_named_event_display_seconds_left::Float32
 
     current_seed::UInt64
     current_seed_display::String
     next_seed::GuiText
+
+    title_font::Ptr{CImGui.LibCImGui.ImFont}
 
     next_algorithm::GuiText
     next_algorithm_font::Ptr{CImGui.LibCImGui.ImFont}
@@ -223,7 +228,8 @@ mutable struct GuiRunner
 end
 
 function GuiRunner(memory::GuiMemory,
-                   algorithm_editor_font::Ptr{CImGui.LibCImGui.ImFont})
+                   algorithm_editor_font::Ptr{CImGui.LibCImGui.ImFont},
+                   title_font::Ptr{CImGui.LibCImGui.ImFont})
     initial_error_msg::String = ""
 
     available_scenes = Vector{String}()
@@ -245,11 +251,14 @@ function GuiRunner(memory::GuiMemory,
         memory,
         0.0f0,
 
-        parsed_algo, nothing, zeros(UInt8, 1, 1), true,
+        parsed_algo, nothing, zeros(UInt8, 1, 1), (1, 1), true,
+        Symbol(), 0.0f0,
 
         # Current seed will be parsed+stringified in a moment; we just need the textbox to be set up.
         zero(UInt64), "[UNINITIALIZED]",
         GuiText(string(memory.current_seed_src)),
+
+        title_font,
 
         GuiText(memory.current_scene_src,
             is_multiline=true,
@@ -418,7 +427,8 @@ function update_gui_runner_texture_2D(runner::GuiRunner)
             ),
             array,
             sampler = TexSampler{2}(
-                pixel_filter = PixelFilters.rough
+                pixel_filter = PixelFilters.rough,
+                pixel_min_filter = PixelFilters.smooth
             ),
             n_mips = 1
         )
@@ -477,7 +487,7 @@ end
 function reset_gui_runner_algo(runner::GuiRunner,
                                parse_new_seed::Bool, parse_new_algorithm::Bool, update_resolution::Bool,
                                allow_run_to_end::Bool)
-    old_grid_size::Tuple = size(runner.algorithm_grid)
+    old_grid_size::Tuple = runner.algorithm_grid_initial_size
     new_resolution::Vector{Int32} = [ Int32.(old_grid_size)... ]
     new_dims = length(old_grid_size)
 
@@ -553,6 +563,7 @@ function reset_gui_runner_algo(runner::GuiRunner,
             break
         end
     end
+    runner.algorithm_grid_initial_size = size(runner.algorithm_grid)
     if allow_run_to_end && runner.memory.prefers_running_to_end
         finish_gui_runner_algo(runner, Ref(false))
     end
@@ -586,13 +597,14 @@ function step_gui_runner_algo(runner::GuiRunner, n_iterations::Int)
         try # Catch errors and put them in the window pane
             for iter_i in 1:n_iterations
                 # Pull messages until we get an actual tick.
-                while !runner.algorithm_is_finished
+                while !runner.algorithm_is_finished && (runner.algorithm_named_event_display_seconds_left <= 0)
                     put!(runner.algorithm_channel, zero(Int))
                     next_msg = take!(runner.algorithm_channel)
 
                     if next_msg isa Int
                         break
                     elseif next_msg in (TAG_ALGO_COMPLETED, TAG_ALGO_CANCELED)
+                        # Copy the grid out, then let it and the algorithm run deallocate themselves.
                         runner.algorithm_grid = copy(runner.algorithm_grid)
                         if isopen(runner.algorithm_channel)
                             put!(runner.algorithm_channel, zero(Int))
@@ -601,8 +613,12 @@ function step_gui_runner_algo(runner::GuiRunner, n_iterations::Int)
                         break
                     elseif next_msg == TAG_NEW_GRID
                         runner.algorithm_grid = take!(runner.algorithm_channel)
+                    elseif next_msg == TAG_ALGO_STARTING
+                        # Ignore this tag.
                     elseif next_msg isa Symbol
-                        #TODO: Optionally halt and notify the GUI about this user event
+                        # Display the event name and pause the runner for a bit.
+                        runner.algorithm_last_named_event = next_msg
+                        runner.algorithm_named_event_display_seconds_left = 5.0f0
                     else
                         error("Unhandled: ", typeof(next_msg), "(", next_msg, ")")
                     end
@@ -825,11 +841,13 @@ function gui_main(runner::GuiRunner, delta_seconds::Float32, cam_input::Cam3D_In
         else
             error("Unhandled: ", typeof(runner.rendering))
         end
-        img_cursor_pos = CImGui.GetCursorScreenPos();
+        img_cursor_pos = CImGui.GetCursorScreenPos()
         CImGui.Image(gui_tex_handle(display_tex),
                      convert(gVec2, img_size),
                      gVec2(0, flip_uv_y ? 1 : 0), gVec2(1, flip_uv_y ? 0 : 1),
                      gVec4(1, 1, 1, 1), gVec4(0, 0, 0, 0))
+        after_img_cursor_pos = CImGui.GetCursorScreenPos()
+
         # Draw an invisible button over the image, and detect when the user click-drags it.
         CImGui.SetCursorScreenPos(img_cursor_pos)
         CImGui.InvisibleButton("RendererMouseCapture", convert(gVec2, img_size))
@@ -851,18 +869,41 @@ function gui_main(runner::GuiRunner, delta_seconds::Float32, cam_input::Cam3D_In
             end
         end
 
+        # Draw the current named event, if applicable.
+        if runner.algorithm_named_event_display_seconds_left > 0
+            CImGui.SetCursorScreenPos(img_cursor_pos)
+            CImGui.Image(gui_tex_handle(service_BasicGraphics().white_pixel),
+                         convert(gVec2, img_size),
+                         gVec2(0, 0), gVec2(1, 1),
+                         gVec4(0, 0, 0, 0.6))
+
+            CImGui.SetCursorScreenPos(img_cursor_pos.x + (img_size.x * 0.2),
+                                      img_cursor_pos.y + (img_size.y * 0.2))
+            gui_with_font(runner.title_font) do
+                CImGui.Text("NAMED EVENT:")
+                CImGui.Dummy(1, 1); CImGui.SameLine(0, 20 + (img_size.x * 0.2))
+                CImGui.Text(string(runner.algorithm_last_named_event))
+            end
+
+            CImGui.SetCursorScreenPos(after_img_cursor_pos)
+
+            runner.algorithm_named_event_display_seconds_left -= delta_seconds
+        end
+
         CImGui.Separator()
 
         # Execute Play logic.
         if runner.memory.is_playing && !gui_runner_is_finished(runner)
-            runner.time_till_next_tick -= delta_seconds
-            n_ticks = 0
-            while runner.time_till_next_tick <= 0
-                n_ticks += 1
-                grid_has_changed[] = true
-                runner.time_till_next_tick += 1.0f0 / runner.memory.ticks_per_second
+            if runner.algorithm_named_event_display_seconds_left <= 0
+                runner.time_till_next_tick -= delta_seconds
+                n_ticks = 0
+                while runner.time_till_next_tick <= 0
+                    n_ticks += 1
+                    grid_has_changed[] = true
+                    runner.time_till_next_tick += 1.0f0 / runner.memory.ticks_per_second
+                end
+                step_gui_runner_algo(runner, n_ticks)
             end
-            step_gui_runner_algo(runner, n_ticks)
         end
 
         # Runner control panel, diagram below:
@@ -900,8 +941,10 @@ function gui_main(runner::GuiRunner, delta_seconds::Float32, cam_input::Cam3D_In
             CImGui.Dummy(0, BUTTON_VPAD_RUN_PLAIN)
             CImGui.SetNextItemWidth(-1)
             if CImGui.Button("Step", BUTTON_SIZE_RUN_PLAIN)
-                step_gui_runner_algo(runner, 1)
-                grid_has_changed[] = true
+                if runner.algorithm_named_event_display_seconds_left <= 0
+                    step_gui_runner_algo(runner, 1)
+                    grid_has_changed[] = true
+                end
             end
         CImGui.TableNextColumn()
         CImGui.TableNextColumn()
@@ -919,17 +962,32 @@ function gui_main(runner::GuiRunner, delta_seconds::Float32, cam_input::Cam3D_In
         CImGui.TableNextColumn()
             CImGui.Dummy(0, BUTTON_VPAD_RUN_PLAIN)
             CImGui.SetNextItemWidth(-1)
-            if CImGui.Button("Jump", BUTTON_SIZE_RUN_PLAIN)
+            # If displaying a named event, "Jump" becomes "Dismiss" and shifts to the next column.
+            if (runner.algorithm_named_event_display_seconds_left <= 0) &&
+                CImGui.Button("Jump", BUTTON_SIZE_RUN_PLAIN)
+            #begin
                 step_gui_runner_algo(runner, convert(Int, runner.memory.ticks_per_jump))
                 grid_has_changed[] = true
             end
         CImGui.TableNextColumn()
             CImGui.Dummy(0, UNITS_VPAD)
             CImGui.SetNextItemWidth(-1)
-            @c CImGui.DragInt("##TicksPerJump", &runner.memory.ticks_per_jump, 1.0, 1, 999999999, "%d")
+            # If a named event is shown, the "Jump" feature is replaced with "Dismiss".
+            if runner.algorithm_named_event_display_seconds_left <= 0
+                @c CImGui.DragInt("##TicksPerJump", &runner.memory.ticks_per_jump, 1.0, 1, 999999999, "%d")
+            end
         CImGui.TableNextColumn()
             CImGui.Dummy(0, UNITS_VPAD)
-            CImGui.Text("Ticks")
+            # If a named event is shown, the "Jump" feature is replaced with "Dismiss".
+            if runner.algorithm_named_event_display_seconds_left > 0
+                CImGui.Dummy(0, BUTTON_VPAD_RUN_PLAIN)
+                CImGui.SetNextItemWidth(-1)
+                if CImGui.Button("Dismiss", BUTTON_SIZE_RUN_PLAIN)
+                    runner.algorithm_named_event_display_seconds_left = 0
+                end
+            else
+                CImGui.Text("Ticks")
+            end
         CImGui.TableNextColumn()
             CImGui.SetNextItemWidth(-1)
             if gui_with_style(() -> CImGui.Button("Profile", BUTTON_SIZE_RUN_SPECIAL),
@@ -1085,23 +1143,23 @@ function gui_main(runner::GuiRunner, delta_seconds::Float32, cam_input::Cam3D_In
                 deleteat!(runner.memory.next_resolution, length(runner.memory.next_resolution))
             end
             if runner.memory.next_dimensionality == 2
-                CImGui.InputInt2("Resolution", Ref(runner.memory.next_resolution, 1))
+                CImGui.InputInt2("(initial) Resolution", Ref(runner.memory.next_resolution, 1))
             elseif runner.memory.next_dimensionality == 3
-                CImGui.InputInt3("Resolution", Ref(runner.memory.next_resolution, 1))
+                CImGui.InputInt3("(initial) Resolution", Ref(runner.memory.next_resolution, 1))
             else
                 CImGui.Text("UNHANDLED dim $(runner.memory.next_dimensionality)")
             end
             runner.memory.next_resolution .= max.(runner.memory.next_resolution, Ref(one(Int32)))
         end
         resolution_is_different::Bool =
-            (runner.memory.next_dimensionality != ndims(runner.algorithm_grid)) ||
+            (runner.memory.next_dimensionality != length(runner.algorithm_grid_initial_size)) ||
             any(t -> t[1]!=t[2],
-                zip(runner.memory.next_resolution, size(runner.algorithm_grid)))
+                zip(runner.memory.next_resolution, runner.algorithm_grid_initial_size))
         CImGui.SameLine(0, 10)
         gui_with_style(CImGui.LibCImGui.ImGuiCol_Button, v3f(0.2, 0.1, 0.1), unchanged=resolution_is_different) do
          gui_with_style(CImGui.LibCImGui.ImGuiCol_ButtonHovered, v3f(0.2, 0.1, 0.1), unchanged=resolution_is_different) do
           gui_with_style(CImGui.LibCImGui.ImGuiCol_ButtonActive, v3f(0.2, 0.1, 0.1), unchanged=resolution_is_different) do
-            if CImGui.Button("Reset with new size", v2f(150, 25)) && resolution_is_different
+            if CImGui.Button("Reset with new Res", v2f(150, 25)) && resolution_is_different
                 reset_gui_runner_algo(runner, false, false, true, true)
                 grid_has_changed[] = true
             end
