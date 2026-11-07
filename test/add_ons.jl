@@ -206,16 +206,16 @@ function MJ.markov_algo_run(co::CustomOp, algo::MJ.MarkovAlgorithm, algo_state::
                 b
             end
 
-            MJ.markov_algo_tick(algo_state, 2)
+            MJ.markov_opalgo_tick(algo_state, 2)
         end
 
-        MJ.markov_bias_update_all!(inherited_biases, inherited_bias_states,
-                                   algo, algo_state,
-                                   BoxI{N}(min=one(MJ.CellIdx{N}), size=vsize(grid)),
-                                   old_grid)
+        MJ.markov_opbias_update_all!(inherited_biases, inherited_bias_states,
+                                     algo, algo_state,
+                                     BoxI{N}(min=one(MJ.CellIdx{N}), size=vsize(grid)),
+                                     old_grid)
     end
 
-    MJ.markov_algo_tick(algo_state, MJ.STANDARD_END_OF_OP_TICK_PRIORITY)
+    MJ.markov_opalgo_tick(algo_state, MJ.STANDARD_END_OF_OP_TICK_PRIORITY)
     return !isempty(grid)
 end
 MJ.dsl_format(co::CustomOp) = "@cust $(MJ.dsl_format(co.a)) $(MJ.dsl_format(co.b))"
@@ -302,10 +302,10 @@ function MJ.markov_algo_run(op::CustomOp2{N}, algo::MJ.MarkovAlgorithm, algo_sta
         algo_state.grid[op.location] = counter[]
         counter[] += 1
 
-        MJ.markov_bias_update_all!(inherited_biases, inherited_bias_states,
-                                   algo, algo_state,
-                                   BoxI{N}(min=one(MJ.CellIdx{N}), size=vsize(algo_state.grid)),
-                                   old_grid)
+        MJ.markov_opbias_update_all!(inherited_biases, inherited_bias_states,
+                                     algo, algo_state,
+                                     BoxI{N}(min=one(MJ.CellIdx{N}), size=vsize(algo_state.grid)),
+                                     old_grid)
     end
 
     return true

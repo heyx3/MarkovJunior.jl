@@ -30,9 +30,9 @@ function markov_algo_run(sequence::MarkovOpSequence{NSelfBiases},
         return isempty(sequence.ops) ? nothing : false
     end
 
-    return markov_bias_with_states(sequence.biases, algo, algo_state,
-                                   inherited_biases, inherited_bias_states
-                                  ) do all_biases, all_bias_states
+    return markov_opbias_with_new_biases(sequence.biases, algo, algo_state,
+                                         inherited_biases, inherited_bias_states
+                                        ) do all_biases, all_bias_states
         repetitions_left = _repetitions_left
         known_grid_generation::Int = algo_state.grid_generation
 
@@ -57,10 +57,10 @@ function markov_algo_run(sequence::MarkovOpSequence{NSelfBiases},
                     sequence.ops[op_i], algo, algo_state,
                     all_biases, all_bias_states
                 )
-                # If the grid was reallocated, bias states may have been replaced.
+                # If the grid was reallocated, bias states need to be re-cached.
                 if algo_state.grid_generation != known_grid_generation
                     known_grid_generation = algo_state.grid_generation
-                    all_bias_states = markov_bias_current_states(algo_state)
+                    all_bias_states = markov_opbias_current_states(algo_state)
                 end
 
                 stop_early::Bool = false
@@ -83,10 +83,12 @@ function markov_algo_run(sequence::MarkovOpSequence{NSelfBiases},
             end
         end
 
-        markov_algo_tick(algo_state, STANDARD_END_OF_OP_TICK_PRIORITY + 1)
+        markov_opalgo_tick(algo_state, STANDARD_END_OF_OP_TICK_PRIORITY + 1)
         return result
     end
 end
+
+markov_op_reallocates_grid(s::MarkovOpSequence) = any(markov_op_reallocates_grid, s.ops)
 
 dsl_format(s::MarkovOpSequence) = string(
     "@sequence ",

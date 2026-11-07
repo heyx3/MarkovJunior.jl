@@ -209,6 +209,22 @@ function with_parser_stacktrace(to_do, inputs::MacroParserInputs, new_stack_entr
 end
 
 "
+Raises a parse error if any of the given Ops might reallocate the grid (see `markov_op_reallocates_grid()`).
+Scoped Ops (like `@within_box`) should call this on their inner Ops,
+  because they run them on a view of the grid.
+"
+function check_markovjunior_scoped_ops(inputs::MacroParserInputs, loc, op_name::String,
+                                       ops::Vector{AbstractMarkovOp})
+    i = findfirst(markov_op_reallocates_grid, ops)
+    if exists(i)
+        raise_parse_error(loc, inputs,
+                          "`", op_name, "` runs its Ops on a view of the grid, so they can't reallocate it; ",
+                            "but inner Op ", i, " might (e.g. through `@upscale` or `@downscale`)")
+    end
+    return nothing
+end
+
+"
 Processes each of the given lines, tracking the most recent LineNumberNode.
 
 First it lets your lambda handle the line, if you gave one.

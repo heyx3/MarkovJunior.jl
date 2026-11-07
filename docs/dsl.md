@@ -492,6 +492,13 @@ These different modes are *roughly* normalized,
   * `deviation` (the amount of variation between pixels in the rewrite)
   * `diff` (max bias - min bias)
 
+  `deviation` and `diff` are tuned for the handful of pixels in a rewrite rule,
+    and behave poorly for Ops that bias whole regions at once.
+  `diff` saturates to the full range above roughly 6 pixels,
+    and `deviation` tends to drown out other biases since large regions usually have a wide spread of distances.
+  `min` and `max` also favor bigger regions, which have more chances to contain an extreme pixel;
+    `average` is the safest choice there.
+
 #### Bias: Solve
 
 A bias of `solve(b->w)` will try to turn each `b` pixel into `w`.
@@ -710,6 +717,7 @@ The parameters are as follows:
 * `S` is the kind of space covered by the box, either:
   * `uv` for continuous space where 0 is the grid's min corner, 1 is the max corner,
 and box size is always at least one pixel (so you can pass `size=0` to draw exactly one pixel).
+For example on an 8-pixel axis, `uv(min=0, size=0.5)` covers pixels 1-4 and `uv(min=0.5, size=0.5)` covers 5-8.
   * `pixel` for integer pixel coordinates (starting at 1).
 You can still provide fractional values, in which case coordinates will be rounded.
 * `A` and `B` are the parameters defining the box, chosen among the following:
@@ -757,6 +765,78 @@ The optional last argument to a sequence is a bias statement or block of stateme
   identical to [bias for `@rewrite` statements](#bias-and-weights).
 These biases are inherited by all operations within it
   (primarily `@rewrite` but other ops may respect `bias` settings too).
+
+## `@within_box`
+
+````julia
+# Grow a maze in the middle half of the grid, leaving the rest alone.
+@within_box uv(min=0.25, size=0.5) begin
+    @fill 'w' uv(center=0.5, size=0) # The center of the box, not the grid
+    @rewrite wbb => wgw
+    @rewrite g => w
+end
+````
+
+The op `@within_box [inherit_biases] S(A=N, B=M) begin ... end` runs a sequence of operations
+  on one box-shaped part of the grid, as if that part were the entire grid.
+The box is written exactly like [the box for `@fill`](#fill).
+
+Inner operations can't see or modify anything outside the box,
+  and everything relative to the grid's size is now relative to the box:
+  `uv` boxes, thresholds like `area/10`, and so on.
+Operations can be nested, including other `@within_box` ops.
+
+By default, biases from outside (e.g. on an enclosing `@sequence`) don't apply within the box,
+  though they are updated afterwards with any changes the box made.
+Biases attached to operations inside the box only see the box.
+Add `inherit_biases` to apply the outside biases within the box too; separate copies of them are made
+  which only see the box, while the originals are updated afterwards like normal.
+
+The inner operations may not reallocate the grid, so `@upscale` and `@downscale` aren't allowed in there.
+
+## `@within_regions`
+
+````julia
+# Decorate the 3 rooms (connected areas of Gray/Teal floor) farthest from the entrance,
+#    and fill every Red lake with water.
+@within_regions 3 begin
+    gT => begin
+        @fill 'Y' uv(center=0.5, size=0) # A light in the middle of the room's bounding box
+        @rewrite (area/20) g => N
+    end
+    R => @rewrite R => B
+end field(-O)
+````
+
+The op `@within_regions [threshold] [inherit_biases] ['C'] begin ... end [bias]`
+  finds every connected region of certain colors, then runs a sequence of operations within each one,
+  as if that region's bounding box were the entire grid (just like [`@within_box`](#within_box)).
+The regions are found once at the start, so changes made within one region don't affect the others.
+Cells are connected along each axis, not diagonally.
+
+Each rule is formatted as some colors, an arrow, then one operation or a `begin ... end` block of them.
+A region is a connected group of cells whose colors are all in the same rule, e.g. `gT` above.
+Each color can only appear in one rule.
+
+Regions usually aren't box-shaped, so the other cells in their bounding box are temporarily replaced
+  with "dummy" black pixels while the region's operations run, and put back afterwards.
+You can pick a different color for these dummy pixels with the `'C'` argument.
+Keep them in mind when writing the inner operations, e.g. `b => w` will also change the dummy pixels
+  (to no effect, as they're discarded), and `uv` boxes may land on a dummy pixel instead of the region.
+If you need inner operations to see something about the region's surroundings,
+  mark those cells beforehand with another color and include it in the rule.
+
+The optional `threshold` limits how many regions are run, identical to [the Threshold for `@rewrite`](#threshold);
+  by default every region runs.
+The order of regions is random, unless the op has biases (including ones inherited from outer `@sequence`s).
+In that case, like `@rewrite`, the most desirable region is always picked next.
+A bias may also forbid regions entirely, and the op stops early if every remaining region is forbidden.
+Biases are recalculated before each pick, so `live` biases can react to the regions picked before.
+Region biases work best with the default `combo` for fields (see [the field bias](#bias-field)).
+
+The op's biases and inherited biases are only used to choose regions, and don't apply within them,
+  unless you add `inherit_biases` (same as for `@within_box`).
+As with `@within_box`, the inner operations may not reallocate the grid.
 
 ## `@upscale`
 

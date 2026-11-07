@@ -157,8 +157,10 @@ function markov_algo_run(op::MarkovOpUpscale{NBlockDims},
     any_rule_applied = Ref(false)
 
     # No per-pixel ticks, because the new grid isn't visible externally until it's swapped in.
-    markov_algo_new_grid(algo, algo_state, new_size,
-                         inherited_biases, inherited_bias_states) do old_grid, new_grid
+    (grid, inherited_bias_states) = markov_opalgo_new_grid(
+        algo, algo_state, new_size,
+        inherited_biases, inherited_bias_states
+    ) do old_grid, new_grid
         for old_pos::VI in one(VI):vsize(old_grid)
             old_value::UInt8 = old_grid[old_pos]
             new_min = ((old_pos - one(Int32)) * scale_factor) + one(Int32)
@@ -180,9 +182,11 @@ function markov_algo_run(op::MarkovOpUpscale{NBlockDims},
         end
     end
 
-    markov_algo_tick(algo_state, STANDARD_END_OF_OP_TICK_PRIORITY)
+    markov_opalgo_tick(algo_state, STANDARD_END_OF_OP_TICK_PRIORITY)
     return (scale_factor != one(VI)) || any_rule_applied[]
 end
+
+markov_op_reallocates_grid(::MarkovOpUpscale) = true
 
 
 dsl_format(r::UpscaleRule) = string(
@@ -407,8 +411,10 @@ function markov_algo_run(op::MarkovOpDownscale{NBlockDims},
     needs_present_colors = any(r -> r isa DownscaleRule_Has, op.rules)
 
     # No per-pixel ticks, because the new grid isn't visible externally until it's swapped in.
-    markov_algo_new_grid(algo, algo_state, new_size,
-                         inherited_biases, inherited_bias_states) do old_grid, new_grid
+    (grid, inherited_bias_states) = markov_opalgo_new_grid(
+        algo, algo_state, new_size,
+        inherited_biases, inherited_bias_states
+    ) do old_grid, new_grid
         for new_pos::VI in one(VI):new_size
             old_min = ((new_pos - one(Int32)) * scale_factor) + one(Int32)
             old_max = min(old_min + scale_factor - one(Int32), old_size)
@@ -431,9 +437,11 @@ function markov_algo_run(op::MarkovOpDownscale{NBlockDims},
         end
     end
 
-    markov_algo_tick(algo_state, STANDARD_END_OF_OP_TICK_PRIORITY)
+    markov_opalgo_tick(algo_state, STANDARD_END_OF_OP_TICK_PRIORITY)
     return (new_size != old_size) || any_rule_applied[]
 end
+
+markov_op_reallocates_grid(::MarkovOpDownscale) = true
 
 
 dsl_format_downscale_source(cell::RewriteRuleCell_Set) = if cell == DOWNSCALE_WILDCARD_SET

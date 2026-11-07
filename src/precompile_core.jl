@@ -18,7 +18,25 @@
             @sequence (4) begin
                 @rewrite (4) [R b] => [R R]
                 @rewrite (2) [b b ; R b] => [b R ; R b]
+                @within_box inherit_biases pixel(min=1, size=3) begin
+                    @rewrite (2) [R b] => [R R]
+                end
             end field(R, randomness=0.3)
+
+            # Scoped Ops run their inner Ops on a grid view, which is a different grid type.
+            @within_box uv(min=0.25, size=0.5) begin
+                @fill 'w' pixel(min=1, size=1)
+                @rewrite (2) wb=>ww
+                @sequence begin
+                    @rewrite (2) [w b] => [w g]
+                end field(w)
+            end
+            @within_regions 2 begin
+                wg => begin
+                    @rewrite (2) w => g
+                end
+                R => @fill 'G' pixel(min=1, size=1)
+            end field(G)
 
             @rewrite (2) RR=>GG field(-R, combo=max)
         end

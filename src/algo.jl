@@ -216,7 +216,14 @@ mutable struct AlgoState{MinCompileTimeTickPriority}
     bias_state_stack::Vector{Any}
     # Incremented every time the grid is reallocated (which may also replace bias states).
     grid_generation::Int
+    # How many scoped Ops (like `@within_box`) are currently running.
+    # While non-zero, the grid is a view and must not be reallocated.
+    scope_depth::Int
 end
+
+
+#################################
+##  Helper functions for Ops
 
 "
 Implements our internal coroutine logic,
@@ -224,7 +231,7 @@ Implements our internal coroutine logic,
 
 Also does other bookkeeping like checking for algorithm cancellation.
 "
-@inline markov_algo_tick(s::AlgoState{MinP}, p::Int) where {MinP} = if p < MinP
+@inline markov_opalgo_tick(s::AlgoState{MinP}, p::Int) where {MinP} = if p < MinP
     #NOTE: it's force-inlined so that this first condition disappears at compile-time
     nothing
 elseif s.ticking.cancel_algo
@@ -236,13 +243,14 @@ else
     @bp_check(take!(s.channel) === 0, "You should write 0 in response to every tick")
     nothing
 end
+
 "
 Implements our internal coroutine logic for tagged events,
   usually pausing the calling thread until the user resumes us.
 
 Also does some other bookkeeping like checking for algorithm cancellation.
 "
-function markov_algo_tick(s::AlgoState, tag::Symbol)
+function markov_opalgo_tick(s::AlgoState, tag::Symbol)
     if is_tagged_event_emitted(s.ticking, tag)
         put!(s.channel, tag)
         if tag == TAG_NEW_GRID
@@ -256,23 +264,29 @@ function markov_algo_tick(s::AlgoState, tag::Symbol)
     return nothing
 end
 
-"
-Reallocates the algorithm grid, lets the given biases react, then issues a tagged event for it.
-Returns the new grid.
 
-You must pass *all* your inherited biases, as their states get replaced too
-  (get the new ones with `markov_bias_current_states()`).
-Bias states are passed in here for type-stability, even though they're stored in the algo state.
 "
-function markov_algo_new_grid(new_state_setup_fn,
-                              algo::MarkovAlgorithm, state::AlgoState,
-                              new_size::Union{NTuple{NGrid, Integer}, Vec{NGrid, <:Integer}},
-                              biases::NTuple{NBiases, AbstractMarkovBias},
-                              bias_states::NTuple{NBiases, Any}
-                             )::CellGrid{NGrid} where {NGrid, NBiases}
+Reallocates the algorithm grid, lets the current biases react, then issues a tagged event for it.
+Returns the new grid, a.k.a. `state.grid`,
+  as well as the new bias states (which may have different types!).
+
+The `bias_states` input is only passed for type-stability
+  and must match the bias states stored in `AlgoState`.
+"
+function markov_opalgo_new_grid(new_state_setup_fn,
+                                algo::MarkovAlgorithm, state::AlgoState,
+                                new_size::Union{NTuple{NGrid, Integer}, Vec{NGrid, <:Integer}},
+                                biases::NTuple{NBiases, AbstractMarkovBias},
+                                bias_states::NTuple{NBiases, Any}
+                               )::Tuple{CellGrid{NGrid}, NTuple{NBiases, Any}} where {NGrid, NBiases}
+    if state.scope_depth > 0
+        error("The grid can't be reallocated inside a scoped Op (`@within_box`, `@within_region`, etc)! ",
+                "This is normally caught at parse-time using `markov_op_reallocates_grid()`, ",
+                "so there may be a bug with the current Op.")
+    end
     @markovjunior_assert(length(state.bias_state_stack) == NBiases &&
                            all(i -> state.bias_state_stack[i] === bias_states[i], 1:NBiases),
-                         "You must pass all inherited biases to markov_algo_new_grid()")
+                         "You must pass all inherited biases to markov_opalgo_new_grid()")
 
     # Dispatch on the grid and allocator type:
     return ((old_grid, alloc) -> begin
@@ -294,13 +308,123 @@ function markov_algo_new_grid(new_state_setup_fn,
                                                                  algo, state, old_grid)
             end
 
-            markov_algo_tick(state, TAG_NEW_GRID)
-            return new_grid
+            markov_opalgo_tick(state, TAG_NEW_GRID)
+            return (new_grid, markov_opbias_current_states(state))
         finally
             markov_allocator_release_array(alloc, old_grid)
         end
     end)(state.grid, state.allocator)
 end
+
+
+"
+Sets up the algorithm state to run on a view within the original grid,
+  executes your lambda, then restores the full grid.
+Manages the biases properly, and ends by returning your lambda's return value.
+Your lambda signature must be
+  `(inner_biases::NTuple{N, AbstractMarkovBias}, inner_bias_states::NTuple{N, Any}) -> OpChangedGrid`.
+
+You set up the view, tell us its `area` within the larger one,
+  and tell us about biases (e.g. whether the inner logic inherits them).
+
+The outer bias states are left alone while your lambda runs,
+  then updated all at once with the area's changes (if it reports any).
+If the inner logic inherits the biases, they get separate states which only see the view,
+  and which are cleaned up afterwards.
+Either way, nothing replaces bias states while inside the scope, so `grid_generation` stays the same.
+
+You may also provide callbacks to prepare and restore data within the grid slice,
+  in a way that the outer biases can't see, e.g. to mask out certain pixels from the scoped run.
+Inherited biases are initialized after `prepare_view()` and cleaned up before `restore_view()`.
+
+Within your lambda, Ops are forbidden from resizing the grid.
+This is enforced already, but you should implement `markov_op_reallocates_grid()`
+  to catch the problem at parse-time.
+
+Note that `restore_view` is called even if the inner Ops throw,
+  though the exception is rethrown afterward.
+"
+function markov_opalgo_on_subgrid(to_do,
+                                  algo::MarkovAlgorithm, algo_state::AlgoState,
+                                  sub_grid::CellGrid{N}, area::BoxI{N},
+                                  inherit_biases::Bool,
+                                  outer_biases::Tuple{Vararg{AbstractMarkovBias}},
+                                  outer_bias_states::Tuple,
+                                  prepare_view = () -> nothing,
+                                  restore_view = () -> nothing
+                                 ) where {N}
+    @markovjunior_assert(vsize(sub_grid) == size(area),
+                         "sub_grid size is ", vsize(sub_grid), " but reported box is ", area)
+    @markovjunior_assert(length(algo_state.bias_state_stack) == length(outer_biases),
+                         "Bias stack has ", length(algo_state.bias_state_stack),
+                           " states, but there are ", length(outer_biases), " outer biases")
+    outer_grid = algo_state.grid
+    alloc = algo_state.allocator
+
+    # Hide the outer bias states, so the inner Ops get their own stack.
+    # The outer states are never replaced by the scope, only updated afterwards;
+    #    so `grid_generation` doesn't change and nested scopes are invisible to the Ops running them.
+    hidden_states::Vector{Any} = markov_allocator_acquire_array(alloc, (), Any)
+    append!(hidden_states, algo_state.bias_state_stack)
+    empty!(algo_state.bias_state_stack)
+
+    # Remember the scope's original pixels, so the outer biases can be updated afterwards.
+    previous_pixels = if isempty(outer_biases)
+        nothing
+    else
+        a::Array{UInt8, N} = markov_allocator_acquire_array(alloc, size(sub_grid), UInt8)
+        copyto!(a, sub_grid)
+        a
+    end
+
+    try
+        algo_state.grid = sub_grid
+        algo_state.scope_depth += 1
+
+        result::OpChangedGrid = try
+            prepare_view()
+            if inherit_biases
+                # The outer biases get separate states which only see the view.
+                inner_bias_states = map(b -> markov_bias_initialize(b, algo, algo_state), outer_biases)
+                append!(algo_state.bias_state_stack, inner_bias_states)
+                to_do(outer_biases, inner_bias_states)
+            else
+                to_do((), ())
+            end
+        finally
+            # Clean up any inner states while they can still see the view.
+            # Inner Ops' own biases have already been popped off the stack by now.
+            if inherit_biases
+                for (bias, inner_state) in zip(outer_biases, algo_state.bias_state_stack)
+                    markov_bias_cleanup(bias, inner_state, algo, algo_state)
+                end
+            end
+            restore_view()
+
+            algo_state.scope_depth -= 1
+            algo_state.grid = outer_grid
+
+            empty!(algo_state.bias_state_stack)
+            append!(algo_state.bias_state_stack, hidden_states)
+        end
+
+        if exists(previous_pixels) && (result === true)
+            markov_opbias_update_all!(outer_biases, outer_bias_states,
+                                      algo, algo_state,
+                                      area, previous_pixels)
+        end
+        return result
+    finally
+        markov_allocator_release_array(alloc, hidden_states)
+        exists(previous_pixels) && markov_allocator_release_array(alloc, previous_pixels)
+    end
+end
+
+######################
+
+
+#######################
+##  Public interface
 
 "
 Runs the algorithm as a coroutine on a separate task,
@@ -354,13 +478,13 @@ function markov_algo_run(algo::MarkovAlgorithm,
         else
             fill!(initial_grid, algo.initial_fill)
         end
-        algo_state = AlgoState(initial_grid, rng, allocator, data_store, ch, ticking, Any[ ], 0)
+        algo_state = AlgoState(initial_grid, rng, allocator, data_store, ch, ticking, Any[ ], 0, 0)
 
         try
             @logic_logln "Starting algorithm of size " size(algo_state.grid)
             @bp_check(take!(ch) === 0)
-            markov_algo_tick(algo_state, TAG_NEW_GRID)
-            markov_algo_tick(algo_state, TAG_ALGO_STARTING)
+            markov_opalgo_tick(algo_state, TAG_NEW_GRID)
+            markov_opalgo_tick(algo_state, TAG_ALGO_STARTING)
 
             @logic_tab_in()
             for op in algo.sequence
@@ -371,13 +495,13 @@ function markov_algo_run(algo::MarkovAlgorithm,
             end
             @logic_logln "Finishing algorithm of size " size(algo_state.grid)
             @logic_tab_out()
-            markov_algo_tick(algo_state, TAG_ALGO_COMPLETED)
+            markov_opalgo_tick(algo_state, TAG_ALGO_COMPLETED)
         catch e
             if isa(e, ErrorCancelAlgo) || isa(e, InvalidStateException)
                 @logic_logln "User canceled algorithm!"
                 # If canceled cleanly (without closing the channel),
                 #   issue a 'Canceled' tagged event through the channel.
-                (e isa ErrorCancelAlgo) && isopen(ch) && markov_algo_tick(algo_state, TAG_ALGO_CANCELED)
+                (e isa ErrorCancelAlgo) && isopen(ch) && markov_opalgo_tick(algo_state, TAG_ALGO_CANCELED)
             else
                 rethrow()
             end

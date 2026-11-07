@@ -252,53 +252,105 @@ CellRegion(r::Bplus.Math.VecRange) = CellRegion(Box(r))
 Base.print(io::IO, r::CellRegion) = print(io, "R{", r.b, "}")
 
 "
-Walks through every cell in a small contiguous line/area.
-Invokes your lambda with `local_idx, cell_idx`, where `local_idx` is either
-  `Int32` for strips (`CellLine` input) or `VecI` for multidimensional (`CellRegion` input).
+An arbitrary set of cells, given as an explicit list.
+It shouldn't be empty or contain duplicates.
+"
+struct CellList{N, TCells<:AbstractVector{CellIdx{N}}}
+    cells::TCells
+end
+Base.print(io::IO, l::CellList) = print(io, "L{", length(l.cells), " cells}")
+
+"
+An arbitrary set of cells, given as a grid of booleans placed somewhere within the full grid:
+  `mask[i]` represents grid cell `i + offset`.
+It should contain at least one `true` cell.
+"
+struct CellMask{N, TMask<:AbstractArray{Bool, N}}
+    mask::TMask
+    offset::CellIdx{N}
+end
+Base.print(io::IO, m::CellMask) = print(io, "M{", count(m.mask), " cells, offset ", m.offset, "}")
+
+"
+Any group of cells that a Bias may be asked about (see `markov_bias_calculate()`).
+
+* `CellLine` is a contiguous strip, for 1D rewrite rules
+* `CellRegion` is a contiguous box, for multidimensional rewrite rules
+* `CellList` is an arbitrary list of cells
+* `CellMask` is an arbitrary set of cells, as a grid of booleans with an offset
+"
+const CellArea{N} = Union{CellLine{N}, CellRegion{N}, CellList{N}, CellMask{N}}
+
+"
+Walks through every cell in the given area.
+Invokes your lambda with `local_idx, cell_idx`, where `local_idx` is either:
+  * `Int32` for 1D areas (index along a `CellLine`, or into a `CellList`)
+  * `VecI` for multidimensional areas (index within a `CellRegion`, or into a `CellMask`'s grid)
 
 If you pass `true` then you can break the loop early by making your lambda return `true`,
   in which case this returns whether an early break happened.
 "
-function for_each_cell(toDo, area::Union{CellLine{N}, CellRegion{N}},
+function for_each_cell(toDo, area::CellLine{N},
                        ::Val{Breakable}
                       )::(Breakable ? Bool : Nothing) where {N, Breakable}
-    if area isa CellLine{N}
-        for iz in zero(Int32):(area.length - one(Int32))
-            cell = area.start_cell
-            @set! cell[area.movement.axis] += (iz * area.movement.sign)
-            result = toDo(iz + one(Int32), cell)
-            if Breakable && convert(Bool, result)
-                return true
-            end
+    for iz in zero(Int32):(area.length - one(Int32))
+        cell = area.start_cell
+        @set! cell[area.movement.axis] += (iz * area.movement.sign)
+        result = toDo(iz + one(Int32), cell)
+        if Breakable && convert(Bool, result)
+            return true
         end
-    elseif area isa CellRegion{N}
-        for iv in area.b
-            result = toDo(iv - min_inclusive(area.b) + one(Int32), iv)
-            if Breakable && convert(Bool, result)
-                return true
-            end
-        end
-    else
-        error("Unhandled: ", typeof(area))
     end
     return Breakable ? false : nothing
 end
-@inline for_each_cell(toDo, line, breakable::Bool=false) = for_each_cell(toDo, line, Val(breakable))
-
-"Gets the bounds around a `CellLine` or `CellRegion` (in the latter case it just returns the region's Box)"
-function cell_line_aabb(area::Union{CellLine{N}, CellRegion{N}})::Box{N, Int32} where {N}
-    if area isa CellRegion
-        return area.b
-    elseif area isa CellLine
-        start_pos = area.start_cell
-        end_pos = start_pos
-        @set! end_pos[area.movement.axis] += area.movement.sign * (area.length - 1)
-        (start_pos, end_pos) = Bplus.Math.minmax(start_pos, end_pos)
-        return Box{N, Int32}(
-            min=start_pos,
-            max=end_pos
-        )
-    else
-        error("Unhandled: ", typeof(area))
+function for_each_cell(toDo, area::CellRegion{N},
+                       ::Val{Breakable}
+                      )::(Breakable ? Bool : Nothing) where {N, Breakable}
+    for iv in area.b
+        result = toDo(iv - min_inclusive(area.b) + one(Int32), iv)
+        if Breakable && convert(Bool, result)
+            return true
+        end
     end
+    return Breakable ? false : nothing
+end
+function for_each_cell(toDo, area::CellList{N},
+                       ::Val{Breakable}
+                      )::(Breakable ? Bool : Nothing) where {N, Breakable}
+    for (i, cell) in enumerate(area.cells)
+        result = toDo(convert(Int32, i), cell)
+        if Breakable && convert(Bool, result)
+            return true
+        end
+    end
+    return Breakable ? false : nothing
+end
+function for_each_cell(toDo, area::CellMask{N},
+                       ::Val{Breakable}
+                      )::(Breakable ? Bool : Nothing) where {N, Breakable}
+    VI = CellIdx{N}
+    for local_idx::VI in one(VI):vsize(area.mask)
+        if area.mask[local_idx]
+            result = toDo(local_idx, local_idx + area.offset)
+            if Breakable && convert(Bool, result)
+                return true
+            end
+        end
+    end
+    return Breakable ? false : nothing
+end
+@inline for_each_cell(toDo, area, breakable::Bool=false) = for_each_cell(toDo, area, Val(breakable))
+
+"Gets the first cell of the given area, in the order that `for_each_cell()` visits them"
+first_cell(area::CellLine) = area.start_cell
+first_cell(area::CellRegion) = min_inclusive(area.b)
+first_cell(area::CellList) = first(area.cells)
+function first_cell(area::CellMask{N})::CellIdx{N} where {N}
+    found = Ref{Optional{CellIdx{N}}}(nothing)
+    for_each_cell(area, true) do local_idx, cell
+        found[] = cell
+        return true
+    end
+    isnothing(found[]) && error("CellMask has no cells in it")
+    return found[]
 end
