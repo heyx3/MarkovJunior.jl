@@ -12,6 +12,12 @@
     # When the field is flipped, those outside actions have the highest bias instead.
     soft
 )
+# How the Field Bias combines the per-cell biases of an action (e.g. a rewrite rule, or a whole region).
+#
+# `deviation` and `diff` are tuned for the handful of cells in a rewrite rule, and behave poorly in large areas:
+#   `diff` saturates to the full range of the field above roughly 6 cells (see `DIFF_CURVE`),
+#   and `deviation` tends to dominate other biases since large areas usually have a wide spread of distances.
+# In large areas, `min` and `max` also favor bigger areas, as they have more chances to contain an extreme cell.
 @bp_enum(BiasFieldComboMode,
     average, min, max,
     first, deviation, diff
@@ -251,7 +257,7 @@ function markov_bias_update(field::MarkovBiasField, state::MarkovBiasField_State
 end
 function markov_bias_calculate(field::MarkovBiasField, state::MarkovBiasField_State{N, BPath},
                                algo::MarkovAlgorithm, algo_state::AlgoState,
-                               at::Union{CellLine{N}, CellRegion{N}},
+                               at::CellArea{N},
                                # Convenient type-deduction of the integer vector:
                                ::V = zero(Vec{N, Int32})
                               )::Optional{Float32} where {N, BPath, V<:Vec{N, Int32}}
@@ -325,13 +331,7 @@ function markov_bias_calculate(field::MarkovBiasField, state::MarkovBiasField_St
         )
     end
     bias::Float32 = if field.combo == BiasFieldComboMode.first
-        if at isa CellLine{N}
-            pixel_bias(at.start_cell)
-        elseif at isa CellRegion{N}
-            pixel_bias(min_inclusive(at.b))
-        else
-            error("Unhandled: ", typeof(at))
-        end
+        pixel_bias(first_cell(at))
     else
         empty!(state.biases_buffer)
         for_each_cell(at) do local_idx, global_idx

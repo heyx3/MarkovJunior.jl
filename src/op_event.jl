@@ -14,11 +14,11 @@ function markov_algo_run(op::MarkovOpEvent,
                         )::OpChangedGrid where {NGrid}
     # Read-only events are cosmetic.
     if !is_mutable_event_tag(op.tag)
-        markov_algo_tick(algo_state, op.tag)
+        markov_opalgo_tick(algo_state, op.tag)
         return nothing
     # Skipped mutable events count as failing to change anything.
     elseif !is_tagged_event_emitted(algo_state.ticking, op.tag)
-        markov_algo_tick(algo_state, op.tag)
+        markov_opalgo_tick(algo_state, op.tag)
         return false
     end
 
@@ -26,7 +26,7 @@ function markov_algo_run(op::MarkovOpEvent,
     return markov_allocator_with_array(algo_state.allocator, size(grid), UInt8) do _previous_grid
         previous_grid::Array{UInt8, NGrid} = _previous_grid
         copyto!(previous_grid, grid)
-        markov_algo_tick(algo_state, op.tag)
+        markov_opalgo_tick(algo_state, op.tag)
 
         # Find the bounds of the user's changes.
         grid_size = convert(Vec{NGrid, Int32}, vsize(grid))
@@ -44,12 +44,14 @@ function markov_algo_run(op::MarkovOpEvent,
         end
 
         changed_slice = ntuple(i -> changed_min[i]:changed_max[i], Val(NGrid))
-        markov_bias_update_all!(inherited_bias_tuple, inherited_bias_state_tuple,
-                                algo, algo_state,
-                                changed_area, @view previous_grid[changed_slice...])
+        markov_opbias_update_all!(inherited_bias_tuple, inherited_bias_state_tuple,
+                                  algo, algo_state,
+                                  changed_area, @view previous_grid[changed_slice...])
         return true
     end
 end
+
+markov_op_reallocates_grid(::MarkovOpEvent) = false
 
 
 dsl_format(e::MarkovOpEvent) = "@event $(e.tag)"

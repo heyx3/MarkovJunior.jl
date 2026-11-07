@@ -14,8 +14,16 @@ function MJ.markov_bias_cleanup(::CountingBias, id::Int, algo, algo_state)
     delete!(COUNTING_BIAS_LIVE_STATES, id)
     return nothing
 end
-MJ.markov_bias_calculate(::CountingBias, ::Int, algo, algo_state,
-                         ::Union{MJ.CellLine{N}, MJ.CellRegion{N}}) where {N} = 1.0f0
+function MJ.markov_bias_update(::CountingBias, id::Int, algo, algo_state,
+                               ::MJ.BoxI{N}, ::MJ.CellGrid{N}) where {N}
+    @bp_check(id in COUNTING_BIAS_LIVE_STATES, "Bias state ", id, " was updated after cleanup")
+    return nothing
+end
+function MJ.markov_bias_calculate(::CountingBias, id::Int, algo, algo_state,
+                                  ::MJ.CellArea{N}) where {N}
+    @bp_check(id in COUNTING_BIAS_LIVE_STATES, "Bias state ", id, " was used after cleanup")
+    return 1.0f0
+end
 MJ.dsl_format(::CountingBias) = "counting()"
 MJ.parse_markovjunior_bias(::Val{:counting}, inputs::MJ.MacroParserInputs, loc, args) = CountingBias()
 

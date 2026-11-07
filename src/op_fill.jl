@@ -49,8 +49,9 @@ function get_draw_box_pixels(space::E_DrawBoxSpace,
         )
     else
         if space == DrawBoxSpace.uv
+            # UV 0 is the min edge of pixel 1, so the pixel-space box is offset by 1.
             return get_draw_box_pixels(DrawBoxSpace.pixel, Box(
-                min = min_inclusive(box) * resolution,
+                min = (min_inclusive(box) * resolution) + one(Vec{N, R}),
                 size = size(box) * resolution
             ), resolution, box_is_1D_scalar)
         elseif space == DrawBoxSpace.pixel
@@ -153,11 +154,11 @@ function markov_algo_run(op::MarkovOpDrawBox{NBox, TRule},
                 #begin
                     mc = true
                     grid[pixel] = op.value
-                    markov_algo_tick(algo_state, 1)
+                    markov_opalgo_tick(algo_state, 1)
                 end
             end
-            markov_bias_update_all!(inherited_bias_tuple, inherited_bias_state_tuple,
-                                    algo, algo_state, box, previous_value_grid)
+            markov_opbias_update_all!(inherited_bias_tuple, inherited_bias_state_tuple,
+                                      algo, algo_state, box, previous_value_grid)
             return mc
 
         end)(mask_grid, mask_level)
@@ -167,9 +168,11 @@ function markov_algo_run(op::MarkovOpDrawBox{NBox, TRule},
         exists(mask_grid) && markov_allocator_release_array(algo_state.allocator, mask_grid)
     end
 
-    markov_algo_tick(algo_state, STANDARD_END_OF_OP_TICK_PRIORITY - 1)
+    markov_opalgo_tick(algo_state, STANDARD_END_OF_OP_TICK_PRIORITY - 1)
     return made_changes
 end
+
+markov_op_reallocates_grid(::MarkovOpDrawBox) = false
 
 
 #############
@@ -179,65 +182,29 @@ dsl_format_box_rule(r::Nothing) = ""
 dsl_format_box_rule(r::Tuple{Val{:whitelist}, CellTypeSet}) = "+$(dsl_format(r[2]))"
 dsl_format_box_rule(r::Tuple{Val{:blacklist}, CellTypeSet}) = "-$(dsl_format(r[2]))"
 
+"Formats a box (as used by `@fill` and `@within_box`), like `uv(min=0.25, size=0.5)`"
+dsl_format_draw_box(space::E_DrawBoxSpace, box::Box, box_is_1D_scalar::Bool) = string(
+    space, "(",
+    "min=", box_is_1D_scalar ? min_inclusive(box).x : min_inclusive(box).data,
+    ", size=", box_is_1D_scalar ? size(box).x : size(box).data,
+    ")"
+)
+
 dsl_format(b::MarkovOpDrawBox) = string(
     "@fill '", dsl_format(b.value), "'",
-    " ", b.space, "(",
-    "min=",
-        if b.box_is_1D_scalar
-            min_inclusive(b.box).x
-        else
-            min_inclusive(b.box).data
-        end,
-    ", size=",
-        if b.box_is_1D_scalar
-            size(b.box).x
-        else
-            size(b.box).data
-        end,
-    ")",
+    " ", dsl_format_draw_box(b.space, b.box, b.box_is_1D_scalar),
     " ", dsl_format_box_rule(b.rule),
     " ", dsl_format_rewrite_mask(b.mask)
 )
 
-function parse_markovjunior_op(::Val{Symbol("@fill")},
-                               inputs::MacroParserInputs,
-                               loc, expr_args, full_line)
-    # The @capture macro has a bug with the '|' operator so we don't use it here.
-    exCol = nothing
-    exSpace = nothing
-    exArgNameA = nothing
-    exArgValA = nothing
-    exArgNameB = nothing
-    exArgValB = nothing
-    exRuleAdd = nothing
-    exRuleSub = nothing
-    exMask = nothing
-    if !@capture(full_line,  @fill exCol_Char exSpace_Symbol(exArgNameA_=exArgValA_, exArgNameB_=exArgValB_)                       ) &&
-        !@capture(full_line, @fill exCol_Char exSpace_Symbol(exArgNameA_=exArgValA_, exArgNameB_=exArgValB_) +exRuleAdd_           ) &&
-        !@capture(full_line, @fill exCol_Char exSpace_Symbol(exArgNameA_=exArgValA_, exArgNameB_=exArgValB_) -exRuleSub_           ) &&
-        !@capture(full_line, @fill exCol_Char exSpace_Symbol(exArgNameA_=exArgValA_, exArgNameB_=exArgValB_)               %exMask_) &&
-        !@capture(full_line, @fill exCol_Char exSpace_Symbol(exArgNameA_=exArgValA_, exArgNameB_=exArgValB_) +exRuleAdd_   %exMask_) &&
-        !@capture(full_line, @fill exCol_Char exSpace_Symbol(exArgNameA_=exArgValA_, exArgNameB_=exArgValB_) -exRuleSub_   %exMask_) &&
-       !@capture(full_line,  @fill exCol_Char                                                                                      ) &&
-        !@capture(full_line, @fill exCol_Char                                                                +exRuleAdd_           ) &&
-        !@capture(full_line, @fill exCol_Char                                                                -exRuleSub_           ) &&
-        !@capture(full_line, @fill exCol_Char                                                                              %exMask_) &&
-        !@capture(full_line, @fill exCol_Char                                                                +exRuleAdd_   %exMask_) &&
-        !@capture(full_line, @fill exCol_Char                                                                -exRuleSub_   %exMask_)
-    #begin
-        raise_parse_error(loc, inputs,
-                          "Invalid format! Expected `@fill 'C' [S(A=N, B=M)] [rule] [mask]`")
-    end
-
-    # Fill in defaults.
-    if isnothing(exSpace)
-        exSpace = :uv
-        exArgNameA = :min
-        exArgValA = 0
-        exArgNameB = :max
-        exArgValB = 1
-    end
-
+"
+Parses a box (as used by `@fill` and `@within_box`) from its space and two arguments,
+  like `uv(min=0, size=0.5)` => `(:uv, :min, 0, :size, 0.5)`.
+Returns `(space::E_DrawBoxSpace, box_is_1D_scalar::Bool, box::Box)`,
+  and raises the algorithm's minimum dimensionality to fit the box.
+"
+function parse_markovjunior_draw_box(inputs::MacroParserInputs, loc,
+                                     exSpace, exArgNameA, exArgValA, exArgNameB, exArgValB)
     # Do some quick error-checking of expression types.
     !in(exArgNameA, (:min, :max, :size, :center)) && raise_parse_error(
         loc, inputs,
@@ -249,48 +216,10 @@ function parse_markovjunior_op(::Val{Symbol("@fill")},
         "Box space arguments should be two of `min`, `max`, `size`, and `center`! Got `",
           exArgNameB, "`"
     )
-    !(exRuleAdd isa Optional{Symbol}) && raise_parse_error(
-        loc, inputs,
-        "Whitelist rule should be formatted like `+abc`, got `+", exRuleAdd, "`"
-    )
-    !(exRuleSub isa Optional{Symbol}) && raise_parse_error(
-        loc, inputs,
-        "Blacklist rule should be formatted like `-abc`, got `-", exRuleSub, "`"
-    )
     (exArgNameA == exArgNameB) && raise_parse_error(
         loc, inputs,
         "Used the same space parameter twice: `", exArgNameA, "`"
     )
-
-    # Parse the mask.
-    mask = if isnothing(exMask)
-        nothing
-    elseif @capture(exMask, maskAExpr_Real:maskBExpr_Real)
-        convert.(Ref(Float32), (maskAExpr, maskBExpr))
-    elseif exMask isa Real
-        convert(Float32, exMask)
-    else
-        raise_parse_error(loc, inputs, "Expected mask to be `%x` or `%(x:y)`; got `%$exMask`")
-    end
-
-    # Parse the rule.
-    rule = if exists(exRuleAdd)
-        rule_set = try
-            CellTypeSet(string(exRuleAdd))
-        catch e
-            raise_parse_error(nothing, inputs, "Invalid colors in rule `+", exRuleAdd, "`")
-        end
-        (Val(:whitelist), rule_set)
-    elseif exists(exRuleSub)
-        rule_set = try
-            CellTypeSet(string(exRuleSub))
-        catch e
-            raise_parse_error(nothing, inputs, "Invalid colors in rule `-", exRuleSub, "`")
-        end
-        (Val(:blacklist), rule_set)
-    else
-        nothing
-    end
 
     # Parse the space type.
     space = try
@@ -358,6 +287,114 @@ function parse_markovjunior_op(::Val{Symbol("@fill")},
         error("Unhandled: ", typeof(argValA))
     end
 
+    inputs.min_dims = max(inputs.min_dims,
+        if box_is_1D_scalar
+            1
+        else
+            length(min_inclusive(space_box))
+        end
+    )
+    return (space, box_is_1D_scalar, space_box)
+end
+"Parses a box expression like `uv(min=0, size=0.5)` (see the other overload for details)"
+function parse_markovjunior_draw_box(inputs::MacroParserInputs, loc, box_expr)
+    exSpace = nothing
+    exArgNameA = nothing
+    exArgValA = nothing
+    exArgNameB = nothing
+    exArgValB = nothing
+    if !@capture(box_expr, exSpace_Symbol(exArgNameA_=exArgValA_, exArgNameB_=exArgValB_))
+        raise_parse_error(loc, inputs, "Expected a box like `uv(min=0, size=0.5)` or `pixel(min=1, max=10)`; got `",
+                            box_expr, "`")
+    end
+    return parse_markovjunior_draw_box(inputs, loc, exSpace, exArgNameA, exArgValA, exArgNameB, exArgValB)
+end
+
+function parse_markovjunior_op(::Val{Symbol("@fill")},
+                               inputs::MacroParserInputs,
+                               loc, expr_args, full_line)
+    # The @capture macro has a bug with the '|' operator so we don't use it here.
+    exCol = nothing
+    exSpace = nothing
+    exArgNameA = nothing
+    exArgValA = nothing
+    exArgNameB = nothing
+    exArgValB = nothing
+    exRuleAdd = nothing
+    exRuleSub = nothing
+    exMask = nothing
+    if !@capture(full_line,  @fill exCol_Char exSpace_Symbol(exArgNameA_=exArgValA_, exArgNameB_=exArgValB_)                       ) &&
+        !@capture(full_line, @fill exCol_Char exSpace_Symbol(exArgNameA_=exArgValA_, exArgNameB_=exArgValB_) +exRuleAdd_           ) &&
+        !@capture(full_line, @fill exCol_Char exSpace_Symbol(exArgNameA_=exArgValA_, exArgNameB_=exArgValB_) -exRuleSub_           ) &&
+        !@capture(full_line, @fill exCol_Char exSpace_Symbol(exArgNameA_=exArgValA_, exArgNameB_=exArgValB_)               %exMask_) &&
+        !@capture(full_line, @fill exCol_Char exSpace_Symbol(exArgNameA_=exArgValA_, exArgNameB_=exArgValB_) +exRuleAdd_   %exMask_) &&
+        !@capture(full_line, @fill exCol_Char exSpace_Symbol(exArgNameA_=exArgValA_, exArgNameB_=exArgValB_) -exRuleSub_   %exMask_) &&
+       !@capture(full_line,  @fill exCol_Char                                                                                      ) &&
+        !@capture(full_line, @fill exCol_Char                                                                +exRuleAdd_           ) &&
+        !@capture(full_line, @fill exCol_Char                                                                -exRuleSub_           ) &&
+        !@capture(full_line, @fill exCol_Char                                                                              %exMask_) &&
+        !@capture(full_line, @fill exCol_Char                                                                +exRuleAdd_   %exMask_) &&
+        !@capture(full_line, @fill exCol_Char                                                                -exRuleSub_   %exMask_)
+    #begin
+        raise_parse_error(loc, inputs,
+                          "Invalid format! Expected `@fill 'C' [S(A=N, B=M)] [rule] [mask]`")
+    end
+
+    # Fill in defaults.
+    if isnothing(exSpace)
+        exSpace = :uv
+        exArgNameA = :min
+        exArgValA = 0
+        exArgNameB = :max
+        exArgValB = 1
+    end
+
+    # Do some quick error-checking of expression types.
+    !(exRuleAdd isa Optional{Symbol}) && raise_parse_error(
+        loc, inputs,
+        "Whitelist rule should be formatted like `+abc`, got `+", exRuleAdd, "`"
+    )
+    !(exRuleSub isa Optional{Symbol}) && raise_parse_error(
+        loc, inputs,
+        "Blacklist rule should be formatted like `-abc`, got `-", exRuleSub, "`"
+    )
+
+    # Parse the mask.
+    mask = if isnothing(exMask)
+        nothing
+    elseif @capture(exMask, maskAExpr_Real:maskBExpr_Real)
+        convert.(Ref(Float32), (maskAExpr, maskBExpr))
+    elseif exMask isa Real
+        convert(Float32, exMask)
+    else
+        raise_parse_error(loc, inputs, "Expected mask to be `%x` or `%(x:y)`; got `%$exMask`")
+    end
+
+    # Parse the rule.
+    rule = if exists(exRuleAdd)
+        rule_set = try
+            CellTypeSet(string(exRuleAdd))
+        catch e
+            raise_parse_error(nothing, inputs, "Invalid colors in rule `+", exRuleAdd, "`")
+        end
+        (Val(:whitelist), rule_set)
+    elseif exists(exRuleSub)
+        rule_set = try
+            CellTypeSet(string(exRuleSub))
+        catch e
+            raise_parse_error(nothing, inputs, "Invalid colors in rule `-", exRuleSub, "`")
+        end
+        (Val(:blacklist), rule_set)
+    else
+        nothing
+    end
+
+    # Parse the box.
+    (space, box_is_1D_scalar, space_box) = parse_markovjunior_draw_box(
+        inputs, loc,
+        exSpace, exArgNameA, exArgValA, exArgNameB, exArgValB
+    )
+
     # Get the value of the fill color.
     if !haskey(CELL_CODE_BY_CHAR, exCol)
         raise_parse_error(
@@ -368,12 +405,5 @@ function parse_markovjunior_op(::Val{Symbol("@fill")},
     end
     col = CELL_CODE_BY_CHAR[exCol]
 
-    inputs.min_dims = max(inputs.min_dims,
-        if box_is_1D_scalar
-            1
-        else
-            length(min_inclusive(space_box))
-        end
-    )
     return MarkovOpDrawBox(col, space, box_is_1D_scalar, space_box, rule, mask)
 end

@@ -19,7 +19,7 @@ Executes the given op within an algorithm, returning whether it changed the grid
 Inherited bias states are mutated in place as the grid changes.
 If this Op (or a nested one) reallocates the grid, the states may be replaced with new objects.
 So Ops that run other Ops should watch `algo_state.grid_generation`,
-  and call `markov_bias_current_states()` when it changes.
+  and call `markov_opbias_current_states()` when it changes.
 "
 function markov_algo_run(op::AbstractMarkovOp, algo, algo_state,
                          inherited_bias_tuple, inherited_bias_state_tuple
@@ -28,6 +28,17 @@ function markov_algo_run(op::AbstractMarkovOp, algo, algo_state,
         op, algo, algo_state, inherited_bias_tuple, inherited_bias_state_tuple
     )))
 end
+
+"
+Whether the given Op might reallocate the grid (e.g. resize it, see `markov_opalgo_new_grid()`),
+  either itself or through any Op nested inside it.
+
+Scoped Ops (like `@within_box`) use this while parsing to reject inner Ops that reallocate,
+  because they run their inner Ops on a view of the grid.
+
+Every Op must implement this; there's deliberately no default.
+"
+markov_op_reallocates_grid(op::AbstractMarkovOp)::Bool = throw(MethodError(markov_op_reallocates_grid, (op, )))
 
 
 ##  Biases  ##
@@ -73,10 +84,14 @@ markov_bias_cleanup(bias::AbstractMarkovBias, bias_state, algo, algo_state) = no
 "
 Calculates the desirability of changing the given pixels, at the current moment.
 Returns `nothing` if the action *must* not happen.
+
+The pixels can be any kind of `CellArea`: lines and boxes for rewrite rules,
+  or arbitrary lists and masks of cells for Ops that work on whole regions.
+There's no default; a bias that can't handle some kind of area just won't work with Ops that use it.
 "
 function markov_bias_calculate(bias::AbstractMarkovBias, bias_state,
                                algo, algo_state,
-                               at::Union{CellLine{N}, CellRegion{N}}
+                               at::CellArea{N}
                               )::Optional{Float32} where {N}
     throw(MethodError(markov_bias_calculate, (
         bias, bias_state, algo, algo_state, at
@@ -93,12 +108,12 @@ A scoped helper that initializes some new biases on top of the existing ones,
 Your lambda should have the signature `(full_biases::NTuple{NB}, full_bias_states::NTuple{NB}) -> Any`,
   taking type-stable tuples of the biases and their state objects.
 
-Ensures bias cleanup happens correctly even in weird circumstances like a reallocated grid.
+Ensures bias cleanup happens correctly, even in weird circumstances like a reallocated grid.
 "
-function markov_bias_with_states(to_do, new_biases::Tuple{Vararg{AbstractMarkovBias}},
-                                 algo, algo_state,
-                                 inherited_biases::Tuple{Vararg{AbstractMarkovBias}},
-                                 inherited_states::Tuple)
+function markov_opbias_with_new_biases(to_do, new_biases::Tuple{Vararg{AbstractMarkovBias}},
+                                       algo, algo_state,
+                                       inherited_biases::Tuple{Vararg{AbstractMarkovBias}},
+                                       inherited_states::Tuple)
     n_inherited = length(inherited_states)
     @markovjunior_assert(length(algo_state.bias_state_stack) == n_inherited,
                          "Bias stack has ", length(algo_state.bias_state_stack),
@@ -119,8 +134,8 @@ function markov_bias_with_states(to_do, new_biases::Tuple{Vararg{AbstractMarkovB
 end
 
 "Updates every given bias after the given area of the grid changed (see `markov_bias_update()`)"
-@inline function markov_bias_update_all!(biases::Tuple, bias_states::Tuple, algo, algo_state,
-                                         grid_subset, old_subset_values)
+@inline function markov_opbias_update_all!(biases::Tuple, bias_states::Tuple, algo, algo_state,
+                                           grid_subset, old_subset_values)
     # 'map' unrolls over tuples, unlike 'foreach'.
     map(biases, bias_states) do bias, state
         markov_bias_update(bias, state, algo, algo_state, grid_subset, old_subset_values)
@@ -128,5 +143,9 @@ end
     return nothing
 end
 
-"Extracts a type-stable tuple of the current state of every active bias."
-markov_bias_current_states(algo_state)::Tuple = Tuple(algo_state.bias_state_stack)
+"
+Extracts a tuple of the current state for every active bias,
+  turning it from 100% type-unstable to 100% type-stable.
+Your tuple should be invalidated whenever the grid is resized (see `algo_state.grid_generation`).
+"
+markov_opbias_current_states(algo_state)::Tuple = Tuple(algo_state.bias_state_stack)

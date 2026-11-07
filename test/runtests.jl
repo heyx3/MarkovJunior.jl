@@ -17,10 +17,13 @@ using Bplus; @using_bplus
 
 
 include("utils.jl")
+include("cell_areas.jl")
 include("parsing.jl")
 include("md_symmetries.jl")
 include("sequence.jl")
 include("scale.jl")
+include("within_box.jl")
+include("within_regions.jl")
 include("add_ons.jl")
 include("ipc.jl")
 

@@ -8,7 +8,7 @@ end
 
 markov_bias_calculate(t::MarkovBiasTemperature, ::Nothing,
                       algo::MarkovAlgorithm, algo_state::AlgoState,
-                      ::Union{CellLine{N}, CellRegion{N}}
+                      ::CellArea{N}
                      ) where {N} = rand(algo_state.rng, Float32) * t.amount
 
 dsl_format(b::MarkovBiasTemperature) = "temperature($(b.amount))"

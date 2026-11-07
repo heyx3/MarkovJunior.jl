@@ -1089,9 +1089,9 @@ function markov_algo_run(rewrite::MarkovOpRewrite{TRules, TBias, TPriority},
     end
 
     # Run the rest of the Op with our own biases set up (and eventually cleaned up).
-    return markov_bias_with_states(rewrite.biases, algo, algo_state,
-                                   inherited_biases, inherited_bias_states
-                                  ) do biases, bias_states
+    return markov_opbias_with_new_biases(rewrite.biases, algo, algo_state,
+                                         inherited_biases, inherited_bias_states
+                                        ) do biases, bias_states
     NBiases = length(biases)
 
     threshold = if isnothing(rewrite.threshold)
@@ -1128,7 +1128,7 @@ function markov_algo_run(rewrite::MarkovOpRewrite{TRules, TBias, TPriority},
     try
         made_modifications::Bool = false
         function finish_op()
-            markov_algo_tick(algo_state, STANDARD_END_OF_OP_TICK_PRIORITY)
+            markov_opalgo_tick(algo_state, STANDARD_END_OF_OP_TICK_PRIORITY)
             return made_modifications
         end
 
@@ -1324,13 +1324,13 @@ function markov_algo_run(rewrite::MarkovOpRewrite{TRules, TBias, TPriority},
 
                 # Update inner bookkeeping.
                 update_rewrite_cache!(cache, affected_area)
-                markov_bias_update_all!(biases, bias_states, algo, algo_state,
-                                        affected_area, original_values)
+                markov_opbias_update_all!(biases, bias_states, algo, algo_state,
+                                          affected_area, original_values)
 
                 # Issue a tick event.
                 # NOTE: I used to issue less-important priorities for simple rules, but
                 #       checking that a set of rewrite rules is "simple" is actually non-trivial.
-                markov_algo_tick(algo_state, STANDARD_MIN_COMPILE_TIME_TICK_PRIORITY)
+                markov_opalgo_tick(algo_state, STANDARD_MIN_COMPILE_TIME_TICK_PRIORITY)
             end)(rewrite.rules[pick_rule_i])
 
             # Update outer bookkeeping.
@@ -1358,6 +1358,8 @@ function markov_algo_run(rewrite::MarkovOpRewrite{TRules, TBias, TPriority},
     # Finish the bias setup/cleanup logic:
     end
 end
+
+markov_op_reallocates_grid(::MarkovOpRewrite) = false
 
 
 #####################
