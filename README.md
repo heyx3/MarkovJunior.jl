@@ -5,10 +5,8 @@ A Julia reimagining of [this awesome procedural generation algorithm](https://gi
 It can build into several things:
 
 * A standalone executable, running a GUI playground for testing scenes
-* A C-like DLL, for other programs to integrate with
-* A standalone executable, exposing the algorithm through an IPC (to avoid DLL hell).
-
-> ***NOTE**: The DLL approach is currently deprecated over IPC!*
+* A standalone executable, exposing the algorithm to other environments.
+* ~~A C-like DLL, for other programs to integrate with~~ (**now deprecated over the IPC due to DLL hell**)
 
 [A plugin to integrate with Unreal Engine 5 is ongoing](https://github.com/heyx3/JMarkovJunior_Unreal5Demo).
 
@@ -120,13 +118,16 @@ Run the IPC service by calling `markovjunior_run_ipc(block_calling_thread::Bool)
 
 IPC is preferred to using the package as a DLL, because Julia pulls in many sub-sub-dependencies and causes DLL hell.
 Especially when working in a large codebase like Unreal Engine!
-
 Our IPC server communicates using a "named pipe", a fast OS feature for communication between processes.
 Named pipes are a two-way binary stream; extemely similar to TCP sockets but more efficient and not networked.
-Provided with the IPC executable is a C header, C++ header, and JSON file, containing all relevant constants.
-The most important constant is the name of the pipe, also stored in Julia under `MarkovJunior.IPC_PIPE_PATH`.
 
-The executable has several command-line arguments which you can read by passing `--help`.
+Provided with the IPC executable is a C header, C++ header, and JSON file, containing all relevant constants.
+The most important constant is the name of the pipe, also stored in Julia under `MarkovJunior.IPC_PIPE_NAME`.
+Also provided is a small C++ library which
+  manages the IPC process to match the lifetime of the calling process,
+  and offer connections to it as thread-local singletons.
+
+The IPC executable has several command-line arguments which you can read by passing `--help`.
 It will also write two signals to stdout, as 4-byte uints:
   a "start" code when the named pipe is ready for clients,
   and a "stop" code when it's no longer accepting clients (happens after you send a kill message).
@@ -135,7 +136,6 @@ Once all clients are gone *and* it's no longer accepting new ones, the process d
 > *The IPC protocol is perfectly functional but still subject to change.*
 > *The pipe name has a number on the end of it, which will be incremented every time a breaking change is made.*
 
-Currently each client's algo states and parsed algorithms are **not** automatically cleaned up when they disconnect!
 
 #### IPC Protocol
 
@@ -161,6 +161,8 @@ If it failed, something was wrong with your parameters.
 The protocol for each message is as follows.
 They are numbered by the message's ID, for example you send `1` to initiate the first message in the list.
 
+> *NOTE: We do not check for race conditions! Don't let two different client connections update the same algorithm state at the same time.*
+
 1. **Parse a new algorithm**
    1. Write a 4-byte uint for the length of the string containing the algorithm
   (UTF-8 with optional null-terminator).
@@ -180,10 +182,10 @@ They are numbered by the message's ID, for example you send `1` to initiate the 
    6. If you are, now write that grid state. This should have the same memory order as when you download a grid (see below).
    7. Write a 4-byte uint representing the number of bytes used to seed the RNG.
    8. Write the bytes of the RNG seed.
-   9. Write the minimum tick priority that actually counts as a tick
-(recommend 1 or 2 for animation rendering, 3 or 4 for practical use).
+   9. Write a 4-byte uint representing the minimum tick priority that actually counts as a tick.
+Recommend 1 or 2 for animation rendering, and 3 or 4 for practical use.
    10. Write a 1-byte flag (0 or 1) indicating whether this is for animation purposes
-(encourages more Ops to follow Biases even when it doesn't affect the final state)
+(disables some optimizations and encourages new behavior, so that the grid state looks good when animated from tick to tick)
    11. Read the success flag.
    12. If it succeeded, read a 4-byte uint representing the ID of the new algo state.
 4. **Destroy an algorithm run**
@@ -202,13 +204,14 @@ They are numbered by the message's ID, for example you send `1` to initiate the 
          1. `UInt8(2)`
    3. Read the success flag. If it failed, your parameters were bad and you should stop here.
    4. Read the result of the tick:
-      1. `UInt8` bool for whether the algorithm finished.
+      1. `UInt8` bool for whether the algorithm finished (including if it was already finished by an earlier tick)
       2. If not finished, `UInt8` bool for whether we encountered a tagged event.
 Note that under this protocol, the built-in tagged events are handled internally --
   you'll never see tags for "algorithm started" or "new grid allocated" or "algorithm completed".
 Only your own events.
       1. If encountered a tagged event, read the tag using the same format as other/error strings (mentioned above).
-6. **Download the current state of the algorithm grid**
+  Tags starting with `!` are mutable events, during which you may upload grid changes using message 10.
+6. **Download the current state of the algorithm grid** (see below for a message to only query the grid's resolution)
    1. Write a 4-byte uint representing the running state's ID.
    2. Read the success flag. If it failed, your state ID is invalid and you should stop here.
    3. Read a 4-byte uint representing the number of dimensions of the grid.
@@ -223,6 +226,25 @@ Only your own events.
 Note that it only fails if the server does not support this call; redundant calls always "succeed".
    2. If it succeeded, and this service is running through the standalone executable,
   then the IPC process automatically dies once all existing clients have disconnected.
+8. **Give ownership over an algorithm**
+   1. Write a 4-byte uint representing the algorithm's ID.
+   2. Read the success flag.
+   3. If successful, then the given algorithm will be automatically destroyed (like sending message 2) when this client connection dies.
+9. **Give ownership over a state**
+   1. Write a 4-byte uint representing the state's ID.
+   2. Read the success flag.
+   3. If successful, then the given running algorithm state will be automatically destroyed (like sending message 4) when this client connection dies.
+10. **Set a state grid's values** (*Only allowed while the algorithm is paused at a mutable event, i.e. one whose tag starts with `!` like `@event !GoAhead`*)
+   1. Write a 4-byte uint representing the state's ID.
+   2. Write a 4-byte uint representing the number of bytes incoming (to make sure we agree on grid size).
+   3. Read a success flag, for whether the ID and grid length were valid and the state is paused at a mutable event. If unsuccessful then stop.
+   4. Write the new grid data
+   5. Read another success flag (always 1; it just helps us agree that the message has ended).
+11. (11) **Get the resolution of a state's grid**
+   1. Write a 4-byte uint representing the state's ID.
+   2. Read a success flag, for whether the state ID was valid. If unsuccessful then stop.
+   3. Read a 4-byte uint representing the grid's number of dimensions.
+   4. For each grid axis, read a 4-byte uint representing its size along that axis.
 
 ## Scenes
 
@@ -230,9 +252,6 @@ Many algorithms can be found in the *scenes/* folder.
 They are heavily commented to help you learn.
 
 ## Optimizing the standalone builds
-
-**This section is for anyone who really wants to integrate the DLL release directly into a project.**
-**You should prefer the IPC executable instead.**
 
 Due to Julia's unique JIT architecture, it essentially needs a whole compiler inside its runtime.
 Due to our GUI tool, there are many sub-sub-dependencies compiled into the package.
@@ -273,6 +292,17 @@ So you should clone BplusCore, BplusApp, BplusTools, and Bplus,
 # Add local B+ to MarkovJunior
 ] activate .
 ] dev ../Bplus.jl
+````
+
+### Skipping precompilation
+
+Normally we use *PrecompileTools.jl* to precompile significant amounts of our code.
+However if you're developing this package then you'll make frequent changes and probably do not want this.
+You can disable compilation by adding the file *LocalPreferences.toml* to this project root:
+
+````toml
+[MarkovJunior]
+precompile_workload = false
 ````
 
 ### Building standalone binaries

@@ -13,7 +13,7 @@ The algorithm runs as a coroutine within its own Task.
 Start the task with `commsChannel::AlgoCommsChannel = markov_algo_run(algo, initial_state_or_resolution, [tick_settings]; ...)`
 The `MarkovTickSettings` struct allows you to control how the algorithm runs, and can even be changed during the run.
 For example you can signal the algorithm to cancel itself with `ticking.cancel_algo = true`,
-  or fast-forward to the end by setting `ticking.skip_most_tagged_events = true` and
+  or fast-forward to the end by setting `ticking.skip_tagged_events = SkipTaggedEvents.all_skippable` and
   `ticking.min_tick_priority = 99999999`.
 
 The returned `Channel` is used to communicate with the coroutine;
@@ -53,7 +53,7 @@ const System = Base.Sys
 
 using MacroTools, HybridStructs, NamedTupleTools, ConcurrentUtilities
 using OrderedCollections, StaticArrays, DataStructures, Statistics, Combinatorics
-using StructTypes, JSON3, ArgParse
+using StructTypes, JSON3, ArgParse, PrecompileTools
 using GLFW, CImGui, CSyntax
 const LibCImGui = CImGui.LibCImGui
 
@@ -78,12 +78,17 @@ include("algo_interfaces.jl")
 include("op_rewrite.jl")
 include("op_fill.jl")
 include("op_sequence.jl")
+include("op_event.jl")
+include("op_scale.jl")
+include("op_within_box.jl")
+include("op_within_regions.jl")
 include("bias_temperature.jl")
 include("bias_field.jl")
 export @markovjunior, markov_algo_parse,
        MarkovAlgorithm, MarkovTickSettings,
        markov_algo_run, markov_algo_next, markov_algo_complete, markov_algo_cleanup,
        markov_algo_to_string
+include("precompile_core.jl")
 
 # Tooling:
 if BUILT_WITH_TOOL
@@ -95,7 +100,6 @@ if BUILT_WITH_TOOL
 end
 
 # Library:
-# include("lib_interface.jl")
 include("ipc_interface.jl")
 export markovjunior_run_ipc
 

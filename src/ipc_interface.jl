@@ -6,10 +6,11 @@ The number at the end indicates the version;
   if we make a breaking change to the protocol then it will be incremented.
 "
 const IPC_PIPE_NAME = "jmj_ipc_2"
-const IPC_PIPE_PATH = if Sys.iswindows()
-    "\\\\.\\pipe\\$IPC_PIPE_NAME"
+
+ipc_pipe_path(name = IPC_PIPE_NAME) = if Sys.iswindows()
+    "\\\\.\\pipe\\$name"
 else
-    "/tmp/$IPC_PIPE_NAME"
+    "/tmp/$name"
 end
 
 const IPC_Handle = UInt32
@@ -36,30 +37,49 @@ ipc_remove_algorithm(id::IPC_Handle)::Optional{MarkovAlgorithm} = lock_write(IPC
 end
 
 # Running algorithms are managed in a similar way.
-const IPC_STATE_LOOKUP = Dict{IPC_Handle, Tuple{MarkovAlgorithm, CellGrid, AlgoCommsChannel}}()
+"A running algorithm, managed by the IPC server"
+struct IpcState
+    algo::MarkovAlgorithm
+    grid::CellGrid
+    channel::AlgoCommsChannel
+
+    has_ended::Bool
+    is_paused_at_mutable_event::Bool
+end
+const IPC_STATE_LOOKUP = Dict{IPC_Handle, IpcState}()
 const IPC_STATE_LOCKER = ReadWriteLock()
 IPC_NEXT_STATE_ID::IPC_Handle = 1
-ipc_get_state(id::IPC_Handle)::Optional{Tuple{MarkovAlgorithm, CellGrid, AlgoCommsChannel}} = lock_read(IPC_STATE_LOCKER) do
+ipc_get_state(id::IPC_Handle)::Optional{IpcState} = lock_read(IPC_STATE_LOCKER) do
     return get(IPC_STATE_LOOKUP, id, nothing)
 end
 ipc_add_state(algo::MarkovAlgorithm, @nospecialize(grid::CellGrid), channel::AlgoCommsChannel)::IPC_Handle = lock_write(IPC_STATE_LOCKER) do
     global IPC_NEXT_STATE_ID
     id = IPC_NEXT_STATE_ID
-    IPC_STATE_LOOKUP[id] = (algo, grid, channel)
+    IPC_STATE_LOOKUP[id] = IpcState(algo, grid, channel, false, false)
 
     IPC_NEXT_STATE_ID += one(IPC_Handle)
     return id
 end
-ipc_update_state_grid(id::IPC_Handle, @nospecialize(new_grid::CellGrid))::Bool = lock_write(IPC_STATE_LOCKER) do
-    result = get(IPC_STATE_LOOKUP, id, nothing)
-    if isnothing(result)
+"Replaces the given state with the output of your lambda; returns whether the state exists"
+ipc_modify_state(modify, id::IPC_Handle)::Bool = lock_write(IPC_STATE_LOCKER) do
+    state = get(IPC_STATE_LOOKUP, id, nothing)
+    if isnothing(state)
         return false
     end
 
-    IPC_STATE_LOOKUP[id] = (result[1], new_grid, result[2])
+    IPC_STATE_LOOKUP[id] = modify(state)::IpcState
     return true
 end
-ipc_remove_state(id::IPC_Handle)::Optional{Tuple{MarkovAlgorithm, CellGrid, AlgoCommsChannel}} = lock_write(IPC_STATE_LOCKER) do
+ipc_update_state_grid(id::IPC_Handle, @nospecialize(new_grid::CellGrid))::Bool = ipc_modify_state(id) do state
+    @set! state.grid = new_grid
+end
+ipc_mark_state_has_ended(id::IPC_Handle)::Bool = ipc_modify_state(id) do state
+    @set! state.has_ended = true
+end
+ipc_set_state_at_mutable_event(id::IPC_Handle, value::Bool)::Bool = ipc_modify_state(id) do state
+    @set! state.is_paused_at_mutable_event = value
+end
+ipc_remove_state(id::IPC_Handle)::Optional{IpcState} = lock_write(IPC_STATE_LOCKER) do
     result = get(IPC_STATE_LOOKUP, id, nothing)
     delete!(IPC_STATE_LOOKUP, id)
     return result
@@ -88,7 +108,11 @@ macro ipc_debug_log(args...)
     )
 end
 
-function ipc_client_loop(client_name, channel, server, safety_caps::IpcSafetyCaps, ::Val{DebugMode}) where {DebugMode}
+function ipc_client_loop(client_name, channel, server,
+                         safety_caps::IpcSafetyCaps, ::Val{DebugMode}
+                        )::Nothing where {DebugMode}
+    managed_algos = Set{IPC_Handle}()
+    managed_states = Set{IPC_Handle}()
     try
         while true
             msg_idx = read(channel, UInt32)
@@ -151,7 +175,6 @@ function ipc_client_loop(client_name, channel, server, safety_caps::IpcSafetyCap
                 @ipc_debug_log "M: Closing a parsed Algorithm..."
                 algo_id = read(channel, IPC_Handle)
                 @ipc_debug_log "    Algo " algo_id
-
                 result = ipc_remove_algorithm(algo_id)
                 @ipc_debug_log "    result: " exists(result)
                 write(channel, convert(UInt8, exists(result)))
@@ -266,9 +289,12 @@ function ipc_client_loop(client_name, channel, server, safety_caps::IpcSafetyCap
                 if exists(result)
                     @ipc_debug_log "     Successful"
                     write(channel, one(UInt8))
-                    (algo, grid, comms_channel) = result
-                    close(comms_channel) # Will trigger an exception upon the algo's next tick,
-                                         #    which is then handled appropriately
+                    if result.has_ended
+                        put!(result.channel, 0)
+                    else
+                        close(result.channel) # Will trigger an exception upon the algo's next tick,
+                                             #    which is then handled appropriately
+                    end
                 else
                     println(stderr, client_name, "|    ERROR: state with that ID doesn't exist")
                     write(channel, zero(UInt8))
@@ -305,52 +331,58 @@ function ipc_client_loop(client_name, channel, server, safety_caps::IpcSafetyCap
                 elseif tag_cutoff == :error
                     write(channel, zero(UInt8))
                 else
-                    (algo, grid, state_channel) = state_query_result
-                    algo_finished::Bool = false
+                    grid = state_query_result.grid
+                    state_channel = state_query_result.channel
+                    algo_finished::Bool = state_query_result.has_ended
                     user_request_finished::Bool = false
                     reported_tag::Optional{Symbol} = nothing
-                    (tick_count > 0) && while true
-                        # Tick and accept the result.
-                        put!(state_channel, zero(Int))
-                        next_tick_data = take!(state_channel)
+                    ipc_set_state_at_mutable_event(state_id, false)
+                    if !algo_finished
+                        (tick_count > 0) && while true
+                            # Tick and accept the result.
+                            put!(state_channel, zero(Int))
+                            next_tick_data = take!(state_channel)
 
-                        if next_tick_data isa Int
-                            if next_tick_data >= tick_cutoff
-                                tick_count -= 1
-                                if tick_count <= 0
-                                    @ipc_debug_log "    Hit tick limit!"
-                                    user_request_finished = true
-                                    break
+                            if next_tick_data isa Int
+                                if next_tick_data >= tick_cutoff
+                                    tick_count -= 1
+                                    if tick_count <= 0
+                                        @ipc_debug_log "    Hit tick limit!"
+                                        user_request_finished = true
+                                        break
+                                    end
                                 end
+                            elseif next_tick_data isa Symbol
+                                # If the algorithm was just emitting a 'start' tag,
+                                #    ignore it.
+                                if next_tick_data != TAG_ALGO_STARTING
+                                    # If the algorithm completed, we must finish the tick.
+                                    if next_tick_data == TAG_ALGO_COMPLETED
+                                        algo_finished = true
+                                        user_request_finished = tag_cutoff in (:all, :completion)
+                                        reported_tag = next_tick_data
+                                        ipc_mark_state_has_ended(state_id)
+                                        break
+                                    end
+                                    # If the algorithm reallocated the grid, store the new grid.
+                                    if next_tick_data == TAG_NEW_GRID
+                                        grid = take!(state_channel)
+                                        ipc_update_state_grid(state_id, grid)
+                                    # If the user wanted any tagged event, then we're done.
+                                    elseif tag_cutoff == :all
+                                        user_request_finished = true
+                                        reported_tag = next_tick_data
+                                        break
+                                    else
+                                        @ipc_debug_log "    Skimming over tagged event '$next_tick_data'"
+                                    end
+                                end
+                            else
+                                error("Unhandled ", typeof(next_tick_data), ": ", next_tick_data)
                             end
-                        elseif next_tick_data isa Symbol
-                            # If the algorithm was just emitting a 'start' tag,
-                            #    ignore it.
-                            if next_tick_data != TAG_ALGO_STARTING
-                                # If the algorithm completed, we must finish the tick.
-                                if next_tick_data == TAG_ALGO_COMPLETED
-                                    algo_finished = true
-                                    user_request_finished = tag_cutoff in (:all, :completion)
-                                    reported_tag = next_tick_data
-                                    break
-                                end
-                                # If the algorithm reallocated the grid, store the new grid.
-                                if next_tick_data == TAG_NEW_GRID
-                                    grid = take!(state_channel)
-                                    ipc_update_state_grid(state_id, grid)
-                                # If the user wanted any tagged event, then we're done.
-                                elseif tag_cutoff == :all
-                                    user_request_finished = true
-                                    reported_tag = next_tick_data
-                                    break
-                                else
-                                    @ipc_debug_log "    Skimming over tagged event '$next_tick_data'"
-                                end
-                            end
-                        else
-                            error("Unhandled ", typeof(next_tick_data), ": ", next_tick_data)
                         end
                     end
+                    ipc_set_state_at_mutable_event(state_id, exists(reported_tag) && is_mutable_event_tag(reported_tag))
 
                     # Report to the user what happened.
                     @ipc_debug_log "    Algo $((algo_finished ? "has finished!" : (exists(reported_tag) ? "hit tagged event '$reported_tag'" : "isn't done yet")))"
@@ -377,7 +409,7 @@ function ipc_client_loop(client_name, channel, server, safety_caps::IpcSafetyCap
                 if exists(result)
                     @ipc_debug_log "     Successful"
                     write(channel, one(UInt8))
-                    (algo, grid, comms_channel) = result
+                    (; grid) = result
 
                     write(channel, convert(UInt32, ndims(grid)))
                     for s in size(grid)
@@ -388,7 +420,7 @@ function ipc_client_loop(client_name, channel, server, safety_caps::IpcSafetyCap
                     println(stderr, client_name, "|    ERROR: state with that ID doesn't exist")
                     write(channel, zero(UInt8))
                 end
-            # Message 7: Kill sever thread
+            # Message 7: Kill server thread
             elseif msg_idx == 7
                 @ipc_debug_log "M: Kill server thread..."
                 if isnothing(server)
@@ -401,6 +433,81 @@ function ipc_client_loop(client_name, channel, server, safety_caps::IpcSafetyCap
                 else
                     println(stderr, "Client \"", client_name, "\" tried to kill the server thread but it's already dead")
                     write(channel, one(UInt8))
+                end
+            # Message 8: Take ownership of an algorithm
+            elseif msg_idx == 8
+                @ipc_debug_log "M: Take ownership of algorithm..."
+                algo_id = read(channel, UInt32)
+                @ipc_debug_log "     Algo=" algo_id
+
+                result = ipc_get_algorithm(algo_id)
+                if exists(result)
+                    @ipc_debug_log "     Successful"
+                    write(channel, one(UInt8))
+                    push!(managed_algos, algo_id)
+                else
+                    println(stderr, client_name, "|    ERROR: algo with that ID doesn't exist")
+                    write(channel, zero(UInt8))
+                end
+            # Message 9: Take ownership of a running algo-state
+            elseif msg_idx == 9
+                @ipc_debug_log "M: Take ownership of state..."
+                state_id = read(channel, UInt32)
+                @ipc_debug_log "     State=" state_id
+
+                result = ipc_get_state(state_id)
+                if exists(result)
+                    @ipc_debug_log "     Successful"
+                    write(channel, one(UInt8))
+                    push!(managed_states, state_id)
+                else
+                    println(stderr, client_name, "|    ERROR: state with that ID doesn't exist")
+                    write(channel, zero(UInt8))
+                end
+            # Message 10: write a new grid-state
+            elseif msg_idx == 10
+                @ipc_debug_log "M: Write to the grid (better be during a mutating tagged event...)"
+                state_id = read(channel, UInt32)
+                n_incoming_bytes = read(channel, UInt32)
+                @ipc_debug_log "    State=" state_id ";  IncomingBytes=" n_incoming_bytes
+
+                result = ipc_get_state(state_id)
+                if isnothing(result)
+                    println(stderr, client_name, "|    ERROR: state with that ID doesn't exist")
+                    write(channel, zero(UInt8))
+                elseif !result.is_paused_at_mutable_event
+                    println(stderr, client_name, "|    ERROR: state isn't paused at a mutable event (one whose tag starts with '", MUTABLE_EVENT_TAG_PREFIX, "')")
+                    write(channel, zero(UInt8))
+                elseif length(result.grid) != n_incoming_bytes
+                    println(stderr, client_name, "|    ERROR: grid is ", length(result.grid), " bytes but client is sending ", n_incoming_bytes)
+                    write(channel, zero(UInt8))
+                else
+                    @ipc_debug_log "    Successful"
+                    write(channel, one(UInt8))
+                    read!(channel, result.grid)
+
+                    @ipc_debug_log "    Done! Writing 'end' flag"
+                    write(channel, one(UInt8))
+                end
+            # Message 11: query the resolution of a state's grid
+            elseif msg_idx == 11
+                @ipc_debug_log "M: Read the resolution of a state's grid..."
+                state_id = read(channel, UInt32)
+                @ipc_debug_log "    State=" state_id
+
+                result = ipc_get_state(state_id)
+                if exists(result)
+                    @ipc_debug_log "     Successful"
+                    write(channel, one(UInt8))
+                    (; grid) = result
+
+                    write(channel, convert(UInt32, ndims(grid)))
+                    for s in size(grid)
+                        write(channel, convert(UInt32, s))
+                    end
+                else
+                    println(stderr, client_name, "|    ERROR: state with that ID doesn't exist")
+                    write(channel, zero(UInt8))
                 end
             else
                 println(stderr, "Client \"", client_name, "\" sent invalid message index ", msg_idx,
@@ -419,6 +526,15 @@ function ipc_client_loop(client_name, channel, server, safety_caps::IpcSafetyCap
             print(stderr, "\n\n")
         end
     finally
+        for s in managed_states
+            result = ipc_remove_state(s)
+            exists(result) && close(result.channel)
+        end
+
+        for a in managed_algos
+            ipc_remove_algorithm(a)
+        end
+
         if isopen(channel)
             close(channel)
         end
@@ -445,11 +561,13 @@ function markovjunior_run_ipc(blocking::Bool, ::Val{DebugMode} = Val(false)
                               ;
                               safety_caps::IpcSafetyCaps = IpcSafetyCaps(),
                               allow_kill_message::Bool = false,
-                              pipe_path::String = IPC_PIPE_PATH,
+                              pipe_name::String = IPC_PIPE_NAME,
                               server_is_ready_callback = () -> println(stderr, "\tNow open to clients!")
                              ) where {DebugMode}
-    println(stderr, "Offering JMarkovJunior at ", pipe_path)
-    server = listen(pipe_path)
+    pipe_full_path = ipc_pipe_path(pipe_name)
+    println(stderr, "Offering JMarkovJunior at ", pipe_full_path)
+    server = listen(pipe_full_path)
+    client_threads = Task[ ]
     server_is_ready_callback()
 
     server_loop = () -> while true
@@ -461,6 +579,7 @@ function markovjunior_run_ipc(blocking::Bool, ::Val{DebugMode} = Val(false)
                 rethrow()
             else
                 println(stderr, "Server noticed the kill signal; closing...")
+                foreach(fetch, client_threads)
                 break
             end
         end
@@ -494,11 +613,12 @@ function markovjunior_run_ipc(blocking::Bool, ::Val{DebugMode} = Val(false)
         end
 
         # Start the client's message loop in a new task.
-        exists(client_name) && Threads.@spawn(ipc_client_loop(
+        exists(client_name) && push!(client_threads, Threads.@spawn(ipc_client_loop(
             $client_name, $channel,
             $allow_kill_message ? server : nothing,
             safety_caps, Val(DebugMode)
-        ))
+        )))
+        filter!(!istaskdone, client_threads)
     end
     if blocking
         server_loop()
@@ -538,9 +658,9 @@ function markovjunior_run_ipc_main()::Cint
         "--debug", "-d"
             help = "Verbose logging of server logic to pinpoint crashes"
             action = :store_true
-        "pipe_path"
-            help = "An alternative name for the named-pipe that other processes talk to (valid syntax depends on your OS)"
-            default = IPC_PIPE_PATH
+        "pipe_name"
+            help = "An alternative name for the named-pipe that other processes talk to (not including the OS-specific path)"
+            default = IPC_PIPE_NAME
     end
     arg_table = parse_args(ARGS, arg_settings)
 
@@ -554,7 +674,7 @@ function markovjunior_run_ipc_main()::Cint
                 max_algo_string_len = arg_table["max-algo"],
                 max_client_name_len = arg_table["max-client-name"]
             ),
-            pipe_path = arg_table["pipe_path"],
+            pipe_name = arg_table["pipe_name"],
             server_is_ready_callback = () -> begin
                 print(stderr, "\tNow open to clients! ")
                 write(stdout, IPC_MAIN_START_CODE)

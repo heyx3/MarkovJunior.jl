@@ -2,7 +2,7 @@
 # Pass "-logmd" to turn on multidimensional-rewrite rule logging.
 
 using Pkg
-Pkg.activate(joinpath(@__FILE__, "../.."))
+Pkg.activate(joinpath(@__DIR__, ".."))
 println(stderr, ".")
 
 using MarkovJunior

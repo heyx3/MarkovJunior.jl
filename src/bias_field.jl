@@ -1,4 +1,4 @@
-# How the Field Bias should handle rewrite actions outside its pathing tree.
+"How the Field Bias should handle rewrite actions outside its pathing tree."
 @bp_enum(BiasFieldOutsideCellMode,
     # Rewrite actions that stray outside the pathing tree are strictly forbidden;
     #    reversing the field does not affect this behavior (they are still forbidden).
@@ -12,6 +12,12 @@
     # When the field is flipped, those outside actions have the highest bias instead.
     soft
 )
+# How the Field Bias combines the per-cell biases of an action (e.g. a rewrite rule, or a whole region).
+#
+# `deviation` and `diff` are tuned for the handful of cells in a rewrite rule, and behave poorly in large areas:
+#   `diff` saturates to the full range of the field above roughly 6 cells (see `DIFF_CURVE`),
+#   and `deviation` tends to dominate other biases since large areas usually have a wide spread of distances.
+# In large areas, `min` and `max` also favor bigger areas, as they have more chances to contain an extreme cell.
 @bp_enum(BiasFieldComboMode,
     average, min, max,
     first, deviation, diff
@@ -51,12 +57,12 @@ const TFieldBiasAnchorBuffers{NGrid} = Tuple{
     Array{Bool, NGrid},
     FloodFillAllocations{VecI{NGrid}, Set{VecI{NGrid}}, Vector{VecI{NGrid}}}
 }
-struct MarkovBiasField_State{NGrid, BHasPathCells, BHasAnchors,
-                             TAnchorBuffers<:Optional{TFieldBiasAnchorBuffers{NGrid}}}
-    distance_field::Array{UInt32, NGrid} # typemax represents "no path"
-    anchor_buffers::TAnchorBuffers
+mutable struct MarkovBiasField_State{NGrid, BHasPathCells, BHasAnchors,
+                                     TAnchorBuffers<:Optional{TFieldBiasAnchorBuffers{NGrid}}}
+    const distance_field::Array{UInt32, NGrid} # typemax represents "no path"
+    const anchor_buffers::TAnchorBuffers
     largest_dist::UInt32
-    biases_buffer::Vector{Float32}
+    const biases_buffer::Vector{Float32}
 end
 
 println("#TODO: Plan a switch for field() bias from djikstra maps to BFS, which should be far faster")
@@ -213,13 +219,7 @@ function markov_bias_initialize(f::MarkovBiasField, algo::MarkovAlgorithm,
             zero(UInt32),
             markov_allocator_acquire_array(alloc, (), Float32)
         )
-        # Setfield package isn't working properly here, for some reason.
-        state = TState(
-            state.distance_field,
-            state.anchor_buffers,
-            rebuild_distance_field(f, state, algo_state.grid),
-            state.biases_buffer
-        )
+        state.largest_dist = rebuild_distance_field(f, state, algo_state.grid)
         return state
     end
     return run_with_alloc(algo_state.allocator)
@@ -229,10 +229,10 @@ function markov_bias_cleanup(f::MarkovBiasField, s::MarkovBiasField_State,
     # We have a lot to release, so dispatch on the allocator type.
     function run_with_alloc(alloc::TAlloc) where {TAlloc}
         markov_allocator_release_array(alloc, s.distance_field)
+        markov_allocator_release_array(alloc, s.biases_buffer)
         if exists(s.anchor_buffers)
             markov_allocator_release_array(alloc, s.anchor_buffers[1])
             markov_allocator_release_array(alloc, s.anchor_buffers[2].interesting_nodes)
-            markov_allocator_release_array(alloc, s.biases_buffer)
             markov_allocator_release_set(alloc, s.anchor_buffers[2].visited_nodes)
         end
         return nothing
@@ -250,20 +250,14 @@ function markov_bias_update(field::MarkovBiasField, state::MarkovBiasField_State
                                     (algo_state.grid[v] for v in min_inclusive(subset):max_inclusive(subset)))
         relevant_cell_types = union(field.sources, field.paths, field.anchors)
         if !isempty(intersect(involved_cell_types, relevant_cell_types))
-            # Setfield dislikes our state type for some reason.
-            state = typeof(state)(
-                state.distance_field,
-                state.anchor_buffers,
-                rebuild_distance_field(field, state, algo_state.grid),
-                state.biases_buffer
-            )
+            state.largest_dist = rebuild_distance_field(field, state, algo_state.grid)
         end
     end
-    return state
+    return nothing
 end
 function markov_bias_calculate(field::MarkovBiasField, state::MarkovBiasField_State{N, BPath},
                                algo::MarkovAlgorithm, algo_state::AlgoState,
-                               at::Union{CellLine{N}, CellRegion{N}},
+                               at::CellArea{N},
                                # Convenient type-deduction of the integer vector:
                                ::V = zero(Vec{N, Int32})
                               )::Optional{Float32} where {N, BPath, V<:Vec{N, Int32}}
@@ -337,13 +331,7 @@ function markov_bias_calculate(field::MarkovBiasField, state::MarkovBiasField_St
         )
     end
     bias::Float32 = if field.combo == BiasFieldComboMode.first
-        if at isa CellLine{N}
-            pixel_bias(at.start_cell)
-        elseif at isa CellRegion{N}
-            pixel_bias(min_inclusive(at.b))
-        else
-            error("Unhandled: ", typeof(at))
-        end
+        pixel_bias(first_cell(at))
     else
         empty!(state.biases_buffer)
         for_each_cell(at) do local_idx, global_idx

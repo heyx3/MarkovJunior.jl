@@ -150,18 +150,22 @@ function MJ.markov_algo_run(
     # The best way to do that is with hidden extra arguments:
     grid::TGrid = algo_state.grid,
     alloc::TAllocator = algo_state.allocator
-)::Tuple{
-    # Your function returns `(changed_anything, new_inherited_bias_states)`
-    Bool, typeof(inherited_bias_states)
-} where {
+)::MJ.OpChangedGrid where {
+    # Your function returns whether it changed the grid.
+    # Return `nothing` if your Op is cosmetic and could never change the grid.
     NGridDims, TGrid<:MJ.CellGrid{NGridDims},
     TAllocator<:MarkovJunior.AbstractMarkovAllocator
 }
     VI = Vec{NGridDims, Int32} # typedef for grid index
 
     # Some Ops want to reallocate the grid with a new size or dimensionality.
-    # The proper way to do this is to call our helper function:
-    grid = MJ.markov_algo_new_grid(algo_state, size(grid) .÷ 2) do old_grid, new_grid
+    # The proper way to do this is to call our helper function, which also updates the biases.
+    # Bias states may get replaced in the process (possibly with different types),
+    #    so it returns the new ones along with the new grid.
+    (grid, inherited_bias_states) = MJ.markov_opalgo_new_grid(
+        algo, algo_state, size(grid) .÷ 2,
+        inherited_biases, inherited_bias_states
+    ) do old_grid, new_grid
         # (fill in 'new_grid', referencing 'old_grid')
         return nothing
     end
@@ -187,12 +191,12 @@ function MJ.markov_algo_run(
         #    `MJ.STANDARD_MIN_COMPILE_TIME_TICK_PRIORITY`, currently 3.
         # The standard priority for the *completion* of a simple Op like @rewrite is
         #    `MJ.STANDARD_END_OF_OP_TICK_PRIORITY`, currently 4.
-        MJ.markov_algo_tick(algo_state, MJ.STANDARD_MIN_COMPILE_TIME_TICK_PRIORITY)
+        MJ.markov_opalgo_tick(algo_state, MJ.STANDARD_MIN_COMPILE_TIME_TICK_PRIORITY)
 
         # You can also tick with a Symbol, which represents a "tagged event"
         #    that gets sent to users.
         # This is what the `@event` Op does.
-        MJ.markov_algo_tick(algo_state, :my_custom_event)
+        MJ.markov_opalgo_tick(algo_state, :my_custom_event)
         # One use of tagged events is to let users inject their own changes to the grid,
         #    then your Op can react to those changes.
         # They could also feed more complex data to you through `algo_state.data_store`.
@@ -201,21 +205,22 @@ function MJ.markov_algo_run(
         my_area = ...
         for pixel::VI in my_area
             grid[pixel] = 0
-            MJ.markov_algo_tick(algo_state, 1)
+            MJ.markov_opalgo_tick(algo_state, 1)
         end
-        MJ.markov_algo_tick(algo_state, MJ.STANDARD_END_OF_OP_TICK_PRIORITY)
+        MJ.markov_opalgo_tick(algo_state, MJ.STANDARD_END_OF_OP_TICK_PRIORITY)
 
-        # Lastly, we need to report any changes and update the Biases to know about our changes.
-        return if isempty(my_area)
-            (false, inherited_bias_states)
+        # Lastly, we need to update the Biases to know about our changes, and report whether we made any.
+        if isempty(my_area)
+            return false
         else
-            (true, MJ.markov_bias_update.(
-                inherited_biases,  inherited_bias_states,
+            MJ.markov_opbias_update_all!(
+                inherited_biases, inherited_bias_states,
                 algo, algo_state,
                 # Our update changed the entire grid, more or less
                 BoxI{NGridDims}(min=one(VI), size=vsize(grid)),
                 old_grid
-            ))
+            )
+            return true
         end
     end
 end
@@ -223,6 +228,22 @@ end
 
 > *Practice good exception hygiene: always free your allocated collections,*
 > *and make sure that you don't stop `MarkovJunior.ErrorCancelAlgo` from propagating upward!*
+
+You must also say whether your Op might reallocate the grid.
+Scoped Ops like `@within_box` run their inner Ops on a view of the grid, so they check this while parsing
+  (there's deliberately no default, so a new Op can't accidentally opt in or out):
+
+````julia
+MJ.markov_op_reallocates_grid(op::MyCustomOp) = true # It calls `markov_opalgo_new_grid()`
+# If your Op contains other Ops, ask them too, e.g.
+#   `MJ.markov_op_reallocates_grid(op::MyCustomOp) = any(MJ.markov_op_reallocates_grid, op.inner_ops)`
+````
+
+If your Op runs other Ops within part of the grid, look at `markov_opalgo_on_subgrid()` and `@within_box`.
+If your Op runs other Ops which might reallocate the grid, bias states may be replaced while they run;
+  watch `algo_state.grid_generation` and re-read them with `markov_opbias_current_states()` when it changes,
+  like `@sequence` does.
+Scoped Ops never replace the outer bias states, so Ops running inside one don't need to worry about it.
 
 Lastly, implement parsing and string-ification.
 
@@ -273,9 +294,16 @@ New custom Ops may choose to use biases as well.
 The workflow for new Biases is more complicated than new Ops:
 
 1. "Initialize" the Bias and return the initial state: `markov_bias_initialize`
-2. "Update" the Bias after a grid modification, and return its new state: `markov_bias_update`
+  If the state ever changes afterwards, it must be a mutable object.
+2. "Update" the Bias's state *in place* after a grid modification: `markov_bias_update`
+  1. Optionally, handle the grid being reallocated (e.g. resized) by returning a new state: `markov_bias_new_grid`.
+  By default this cleans up the old state and initializes a new one.
 3. Get the bias value for a potential change to the grid: `markov_bias_calculate`
   The output must be a non-negative number, or `nothing` if the change is strictly forbidden.
+  The change is described by a `CellArea`: a `CellLine` or `CellRegion` for rewrite rules,
+    or a `CellList` / `CellMask` for Ops that consider whole regions of arbitrary shape.
+  `for_each_cell(area) do local_idx, cell ... end` visits the cells of any of them.
+  There's no default, so your bias only works with the kinds of areas you implement.
 4. "Cleanup" the Bias's allocations: `markov_bias_cleanup`
 5. Convert the Bias to and from a DSL string: `dsl_format`, `parse_markovjunior_bias`
   The DSL syntax for a bias is a function call (`my_bias(a, b/c)`),

@@ -11,13 +11,13 @@ function markov_algo_run(sequence::MarkovOpSequence{NSelfBiases},
                          inherited_biases::NTuple{NInheritedBiases, AbstractMarkovBias},
                          inherited_bias_states::NTuple{NInheritedBiases, Any},
                          grid::TGrid = algo_state.grid
-                        )::Tuple{Bool, typeof(inherited_bias_states)} where {
+                        )::OpChangedGrid where {
                             TGrid<:CellGrid,
                             NInheritedBiases, NSelfBiases
                         }
     # Set up the repetition counter.
-    repetitions_left = if isnothing(sequence.threshold)
-        typemax(Int)
+    _repetitions_left = if isnothing(sequence.threshold)
+        1
     elseif sequence.threshold isa SequenceRepeatModeTag
         sequence.threshold
     elseif sequence.threshold isa Threshold
@@ -25,66 +25,70 @@ function markov_algo_run(sequence::MarkovOpSequence{NSelfBiases},
     else
         error("Unhandled: ", typeof(sequence.threshold))
     end
-    if (repetitions_left isa Int) && (repetitions_left < 0)
-        return (false, inherited_bias_states)
+    if isempty(sequence.ops) ||
+       ((_repetitions_left isa Int) && (_repetitions_left <= 0))
+        return isempty(sequence.ops) ? nothing : false
     end
 
-    # Initialize our own biases.
-    all_biases = tuple(
-        inherited_biases...,
-        sequence.biases...
-    )
-    all_bias_states = tuple(
-        inherited_bias_states...,
-        markov_bias_initialize.(sequence.biases, Ref(algo), Ref(algo_state))...
-    )
-    # Make sure bias states get cleaned up at the end (or else we leak allocations).
-    try
+    return markov_opbias_with_new_biases(sequence.biases, algo, algo_state,
+                                         inherited_biases, inherited_bias_states
+                                        ) do all_biases, all_bias_states
+        repetitions_left = _repetitions_left
+        known_grid_generation::Int = algo_state.grid_generation
 
-    # Run the loop.
-    @logic_logln("Starting sequence with threshold `", repetitions_left, "`")
-    made_any_changes::Bool = false
-    rep_i::Int = 0
-    while (repetitions_left isa SequenceRepeatModeTag) || (repetitions_left > 0)
-        if repetitions_left isa Int
-            repetitions_left -= 1
-        end
-        rep_i += 1
-        @logic_logln("REPETITION ", rep_i)
+        # Run the loop.
+        @logic_logln("Starting sequence with threshold `", repetitions_left, "`")
+        result::OpChangedGrid = nothing
+        rep_i::Int = 0
+        while (repetitions_left isa SequenceRepeatModeTag) || (repetitions_left > 0)
+            if repetitions_left isa Int
+                repetitions_left -= 1
+            end
+            rep_i += 1
+            @logic_logln("REPETITION ", rep_i)
 
-        for op_i in 1:length(sequence.ops)
-            @logic_logln("Inner op ", op_i, ":")
-            @logic_tab_in()
+            # In 'repeat' mode, the first non-cosmetic op decides whether to keep going.
+            pass_result::OpChangedGrid = nothing
+            for op_i in 1:length(sequence.ops)
+                @logic_logln("Inner op ", op_i, ":")
+                @logic_tab_in()
 
-            (op_made_changes, all_bias_states) = markov_algo_run(
-                sequence.ops[op_i], algo, algo_state,
-                all_biases, all_bias_states
-            )
-            stop_early::Bool = false
-            made_any_changes |= op_made_changes
-            if !op_made_changes && (op_i == 1) && (repetitions_left isa SequenceRepeatModeTag)
-                @logic_logln("Inner op did nothing! The outer sequence will end now")
-                stop_early = true
+                op_result = markov_algo_run(
+                    sequence.ops[op_i], algo, algo_state,
+                    all_biases, all_bias_states
+                )
+                # If the grid was reallocated, bias states need to be re-cached.
+                if algo_state.grid_generation != known_grid_generation
+                    known_grid_generation = algo_state.grid_generation
+                    all_bias_states = markov_opbias_current_states(algo_state)
+                end
+
+                stop_early::Bool = false
+                if (repetitions_left isa SequenceRepeatModeTag) && isnothing(pass_result) && (op_result === false)
+                    @logic_logln("Inner op did nothing! The outer sequence will end now")
+                    stop_early = true
+                    repetitions_left = 0
+                end
+                pass_result = combine_op_results(pass_result, op_result)
+
+                @logic_tab_out()
+                stop_early && break
+            end
+            result = combine_op_results(result, pass_result)
+
+            # If every op was cosmetic, repeating would never end.
+            if (repetitions_left isa SequenceRepeatModeTag) && isnothing(pass_result)
+                @logic_logln("Every inner op was cosmetic! The outer sequence will end now")
                 repetitions_left = 0
             end
-
-            @logic_tab_out()
-            stop_early && break
         end
-    end
 
-    markov_algo_tick(algo_state, STANDARD_END_OF_OP_TICK_PRIORITY + 1)
-    return (made_any_changes, ntuple(i -> all_bias_states[i], Val(NInheritedBiases)))
-
-    # Finish the bias cleanup logic:
-    finally
-        foreach(ntuple(identity, Val(NSelfBiases))) do i
-            markov_bias_cleanup(all_biases[i + NInheritedBiases],
-                                all_bias_states[i + NInheritedBiases],
-                                algo, algo_state)
-        end
+        markov_opalgo_tick(algo_state, STANDARD_END_OF_OP_TICK_PRIORITY + 1)
+        return result
     end
 end
+
+markov_op_reallocates_grid(s::MarkovOpSequence) = any(markov_op_reallocates_grid, s.ops)
 
 dsl_format(s::MarkovOpSequence) = string(
     "@sequence ",

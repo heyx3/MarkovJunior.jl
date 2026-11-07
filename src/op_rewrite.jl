@@ -1061,7 +1061,7 @@ function markov_algo_run(rewrite::MarkovOpRewrite{TRules, TBias, TPriority},
                          inherited_biases::NTuple{NInheritedBiases, AbstractMarkovBias},
                          inherited_bias_states::NTuple{NInheritedBiases, Any},
                          grid::CellGrid{NGridDims} = algo_state.grid
-                        )::Tuple{Bool, typeof(inherited_bias_states)} where {
+                        )::Bool where {
                             TRules, TBias, TPriority,
                             NGridDims, NInheritedBiases
                         }
@@ -1085,11 +1085,13 @@ function markov_algo_run(rewrite::MarkovOpRewrite{TRules, TBias, TPriority},
         @logic_logln("MarkovOpRewrite has no options at the start; canceling...")
         exists(mask_grid) && markov_allocator_release_array(algo_state.allocator, mask_grid)
         close_rewrite_cache(cache, algo_state.allocator)
-        return (false, inherited_bias_states)
+        return false
     end
 
-    biases = tuple(inherited_biases..., rewrite.biases...)
-    bias_states = tuple(inherited_bias_states..., markov_bias_initialize.(rewrite.biases, Ref(algo), Ref(algo_state))...)
+    # Run the rest of the Op with our own biases set up (and eventually cleaned up).
+    return markov_opbias_with_new_biases(rewrite.biases, algo, algo_state,
+                                         inherited_biases, inherited_bias_states
+                                        ) do biases, bias_states
     NBiases = length(biases)
 
     threshold = if isnothing(rewrite.threshold)
@@ -1126,15 +1128,8 @@ function markov_algo_run(rewrite::MarkovOpRewrite{TRules, TBias, TPriority},
     try
         made_modifications::Bool = false
         function finish_op()
-            # Clean up this Op's biases.
-            foreach(ntuple(identity, Val(length(rewrite.biases)))) do bias_i
-                markov_bias_cleanup(biases[bias_i + NInheritedBiases],
-                                    bias_states[bias_i + NInheritedBiases],
-                                    algo, algo_state)
-            end
-
-            markov_algo_tick(algo_state, STANDARD_END_OF_OP_TICK_PRIORITY)
-            return (made_modifications, ntuple(i -> bias_states[i], Val(NInheritedBiases)))
+            markov_opalgo_tick(algo_state, STANDARD_END_OF_OP_TICK_PRIORITY)
+            return made_modifications
         end
 
         while true
@@ -1329,16 +1324,13 @@ function markov_algo_run(rewrite::MarkovOpRewrite{TRules, TBias, TPriority},
 
                 # Update inner bookkeeping.
                 update_rewrite_cache!(cache, affected_area)
-                bias_states = markov_bias_update.(
-                    biases, bias_states,
-                    Ref(algo), Ref(algo_state),
-                    Ref(affected_area), Ref(original_values)
-                )
+                markov_opbias_update_all!(biases, bias_states, algo, algo_state,
+                                          affected_area, original_values)
 
                 # Issue a tick event.
                 # NOTE: I used to issue less-important priorities for simple rules, but
                 #       checking that a set of rewrite rules is "simple" is actually non-trivial.
-                markov_algo_tick(algo_state, STANDARD_MIN_COMPILE_TIME_TICK_PRIORITY)
+                markov_opalgo_tick(algo_state, STANDARD_MIN_COMPILE_TIME_TICK_PRIORITY)
             end)(rewrite.rules[pick_rule_i])
 
             # Update outer bookkeeping.
@@ -1362,7 +1354,12 @@ function markov_algo_run(rewrite::MarkovOpRewrite{TRules, TBias, TPriority},
             close_rewrite_cache(cache, alloc)
         end)(algo_state.allocator)
     end
+
+    # Finish the bias setup/cleanup logic:
+    end
 end
+
+markov_op_reallocates_grid(::MarkovOpRewrite) = false
 
 
 #####################
@@ -1383,8 +1380,8 @@ dsl_format_rewrite_mask(mask::Nothing) = ""
 dsl_format_rewrite_mask(mask::Float32) = "%$mask"
 dsl_format_rewrite_mask(mask::NTuple{2, Float32}) = "%($(mask[1]):$(mask[2]))"
 
-function dsl_format_rewrite_md_array(array::Array{RewriteCell_MD{NDims}, NDims},
-                                     take_source::Bool) where {NDims}
+"Formats a multi-dimensional block of cells, using your lambda to format each one"
+function dsl_format_rewrite_md_array(format_cell, array::Array{<:Any, NDims}) where {NDims}
     output = preallocated_vector(Char, 1024)
     append!(output, "[\n  ")
 
@@ -1422,15 +1419,14 @@ function dsl_format_rewrite_md_array(array::Array{RewriteCell_MD{NDims}, NDims},
         end
 
         # Write the current element.
-        append!(output,
-            if take_source
-                dsl_format_rewrite_source(array[idx...][1])
-            else
-                dsl_format_rewrite_dest(array[idx...][2])
-            end
-        )
+        append!(output, format_cell(array[idx...]))
 
         changed_axis = advance_idx_and_get_changed_axis()
+    end
+
+    # A lone cell like `[ a ]` would be read back as a List/Lookup, so mark it as a block.
+    if all(isone, size(array))
+        append!(output, " ;;")
     end
 
     append!(output, "\n ]")
@@ -1522,9 +1518,9 @@ dsl_format(@nospecialize strip::RewriteRule_Strip) = string(
     end...
 )
 dsl_format(@nospecialize md::RewriteRule_MD) = string(
-    dsl_format_rewrite_md_array(md.cells, true),
+    dsl_format_rewrite_md_array(c -> dsl_format_rewrite_source(c[1]), md.cells),
     " => ",
-    dsl_format_rewrite_md_array(md.cells, false),
+    dsl_format_rewrite_md_array(c -> dsl_format_rewrite_dest(c[2]), md.cells),
     " $(dsl_format_rewrite_mask(md.mask))",
     (isone(md.weight) ? () : (" *", md.weight))...,
     if isempty(md.symmetry.grid_axis_choices) && isempty(md.symmetry.chiral_groups)
@@ -2075,90 +2071,117 @@ function parse_markovjunior_rewrite_rule_strip(inputs::MacroParserInputs, loc, e
 end
 
 "
-Note that Source (lhs) patterns will return a Set as a List, to preserve input order for later processing.
-The output element type is `Any` since it only loosely matches Source or Destination cell types.
+Parses a single cell of a rewrite-like rule.
+A plain color (e.g. `R`) is always allowed; the other syntaxes can each be allowed or forbidden:
+  * Wildcard `_`
+  * Set `{RGB}`
+  * List `[RGB]`
+  * Lookup `[1, 2]`
 "
-function parse_markovjunior_rewrite_rule_md_side(inputs::MacroParserInputs,
-                                                 loc, expr,
-                                                 is_source::Bool
-                                                )::Array{Any}
-    with_parser_stacktrace(inputs,
-                           is_source ?
-                             "Left-hand side (multi-dimensional)" :
-                             "Right-hand side (multi-dimensional)") do
-        function lookup_char(c::Char, allow_wildcard::Bool)::Union{RewriteRuleCellSource, RewriteRuleCellDest{<:Tuple{Vararg{Int}}}}
-            if haskey(CELL_CODE_BY_CHAR, c)
-                CELL_CODE_BY_CHAR[c]
-            elseif allow_wildcard && (c == '_')
-                RewriteRuleCell_Wildcard()
-            else
-                raise_parse_error(
-                    loc, inputs,
-                    "Unsupported color value '", c, "'! Supported are ",
-                    allow_wildcard ? "'_' and " : "",
-                    "[ ", iter_join(keys(CELL_CODE_BY_CHAR), ", ")..., " ]"
-                )
-            end
-        end
-        function lookup_cell(cell_expr)
-            with_parser_stacktrace(inputs, "Cell `$cell_expr`") do
-                if @capture(cell_expr, {a_Symbol})
-                    if is_source
-                        raise_parse_error(loc, inputs,
-                                          "Set syntax not allowed on the Source side -- use List syntax instead")
-                    else
-                        RewriteRuleCell_Set(string(a)...)
-                    end
-                elseif @capture(cell_expr, [a_Symbol])
-                    # 'UpTo' is an abstract array so we have to carefully hide it from Julia's own array logic.
-                    Some(RewriteRuleCell_List(Tuple(
-                        lookup_char.(Iterators.map(identity, string(a)), Ref(false))
-                    )))
-                elseif cell_expr isa Symbol
-                    cell_str = string(cell_expr)
-                    if length(cell_str) != 1
-                        raise_parse_error(loc, inputs,
-                                          "Color char '", cell_str,
-                                            "' should be one text character; got ", length(cell_str))
-                    else
-                        lookup_char(cell_str[1], true)
-                    end
-                elseif @capture(cell_expr, [a__])
-                    if any(!isa(i, Int) for i in a)
-                        raise_parse_error(loc, inputs,
-                                          "Lookup index should be made of integers; got ", typeof.(a))
-                    else
-                        RewriteRuleCell_Lookup(Tuple(a))
-                    end
-                else
-                    raise_parse_error(loc, inputs, "Unsupported syntax!")
-                end
-            end
-        end
-
-        # Manually parsing MD array literals is tricky.
-        # Instead we'll pre-parse each input then eval() the whole thing.
-        sanitized_array_expr(array_expr) = if any(Base.isexpr.(Ref(array_expr), (:ncat, :nrow)))
-            # The first argument of these expressions is some kind of integer.
-            Expr(array_expr.head, array_expr.args[1], Iterators.map(sanitized_array_expr, array_expr.args[2:end])...)
-        elseif any(Base.isexpr.(Ref(array_expr), (:hcat, :vcat, :row)))
-            # Each argument of these expressions is an inner slice of the array.
-            Expr(array_expr.head, Iterators.map(sanitized_array_expr, array_expr.args)...)
+function parse_markovjunior_rewrite_cell(inputs::MacroParserInputs, loc, cell_expr
+                                         ;
+                                         allow_wildcard::Bool, allow_set::Bool,
+                                         allow_list::Bool, allow_lookup::Bool)
+    function lookup_char(c::Char, allow_char_wildcard::Bool)::Union{UInt8, RewriteRuleCell_Wildcard}
+        if haskey(CELL_CODE_BY_CHAR, c)
+            CELL_CODE_BY_CHAR[c]
+        elseif allow_char_wildcard && (c == '_')
+            RewriteRuleCell_Wildcard()
         else
-            lookup_cell(array_expr)
+            raise_parse_error(
+                loc, inputs,
+                "Unsupported color value '", c, "'! Supported are ",
+                allow_char_wildcard ? "'_' and " : "",
+                "[ ", iter_join(keys(CELL_CODE_BY_CHAR), ", ")..., " ]"
+            )
         end
-        sanitized_array::Array = eval(sanitized_array_expr(expr))
-        sanitized_array = collect(Any, sanitized_array)
-        sanitized_array .= (e -> (e isa Some) ? something(e) : e).(sanitized_array)
-
-        # Swap the first two axes, so that column (X) is the first instead of the second.
-        # Note that 'list' rewrite cells do not need to be updated,
-        #    as they are written assuming X as the first axis.
-        # Also note that 1D arrays here will actually be a 1xN matrix, which still should do this
-        sanitized_array = permutedims(sanitized_array, (2, 1, (3:ndims(sanitized_array))...))
-
-        return sanitized_array
     end
+    disallowed(syntax_name, syntax_example) = raise_parse_error(
+        loc, inputs,
+        syntax_name, " syntax (`", syntax_example, "`) isn't allowed here",
+        allow_list ? " -- try List syntax (`[RGB]`) instead" : ""
+    )
+
+    return with_parser_stacktrace(inputs, "Cell `$cell_expr`") do
+        if @capture(cell_expr, {a_Symbol})
+            if !allow_set
+                disallowed("Set", "{RGB}")
+            else
+                RewriteRuleCell_Set(lookup_char.(collect(string(a)), Ref(false))...)
+            end
+        elseif @capture(cell_expr, [a_Symbol])
+            if !allow_list
+                disallowed("List", "[RGB]")
+            else
+                RewriteRuleCell_List(Tuple(lookup_char.(collect(string(a)), Ref(false))))
+            end
+        elseif cell_expr isa Symbol
+            cell_str = string(cell_expr)
+            if length(cell_str) != 1
+                raise_parse_error(loc, inputs,
+                                  "Color char '", cell_str,
+                                    "' should be one text character; got ", length(cell_str))
+            else
+                lookup_char(cell_str[1], allow_wildcard)
+            end
+        elseif @capture(cell_expr, [a__])
+            if !allow_lookup
+                disallowed("Lookup", "[1, 2]")
+            elseif any(!isa(i, Int) for i in a)
+                raise_parse_error(loc, inputs,
+                                  "Lookup index should be made of integers; got ", typeof.(a))
+            else
+                RewriteRuleCell_Lookup(Tuple(a))
+            end
+        else
+            raise_parse_error(loc, inputs, "Unsupported syntax!")
+        end
+    end
+end
+
+"
+Parses a multi-dimensional block of rewrite-like cells
+  (see `parse_markovjunior_rewrite_cell()` for the keyword arguments).
+The first two axes are swapped from Julia's array syntax, so that X is the column.
+
+The output element type is `Any`, since what's allowed in each cell depends on the caller.
+"
+function parse_markovjunior_rewrite_block(inputs::MacroParserInputs, loc, expr
+                                          ;
+                                          cell_settings...)::Array{Any}
+    if !any(h -> Base.isexpr(expr, h), (:hcat, :vcat, :ncat))
+        raise_parse_error(loc, inputs, "Expected a block of cells, like `[ a b ; c d ]`; got `", expr, "`")
+    end
+
+    # Manually parsing MD array literals is tricky.
+    # Instead we'll pre-parse each input then eval() the whole thing.
+    sanitized_array_expr(array_expr) = if any(Base.isexpr.(Ref(array_expr), (:ncat, :nrow)))
+        # The first argument of these expressions is some kind of integer.
+        Expr(array_expr.head, array_expr.args[1], Iterators.map(sanitized_array_expr, array_expr.args[2:end])...)
+    elseif any(Base.isexpr.(Ref(array_expr), (:hcat, :vcat, :row)))
+        # Each argument of these expressions is an inner slice of the array.
+        Expr(array_expr.head, Iterators.map(sanitized_array_expr, array_expr.args)...)
+    else
+        cell = parse_markovjunior_rewrite_cell(inputs, loc, array_expr; cell_settings...)
+        # 'UpTo' is an abstract array so we have to carefully hide it from Julia's own array logic.
+        (cell isa RewriteRuleCell_List) ? Some(cell) : cell
+    end
+    sanitized_array::Array = eval(sanitized_array_expr(expr))
+    sanitized_array = collect(Any, sanitized_array)
+    sanitized_array .= (e -> (e isa Some) ? something(e) : e).(sanitized_array)
+
+    # A single column (e.g. `[ a ; b ]`) comes out of Julia as a Vector rather than a Matrix.
+    if sanitized_array isa AbstractVector
+        sanitized_array = reshape(sanitized_array, :, 1)
+    end
+
+    # Swap the first two axes, so that column (X) is the first instead of the second.
+    # Note that 'list' rewrite cells do not need to be updated,
+    #    as they are written assuming X as the first axis.
+    # Also note that 1D arrays here will actually be a 1xN matrix, which still should do this
+    sanitized_array = permutedims(sanitized_array, (2, 1, (3:ndims(sanitized_array))...))
+
+    return sanitized_array
 end
 function parse_markovjunior_rewrite_rule_md_symmetry(inputs::MacroParserInputs,
                                                      loc, exprs)::RewriteRule_MD_Symmetry_Definition
@@ -2394,8 +2417,18 @@ function parse_markovjunior_rewrite_rule_md(inputs::MacroParserInputs, loc, expr
         symmetry_def = parse_markovjunior_rewrite_rule_md_symmetry(inputs, loc, symmetryExprs)
 
         # Parse the rule.
-        lhs = parse_markovjunior_rewrite_rule_md_side(inputs, loc, lhsExpr, true)
-        rhs = parse_markovjunior_rewrite_rule_md_side(inputs, loc, rhsExpr, false)
+        # Note that Source-side Sets are written with List syntax, and come out as Lists
+        #    to preserve their input order for later processing.
+        lhs = with_parser_stacktrace(inputs, "Left-hand side (multi-dimensional)") do
+            parse_markovjunior_rewrite_block(inputs, loc, lhsExpr,
+                                             allow_wildcard=true, allow_set=false,
+                                             allow_list=true, allow_lookup=false)
+        end
+        rhs = with_parser_stacktrace(inputs, "Right-hand side (multi-dimensional)") do
+            parse_markovjunior_rewrite_block(inputs, loc, rhsExpr,
+                                             allow_wildcard=true, allow_set=true,
+                                             allow_list=true, allow_lookup=true)
+        end
 
         # Post-process and validate the rule.
         if size(lhs) != size(rhs)
@@ -2435,7 +2468,7 @@ function parse_markovjunior_rewrite_rule_md(inputs::MacroParserInputs, loc, expr
             # If dest cell references a source cell, that reference must be valid.
             if rhs[ci] isa RewriteRuleCell_Lookup{<:Tuple{Vararg{Int}}}
                 source_idx = rhs[ci].source_idx
-                if (length(source_idx) != ndims(lhs)) || any(!in(source_idx[n], 1:size(lhs, n))   for n in ndims(lhs))
+                if (length(source_idx) != ndims(lhs)) || any(!in(source_idx[n], 1:size(lhs, n))   for n in 1:ndims(lhs))
                     raise_parse_error(loc, inputs,
                                       "Destination cell ", Tuple(ci),
                                         " references invalid source cell at ", source_idx)
