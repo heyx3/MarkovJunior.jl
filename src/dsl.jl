@@ -19,6 +19,13 @@ dsl_format(ma::MarkovAlgorithm) = string(
     )...,
     "
     ",
+    iter_join(
+        (Expr(:macrocall, Symbol("@calc"), nothing, CalcInterpreter.calc_macro_expr(name, m))
+           for (name, m) in ma.calc_macros),
+        "\n    "
+    )...,
+    "
+    ",
     iter_join(dsl_format.(ma.sequence), "\n    ")...,
     "
     end"
@@ -37,6 +44,7 @@ mutable struct MacroParserInputs
     min_dims::Int
     op_stack_trace::Stack{Any}
     bias_stack::Stack{Vector{AbstractMarkovBias}}
+    calc_macros::OrderedDict{Symbol, CalcInterpreter.CalcMacro}
 end
 
 "
@@ -116,7 +124,8 @@ function markov_algo_parse(_macro_args)::MarkovAlgorithm
     end
 
     # Grab the main sequence.
-    inputs = MacroParserInputs(initial_fill, dims, get_something(dims, 1), Stack{Any}(16), Stack{Vector{AbstractMarkovBias}}(16))
+    inputs = MacroParserInputs(initial_fill, dims, get_something(dims, 1), Stack{Any}(16), Stack{Vector{AbstractMarkovBias}}(16),
+                               OrderedDict{Symbol, CalcInterpreter.CalcMacro}())
     push!(inputs.op_stack_trace, "Main Sequence")
     main_sequence = Vector{AbstractMarkovOp}()
     pragmas_chronological = Vector{Pair{Symbol, Int}}()
@@ -156,6 +165,7 @@ function markov_algo_parse(_macro_args)::MarkovAlgorithm
     return MarkovAlgorithm(initial_fill, inputs.fixed_dims, inputs.min_dims,
                            main_sequence,
                            pragmas_chronological, pragmas_map,
+                           inputs.calc_macros,
                            Dict{Symbol, Any}())
 end
 "Tries to evaluate a `@markovjunior` macro, throwing an error if that's not what was parsed"
@@ -174,6 +184,24 @@ end
 
 ####################################
 ##   Parser Utilities
+
+"
+Compiles a calculator expression (see `CalcInterpreter`) for the algorithm.
+"
+function parse_markovjunior_calc(inputs::MacroParserInputs, loc, expr,
+                                 env::CalcInterpreter.CalcEnvironment,
+                                 error_description
+                                )::CalcInterpreter.CalcProgram
+    try
+        return CalcInterpreter.calc_compile(expr, env)
+    catch e
+        if e isa CalcInterpreter.CalcError
+            raise_parse_error(loc, inputs, error_description, " `", expr, "`: ", e.msg)
+        else
+            rethrow()
+        end
+    end
+end
 
 "Raises an error using the given LineNumberNode to point to user source"
 function raise_parse_error(src::Optional{LineNumberNode}, state::MacroParserInputs, msg...)
@@ -239,7 +267,7 @@ function parse_markovjunior_sequence(try_handle_line, inputs::MacroParserInputs,
     i = Ref(0)
     parse_markovjunior_block(block_args) do location, line
         i[] += 1
-        if try_handle_line(location, line)
+        if try_handle_line(location, line) || try_parse_markovjunior_calc!(inputs, location, line)
             # Do nothing; the line was handled.
         elseif (line isa Expr) && (line.head == :macrocall)
             with_parser_stacktrace(inputs, "Item $(i[]) `$(line.args[1])`") do
@@ -258,6 +286,40 @@ function parse_markovjunior_sequence(try_handle_line, inputs::MacroParserInputs,
 end
 function parse_markovjunior_sequence(inputs::MacroParserInputs, block_args)::Vector{AbstractMarkovOp}
     return parse_markovjunior_sequence((loc, line) -> false, inputs, block_args)
+end
+
+"
+If the line is a `@calc` statement, adds its user function to the algorithm and returns true.
+Otherwise returns false.
+
+These may be written anywhere an Op can, but they're global and unscoped:
+  when it's written anywhere it's callable from everywhere.
+"
+function try_parse_markovjunior_calc!(inputs::MacroParserInputs, location, line)::Bool
+    if !@capture(line, @calc calc_args__)
+        return false
+    elseif length(calc_args) != 1
+        raise_parse_error(location, inputs,
+                          "Expected a function def like `@calc name(a, b) = a+b`; got `",
+                            line, "`")
+    end
+
+    (name, m) = try
+        CalcInterpreter.calc_macro_parse(calc_args[1])
+    catch e
+        if e isa CalcInterpreter.CalcError
+            raise_parse_error(location, inputs, "In `", line, "`: ", e.msg)
+        else
+            rethrow()
+        end
+    end
+    if haskey(inputs.calc_macros, name)
+        raise_parse_error(location, inputs,
+                          "User function `@calc ", name, "` is defined more than once")
+    end
+
+    inputs.calc_macros[name] = m
+    return true
 end
 
 "

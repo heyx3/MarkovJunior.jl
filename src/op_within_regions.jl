@@ -155,7 +155,7 @@ function markov_algo_run(op::MarkovOpWithinRegions,
         n_to_run = if isnothing(op.threshold)
             length(regions)
         else
-            get_threshold(op.threshold, grid, algo_state.rng)
+            get_threshold(op.threshold, grid, algo_state.rng, algo.calc_macros)
         end
 
         return markov_opbias_with_new_biases(op.biases, algo, algo_state,
@@ -298,12 +298,13 @@ function parse_markovjunior_op(::Val{Symbol("@within_regions")}, inputs::MacroPa
                 raise_parse_error(loc, inputs, "Unsupported color value '", setting, "'")
             end
             clear_color = CELL_CODE_BY_CHAR[setting]
-        elseif check_markovjunior_threshold_appearance(setting)
-            threshold = parse_markovjunior_threshold(inputs, loc, setting)
-        else
+        elseif exists(threshold)
             raise_parse_error(loc, inputs,
-                              "Expected a threshold, `inherit_biases`, or a 'C' color to clear with; got `",
-                                setting, "`")
+                              "Expected one threshold, plus optionally `inherit_biases` and a 'C' color to clear with; ",
+                                "got a second threshold `", setting, "`")
+        else
+            # Anything else is the threshold, which can be any calculation.
+            threshold = parse_markovjunior_threshold(inputs, loc, setting)
         end
     end
 

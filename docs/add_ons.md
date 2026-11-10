@@ -54,6 +54,30 @@ depth_i::Int = algo_state.data_store[:my_custom_n_applications]
 > *so make sure the data you pull from it is annotated with a type!*
 > *You may even want to wrap the value in a `RefValue` so it can be mutated without boxing.*
 
+`data_store` belongs to the whole run, and is never reset or swapped out.
+That includes when the grid is reallocated (e.g. `@upscale`),
+  or when the algorithm works on a slice within the grid (e.g. `@within_box`).
+So if your data is closely tied to the grid it was made for,
+  check when it still applies:
+
+* `algo_state.grid_generation` starts at 0 and increments with each new grid allocation.
+  It does *not* change when temporarily zooming in on one slice, such as `@within_box`.
+* `algo_state.grid_view_id` is 0 for the whole grid, and gets a new value each time an Op zooms in on a slice.
+  When the slice is finished, it goes back to the value it had before (either 0 or an outer slice's ID).
+  Two slices never share an ID even if they cover the same area.
+
+The pair `(grid_generation, grid_view_id)` uniquely identifies one scope within the algorithm run.
+For example, a cache which is specific to each grid or slice could be managed like this:
+
+````julia
+cache_per_scope = get!(
+    () -> Dict{Tuple{Int, Int}, MyCache}(),
+    algo_state.data_store, :my_cache
+)::Dict{Tuple{Int, Int}, MyCache}
+current_scope = (algo_state.grid_generation, algo_state.grid_view_id)
+current_cache = get!(() -> build_my_cache(algo_state.grid), cache_per_scope, current_scope)
+````
+
 ## Allocators
 
 Users can provide their own "allocators" to control the many arrays and sets that are used

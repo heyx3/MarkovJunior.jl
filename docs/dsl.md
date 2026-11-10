@@ -90,6 +90,51 @@ For example:
 end
 ````
 
+## Calculations
+
+Many number and boolean values in the language can be arbitrary calculator expressions,
+  using standard math functions like `min`, `clamp`, `lerp`, `log`, etc.
+All functions are guaranteed to run deterministically across different machines
+  (though not across different Julia versions).
+
+Values can also be randomly chosen from a range with `a:b`.
+It's an inclusive integer range when `a` and `b` are both ints,
+  otherwise it's an inclusive continuous float range.
+It does not matter which of the two ends comes first.
+Also note that you can represent a random boolean as `true:false` or `false:true`.
+
+You can bias towards one end of a random range with `curve(a:b, p)`.
+`p` is an exponent; values above 1 bias towards `a` while values near 0 bias towards `b`.
+
+You can define your own functions (or consts, or parameters) with [`@calc`](#calc).
+
+If a calculation fails while running, the error is logged and a suitable fallback value is used instead.
+
+Values are `Bool`, `Int`, or `Float64`, and follow Julia's typing rules (`7 / 2` is `3.5` but `7 ÷ 2` is `3`).
+Note that Julia editors like VSCode have shorthand for odd symbols, like `\div` for `÷`,
+  however there is almost always an ASCII equivalent anyway -- for `÷` it's `div(n, d)`.
+The built-in functions and constants are:
+
+| | |
+|---|---|
+| Arithmetic | `+ - * / ^`, `÷` (or `div`), `%` (or `rem`), `mod`, `fld`, `cld`, `abs`, `sign`, `min`, `max`, `clamp(x, lo, hi)` |
+| Interpolation | `lerp(a, b, t)`, `inv_lerp(a, b, x)` |
+| Rounding | `floor`, `ceil`, `round`, `trunc` (Put `Int` as the first argument to also cast -- `floor(Int, x)`) |
+| Conversion | `Int`, `Float64`, `float`, `iseven`, `isodd` |
+| Powers and logs | `sqrt` (or `√`), `exp`, `exp2`, `log` (or `log(base, x)`), `log2`, `log10` |
+| Logic | `!`, `&&`, `\|\|`, `a ? b : c` (or `if`/`else`), and comparisons `== != < <= > >=` (also `≠ ≤ ≥`), which can be chained like `0 < x <= 10` |
+| Bitwise | `&`, `\|`, `xor` (or `⊻`), `~`, `<<`, `>>`, `>>>`, on `Int`s (or on `Bool`s, as logic without short-circuiting) |
+| Randomness | `a:b`, `curve(a:b, p)` (see above) |
+| Constants | `pi` (or `π`), `ℯ` (or `exp(1)` give or take float error), `Inf`, `true`, `false` |
+
+There's no trigonometry yet; it hasn't been needed and is hard to make deterministic.
+
+Each place that takes a calculation also offers its own inputs, documented with it
+  (e.g. `area` for [thresholds](#threshold), `len` for [boxes](#fill)).
+Inputs which are arrays, like `size`, come with these functions (shown for `size`):
+`size(i)` (the `i`th element), `size_min()`, `size_max()`, `size_min_axis()` and `size_max_axis()` (the index of the smallest/largest element),
+  `size_sum()`, `size_prod()`, `size_average()`, `size_median()`, and `size_ndims()` (the number of elements).
+
 ## `@pragma`
 
 This is [one of the standard ways](add_ons.md) to add external data to an algorithm or set algorithm-wide settings
@@ -118,6 +163,28 @@ Our built-in GUI tool checks pragmas for the 3D materials of different cell type
 
 As another example, previous versions of the `@fill` Op looked for `@pragma fast_fills`
   and, if found, would always finish in a single tick.
+
+## `@calc`
+
+Defines a function, to be used in various calculations throughout the algorithm.
+An example of where these can be used is calculating the [Threshold](#threshold) for a rewrite Op.
+
+For simplicity, they are not scoped or chronological -- it can be written anywhere in the algorithm source and then that function is defined *everywhere*.
+Even so, it is allowed to reference things specific to a particular context in which it's called. As long as it's only called in that context!
+
+````julia
+@calc half(a) = a / 2
+@calc shorter(a) = round(Int, half(a) * 0.7)
+
+# Outputs a different random value every time it's called
+@calc pick_room_width() = (0.6:1.0) * size(short())
+````
+
+You can manually insert functions to an already-parsed algorithm, parameterizing its behavior,
+  with `push!(algo.calc_macros, calc_macro_parse("my_param() = 5.2"))`.
+
+User functions are hidden by the functions provided by particular context,
+  and both are hidden by the major built-in functions like `max` and `lerp`.
 
 ## `@event`
 
@@ -340,16 +407,32 @@ They can also force the rewrite op to end immediately,
 By default `@rewrite` will apply its rules forever -- until there are no matches left.
 However you can provide a *threshold* as the first argument, to limit this.
 
-* If you want to restrict it to a hard-coded number of matches, pass that number:
-  `@rewrite 10 R=>G`.
-* If you want to make it relative to the total number of pixels/voxels in the grid,
-  pass a simple multiplication or division statement (**in parentheses** if using the simpler macro syntax):
-  `@rewrite (area/10) R=>G`. It's automatically rounded and clamped >=1.
-* If you want to make it relative to the average length of the grid along each axis,
-  pass a simple multiplication or division statement (**in parentheses** if using the simpler macro syntax):
-  `@rewrite (0.5*length) R=>G`. It's automatically rounded and clamped >=1.
-* If you want a randomized threshold value, pass a range: `@rewrite (area/100):20`.
-It's OK if the "max" is greater than the "min".
+The threshold is a [calculation](#calculations), evaluated each time the Op starts,
+  then rounded to the nearest integer.
+A threshold of 0 or less means the Op does nothing (write e.g. `max(1, area/100)` if you need at least 1).
+Besides the usual math, it can use:
+* `area`: the total number of pixels/voxels in the grid (or the current scope, inside `@within_box` etc).
+* `length`: the average length of the grid along each axis.
+* The algorithm's [`@calc`](#calc) functions.
+
+````julia
+@rewrite 10 R=>G                       # A hard-coded number of matches
+@rewrite (area/10) R=>G                # Relative to the grid's size
+@rewrite (0.5*length) R=>G
+@rewrite (area/100):20 R=>G            # A random value; mixing Int and Float gives a Float range
+@rewrite (clamp(area ÷ 50, 2, 8)) R=>G # Anything else
+@rewrite n_paths() R=>G                # A `@calc` function
+@rewrite threshold(n_paths()) R=>G     # The same, explicitly marked as the threshold
+````
+
+Like any macro argument, a threshold containing spaces must be **in parentheses** if using the simpler macro syntax.
+
+When there are two arguments, the first is taken to be the rules if it looks like rules
+  (a `src => dest` rule or a `begin` block), and otherwise the threshold.
+Wrapping a threshold in `threshold(...)` removes any doubt; printed algorithms always do this.
+
+If the threshold fails while running (e.g. calling a `@calc` function that doesn't exist, or giving `true`),
+  an error is printed to `stderr` and it's treated as 1.
 
 ### Symmetry
 
@@ -737,6 +820,17 @@ Note that a 1D vector like `(5, )` has different behavior than a scalar like `5`
   when extrapolating to higher dimensions.
 The 1D vector lets every axis from 2 onward take up the entire grid,
   while the scalar value is used for every axis.
+
+Each value is a [calculation](#calculations), evaluated every time the Op runs,
+  so it can be random (`pixel(min=1:10, size=3)`), use [`@calc`](#calc) functions, and use these inputs:
+* `len`: the length of the axis the value is for, in pixels (e.g. `pixel(min=2, max=len-1)` leaves a 1-pixel border).
+* `center`: the middle of that axis, in the box's space: 0.5 for `uv`, and `len/2` for `pixel`.
+* `texel`: the size of one pixel in `uv` space, `1/len`.
+  For example `uv(center=0.5, size=texel)` is the middle pixel, and `uv(min=(0, 1-texel), max=1)` is the last row.
+* `size`: the size of the grid (or the current scope), as an array; `size(2)` is its length along the y axis.
+
+The box's edges are rounded to the nearest pixel edge, then clamped to the grid.
+If that leaves the box empty (for example `size=0`), nothing happens.
 
 ## `@sequence`
 

@@ -67,6 +67,7 @@ end
 
 println("#TODO: Plan a switch for field() bias from djikstra maps to BFS, which should be far faster")
 
+
 """
 Returns the largest distance value in the field
   (not including `typemax(UInt32)` which means 'unreachable').
@@ -345,7 +346,7 @@ function markov_bias_calculate(field::MarkovBiasField, state::MarkovBiasField_St
             field.combo
         end
         if combo_to_use == BiasFieldComboMode.average
-            mean(state.biases_buffer)
+            sequential_mean(state.biases_buffer)
         elseif combo_to_use == BiasFieldComboMode.min
             minimum(state.biases_buffer)
         elseif combo_to_use == BiasFieldComboMode.max
@@ -354,10 +355,10 @@ function markov_bias_calculate(field::MarkovBiasField, state::MarkovBiasField_St
             # std can at most be half the range, so the value should be doubled for normalization.
             # However in practice it'll be much less, except when some pixels are outside of the path,
             #   so also provide an exponential weighting.
-            s = std(state.biases_buffer) * Float32(2)
+            s = sequential_std(state.biases_buffer) * Float32(2)
             if s < Float32(state.largest_dist) # Pixels outside the path tree will have overlarge values
                 STD_CURVE = 0.52f0
-                s = ((s / Float32(state.largest_dist)) ^ STD_CURVE) * state.largest_dist
+                s = det_pow(s / Float32(state.largest_dist), STD_CURVE) * state.largest_dist
             end
             s
         elseif combo_to_use == BiasFieldComboMode.diff
@@ -369,7 +370,7 @@ function markov_bias_calculate(field::MarkovBiasField, state::MarkovBiasField_St
                     0.52f0, 1.0f0,
                     clamp(length(state.biases_buffer) / 6.0f0, 0.0f0, 1.0f0)
                 )
-                s = ((s / Float32(state.largest_dist)) ^ DIFF_CURVE) * state.largest_dist
+                s = det_pow(s / Float32(state.largest_dist), DIFF_CURVE) * state.largest_dist
             end
             s
         else
@@ -401,15 +402,15 @@ function markov_bias_calculate(field::MarkovBiasField, state::MarkovBiasField_St
             bias += rand(algo_state.rng, Float32) * temp_t * max_temp
             @logic_logln "  ... to get a final bias of " bias
         else
-            weight_curve ^= if field.randomness < 0.5f0
+            weight_curve = det_pow(weight_curve, if field.randomness < 0.5f0
                 @logic_log " ...  Towards weighted randomness"
                 1.0f0 / (field.randomness * 2.0f0)
             else
                 @logic_log " ...  Towards uniform-randomness"
                 1.0f0 - inv_lerp(0.5f0, 1.0f0, field.randomness)
-            end
+            end)
 
-            bias = rand(algo_state.rng, Float64) ^ weight_curve
+            bias = det_pow(rand(algo_state.rng, Float64), convert(Float64, weight_curve))
 
             # Preserve the magnitude range of 0 - max_path_length.
             bias *= state.largest_dist

@@ -1097,7 +1097,7 @@ function markov_algo_run(rewrite::MarkovOpRewrite{TRules, TBias, TPriority},
     threshold = if isnothing(rewrite.threshold)
         nothing
     else
-        get_threshold(rewrite.threshold, grid, algo_state.rng)
+        get_threshold(rewrite.threshold, grid, algo_state.rng, algo.calc_macros)
     end
 
     desirability_overall = RewriteGroupDesirability()
@@ -1647,7 +1647,7 @@ dsl_format(@nospecialize op::MarkovOpRewrite) = string(
     "@rewrite ",
     exists(op.threshold) ? dsl_format(op.threshold) : "",
       " ",
-    if length(op.rules) == 1
+    if (length(op.rules) == 1) && isa(op.priority, MarkovRewritePriority_Everything)
         dsl_format(op.rules[1])
     else
         string(
@@ -2566,7 +2566,12 @@ function parse_markovjunior_op(::Val{Symbol("@rewrite")},
             )
         end
     elseif length(args) == 2
-        if check_markovjunior_threshold_appearance(args[1])
+        # Thresholds can be any calculation, so check whether the first argument is clearly the rules instead:
+        #   a single `src => dest` rule, or a block of them.
+        # A threshold wrapped in `threshold(...)` skips the guessing.
+        first_is_rules = isnothing(unwrap_markovjunior_threshold(args[1])) &&
+                         (@capture(args[1], a_ => b_) || Base.isexpr(args[1], :block))
+        if !first_is_rules
             return MarkovOpRewrite(
                 parse_markovjunior_rewrite_rules(inputs, loc, args[2])...,
                 parse_markovjunior_threshold(inputs, loc, args[1]),

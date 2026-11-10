@@ -33,7 +33,18 @@ Lots of nice features have already been implemented:
 
 [The DSL specification is available here](docs/dsl.md).
 
+The algorithm runs deterministically across every machine, but *not* every Julia version
+  due to Julia's Random and hashing implementation.
+
 Math, GUI, and rendering are all built on top of my [game framework, **B+**](https://github.com/heyx3/B-plus).
+
+### AI Disclosure
+
+Claude is used for extra code review, certain Issues that I would not have time for myself,
+  and maintaining [particular sub-packages](#sub-packages) that I really didn't want to be a part of this project
+  but the functionality wasn't easily avaliable elsewhere.
+
+Everything else is me; B+ itself was 99% written before AI was even available!
 
 ## Why higher-dimensional grids?
 
@@ -293,6 +304,17 @@ So you should clone BplusCore, BplusApp, BplusTools, and Bplus,
 ] activate .
 ] dev ../Bplus.jl
 ````
+
+### Sub-packages
+
+Occasionally I come across a real need for a feature which doesn't exist yet in Julia,
+  or for which the existing solutions dont fit this project.
+In these cases I create a sub-module for it, usually in a single file,
+  and let Claude agents do most of the work unless or until a real package comes along to replace it.
+
+* `DeterministicMath.jl` -- reimplementations of basic math functions that are stable
+  across all machines which use standard floating-point.
+* `CalcInterpreter.jl` -- a calculator parser/interpreter used in many Ops. Uses deterministic float math.
 
 ### Skipping precompilation
 

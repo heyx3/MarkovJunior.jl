@@ -1,97 +1,79 @@
-struct ThresholdByArea
-    scale::Float32
-end
-struct ThresholdByLength
-    scale::Float32
-end
-const ThresholdScalar = Union{Int, ThresholdByArea, ThresholdByLength}
-
-"A randomly chosen threshold between two (unordered) values"
-struct ThresholdRange
-    a::ThresholdScalar
-    b::ThresholdScalar
-end
-
-const Threshold = Union{ThresholdScalar, ThresholdRange}
-
-
-struct ThresholdInputs
-    area::Float32
-    length::Float32
-    rng::PRNG
-end
-
-get_threshold(th::Threshold, in::ThresholdInputs)::Int = max(1, round(Int, get_raw_threshold(th, in)))
-get_threshold(th::Threshold, grid::CellGrid, rng::PRNG)::Int = get_threshold(th, ThresholdInputs(
-    convert(Float32, prod(vsize(grid))),
-    convert(Float32, sum(vsize(grid)) / ndims(grid)),
-    rng
-))
-
-get_raw_threshold(th::Int, in::ThresholdInputs) = convert(Float32, th)
-get_raw_threshold(th::ThresholdByArea, in::ThresholdInputs) = convert(Float32, in.area) * th.scale
-get_raw_threshold(th::ThresholdByLength, in::ThresholdInputs) = convert(Float32, in.length) * th.scale
-function get_raw_threshold(th::ThresholdRange, in::ThresholdInputs)
-    a::Float32 = get_raw_threshold(th.a, in)
-    b::Float32 = get_raw_threshold(th.b, in)
-    return lerp(a, b, rand(in.rng, Float32))
-end
-
-
-dsl_format(th::ThresholdByArea) = "(area*$(th.scale))"
-dsl_format(th::ThresholdByLength) = "(length*$(th.scale))"
-dsl_format(th::ThresholdRange) = "(($(dsl_format(th.a))):($(dsl_format(th.b))))"
+# Thresholds are an expression indicating how many times some Op should run.
 
 "
-Checks whether an expression looks to be a Threshold value.
-
-This doesn't guarantee the threshold is well-formed!
-It's meant to disambiguate statements containing optional thresholds and other optional things.
-You need to make sure those other things can't look like thresholds.
+What a threshold calculation can reference:
+  * `area`: the number of cells in the grid (or the current scope), as an `Int`.
+  * `length`: the grid's average side length, as a `Float64`.
+  * The algorithm's user functions (from `@calc`), looked up whenever they're called.
 "
-check_markovjunior_threshold_appearance(expr)::Bool =
-    #NOTE: The '|' operator is broken in @capture sadly.
-    (expr isa Integer) || @capture(expr, a_:b_) ||
-    @capture(expr, length/x_) || @capture(expr, length*x_) || @capture(expr, x_*length) ||
-    @capture(expr, area/x_) || @capture(expr, area*x_) || @capture(expr, x_*area)
-parse_markovjunior_threshold(inputs::MacroParserInputs, location, threshold_expr)::Threshold = parse_markovjunior_threshold(
-    expr -> nothing,
-    inputs, location, threshold_expr
+const THRESHOLD_CALC_ENV = CalcEnvironment(
+    inputs = (:area, :length),
+    macros = true
 )
-function parse_markovjunior_threshold(try_handle,
-                                      inputs::MacroParserInputs, location, threshold_expr)
-    with_parser_stacktrace(inputs, "Threshold statement") do
-        user_attempt = try_handle(threshold_expr)
-        if exists(user_attempt)
-            user_attempt
-        elseif threshold_expr isa Integer
-            return convert(Int, threshold_expr)
-        elseif @capture threshold_expr (area/x_Real)
-            return ThresholdByArea(convert(Float32, 1/x))
-        elseif @capture(threshold_expr, (area*x_Real)) || @capture(threshold_expr, (x_Real*area))
-            return ThresholdByArea(convert(Float32, x))
-        elseif @capture threshold_expr (length/x_Real)
-            return ThresholdByLength(convert(Float32, 1/x))
-        elseif @capture(threshold_expr, (length*x_Real)) || @capture(threshold_expr, (x_Real*length))
-            return ThresholdByLength(convert(Float32, x))
-        elseif @capture threshold_expr (a_:b_)
-            aa = with_parser_stacktrace(inputs, "Range start `$a`") do
-                result = parse_markovjunior_threshold(inputs, location, a)
-                if !isa(result, ThresholdScalar)
-                    raise_parse_error(location, inputs, "Value not a scalar")
-                end
-                result
-            end
-            bb = with_parser_stacktrace(inputs, "Range end `$b`") do
-                result = parse_markovjunior_threshold(inputs, location, b)
-                if !isa(result, ThresholdScalar)
-                    raise_parse_error(location, inputs, "Value not a scalar")
-                end
-                result
-            end
-            return ThresholdRange(aa, bb)
-        else
-            raise_parse_error(location, inputs, "Unsupported format for threshold")
-        end
+
+"
+How many times something should happen (e.g. how many rewrites, or how many sequence repetitions).
+It's a calculation (see `CalcInterpreter`), evaluated whenever the Op starts,
+  then rounded to the nearest `Int`.
+A threshold of 0 or less means the Op does nothing.
+"
+struct Threshold
+    calc::CalcProgram
+end
+Base.:(==)(a::Threshold, b::Threshold) = (a.calc == b.calc)
+Base.hash(t::Threshold, h::UInt) = hash(t.calc, hash(Threshold, h))
+Base.show(io::IO, t::Threshold) = print(io, "Threshold(`", t.calc, "`)")
+
+# Thresholds are always written wrapped in `threshold(...)`, so their position never needs guessing.
+dsl_format(th::Threshold) = string("threshold(", th.calc, ")")
+
+"Logs a problem with a threshold during a run, without stopping the algorithm"
+threshold_log_error(msg...) = println(stderr, "Threshold error: ", msg...)
+
+"
+Evaluates the threshold for the given grid.
+Errors are logged, and the threshold falls back to 1.
+"
+function get_threshold(th::Threshold, grid::CellGrid, rng::PRNG,
+                       calc_macros::CalcMacros)::Int
+    raw = calc_evaluate(
+        th.calc, rng,
+        e -> begin
+            threshold_log_error(e.msg, "; using 1")
+            1
+        end,
+        calc_macros
+        ;
+        area = prod(size(grid)),
+        length = sum(size(grid)) / ndims(grid)
+    )
+    if (raw isa Bool) || !isfinite(raw)
+        threshold_log_error("`", th.calc, "` should give a finite number; got `", raw, "`. Using 1")
+        return 1
+    end
+    # Clamp before converting, so huge values don't overflow.
+    return round(Int, clamp(raw, -1, 1e15))
+end
+
+
+"
+If the expression is wrapped in `threshold(...)`, returns what's inside it; otherwise returns `nothing`.
+That syntax is used to disambiguate thresholds from other arguments when necessary.
+"
+unwrap_markovjunior_threshold(expr) = if Base.isexpr(expr, :call, 2) && (expr.args[1] == :threshold)
+    expr.args[2]
+else
+    nothing
+end
+
+"
+Compiles a threshold (optionally wrapped in `threshold(...)`), turning calculation errors into parse errors.
+Like any calculation, user functions it calls aren't checked until it runs.
+"
+function parse_markovjunior_threshold(inputs::MacroParserInputs, location, threshold_expr)::Threshold
+    inner = unwrap_markovjunior_threshold(threshold_expr)
+    calc_expr = isnothing(inner) ? threshold_expr : inner
+    with_parser_stacktrace(inputs, "Threshold") do
+        Threshold(parse_markovjunior_calc(inputs, location, calc_expr, THRESHOLD_CALC_ENV, "Invalid threshold"))
     end
 end

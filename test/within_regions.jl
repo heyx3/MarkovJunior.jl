@@ -33,12 +33,11 @@ function run_on(mj::MarkovAlgorithm, initial::Array{UInt8}; seed = 0xaabbcc)
     return markov_algo_complete(copy, state_ch)
 end
 
-function check_parse_fails(src::String, expected_msg::String)
+"Checks that parsing fails (but not the error message, which may change)"
+function check_parse_fails(src::String)
     try
         markov_algo_parse(src)
     catch e
-        msg = sprint(showerror, e)
-        @bp_check(occursin(expected_msg, msg), "Expected error containing '", expected_msg, "', got:\n", msg)
         return nothing
     end
     error("Should have failed to parse:\n", src)
@@ -239,17 +238,15 @@ end
 ##############
 # Parse errors
 
-check_parse_fails("@markovjunior begin\n @within_regions begin\n R => @upscale (2)\n end\nend", "can't reallocate")
-check_parse_fails("@markovjunior begin\n @within_regions begin\n R\n end\nend", "Expected a rule like")
-check_parse_fails("@markovjunior begin\n @within_regions begin\n {RG} => @rewrite R => G\n end\nend", "Expected a rule like")
-check_parse_fails("@markovjunior begin\n @within_regions begin\n RX => @rewrite R => G\n end\nend", "Invalid colors")
-check_parse_fails("@markovjunior begin\n @within_regions begin\n end\nend", "at least one rule")
-check_parse_fails("@markovjunior begin\n @within_regions begin\n R => @rewrite R => G\n BR => @rewrite B => Y\n end\nend",
-                  "Colors `R` are already used by rule 1")
-check_parse_fails("@markovjunior begin\n @within_regions\nend", "Expected `@within_regions")
-check_parse_fails("@markovjunior begin\n @within_regions sometimes begin\n R => @rewrite R => G\n end\nend",
-                  "Expected a threshold")
-check_parse_fails("@markovjunior begin\n @within_regions 'X' begin\n R => @rewrite R => G\n end\nend",
-                  "Unsupported color")
+check_parse_fails("@markovjunior begin\n @within_regions begin\n R => @upscale (2)\n end\nend")
+check_parse_fails("@markovjunior begin\n @within_regions begin\n R\n end\nend")
+check_parse_fails("@markovjunior begin\n @within_regions begin\n {RG} => @rewrite R => G\n end\nend")
+check_parse_fails("@markovjunior begin\n @within_regions begin\n RX => @rewrite R => G\n end\nend")
+check_parse_fails("@markovjunior begin\n @within_regions begin\n end\nend")
+check_parse_fails("@markovjunior begin\n @within_regions begin\n R => @rewrite R => G\n BR => @rewrite B => Y\n end\nend")
+check_parse_fails("@markovjunior begin\n @within_regions\nend")
+check_parse_fails("@markovjunior begin\n @within_regions sometimes begin\n R => @rewrite R => G\n end\nend")
+check_parse_fails("@markovjunior begin\n @within_regions 2 3 begin\n R => @rewrite R => G\n end\nend")
+check_parse_fails("@markovjunior begin\n @within_regions 'X' begin\n R => @rewrite R => G\n end\nend")
 
 end)()

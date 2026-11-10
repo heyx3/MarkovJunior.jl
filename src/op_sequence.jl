@@ -21,7 +21,7 @@ function markov_algo_run(sequence::MarkovOpSequence{NSelfBiases},
     elseif sequence.threshold isa SequenceRepeatModeTag
         sequence.threshold
     elseif sequence.threshold isa Threshold
-        get_threshold(sequence.threshold, grid, algo_state.rng)
+        get_threshold(sequence.threshold, grid, algo_state.rng, algo.calc_macros)
     else
         error("Unhandled: ", typeof(sequence.threshold))
     end
@@ -115,6 +115,10 @@ dsl_format(s::MarkovOpSequence) = string(
     "\nend"
 )
 
+"
+Parses the block of Ops for `@sequence` (and other Op which runs nested Ops).
+`@calc` statements may be mixed in, but an error is thrown if they're the only kind of statement.
+"
 function parse_markovjunior_sequence_main_block(expr, src,
                                                 inputs::MacroParserInputs,
                                                )::Vector{AbstractMarkovOp}
@@ -130,23 +134,35 @@ function parse_markovjunior_sequence_main_block(expr, src,
     end
 
     if Base.isexpr(expr, :macrocall)
-        return AbstractMarkovOp[ process_op(expr, nothing) ]
+        if try_parse_markovjunior_calc!(inputs, src, expr)
+            raise_parse_error(src, inputs,
+                              "This block only has `@calc` statements, but it needs at least one Op")
+        else
+            return AbstractMarkovOp[  process_op(expr, nothing)  ]
+        end
     elseif Base.isexpr(expr, :block)
-        line_idx = Ref(1)
         output = AbstractMarkovOp[ ]
         parse_markovjunior_block(expr.args) do inner_src, line
-            push!(output, process_op(line, line_idx[]))
-            line_idx[] += 1
+            if !try_parse_markovjunior_calc!(inputs, something(inner_src, src), line)
+                push!(output, process_op(line, length(output)))
+            end
         end
-        return output
+
+        if isempty(output)
+            raise_parse_error(src, inputs, "This block has no Ops, e.g. only `@calc` statements??")
+        else
+            return output
+        end
     else
-        raise_parse_error(src, inputs,
-                       "Expected a block of operations; got `",
-                       if expr isa Expr
-                           tuple("`", expr.head, "` expression")
-                       else
-                           tuple(typeof(expr))
-                       end...)
+        raise_parse_error(
+            src, inputs,
+            "Expected a block of operations; got `",
+            if expr isa Expr
+                tuple("`", expr.head, "` expression")
+            else
+                tuple(typeof(expr))
+            end...
+        )
     end
 end
 
@@ -155,11 +171,12 @@ function parse_markovjunior_op(::Val{Symbol("@sequence")}, inputs::MacroParserIn
     (i_threshold, i_ops, i_bias) = if length(expr_args) == 3
         (1, 2, 3)
     elseif length(expr_args) == 2
-        if check_markovjunior_threshold_appearance(expr_args[1]) || (expr_args[1] == :repeat)
-            ( 1, 2, nothing)
-        else
-            (nothing, 1, 2)
-        end
+        # Thresholds can be any calculation, so check whether the first argument is clearly the Ops instead:
+        #   a single Op or a block of them.
+        # A threshold wrapped in `threshold(...)` skips the guessing.
+        first_is_ops = isnothing(unwrap_markovjunior_threshold(expr_args[1])) &&
+                       Base.isexpr(expr_args[1], (:macrocall, :block))
+        first_is_ops ? (nothing, 1, 2) : (1, 2, nothing)
     elseif length(expr_args) == 1
         (nothing, 1, nothing)
     else

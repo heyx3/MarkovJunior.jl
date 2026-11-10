@@ -18,7 +18,6 @@
 	# Define the lot
 	@fill 'L' uv(min=0, max=(1, 1, 0))
 	@fill 'g' uv(min=(0.27, 0.27, 0), max=(0.73, 0.73, 0))
-
 	# Define the bounding box of the building.
 	@fill 'I' uv(min=(0.27, 0.27, 0), max=(0.27, 0.73, 1))
 	@fill 'I' uv(min=(0.27, 0.27, 0), max=(0.73, 0.27, 1))

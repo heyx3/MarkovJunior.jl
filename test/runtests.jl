@@ -17,8 +17,11 @@ using Bplus; @using_bplus
 
 
 include("utils.jl")
+include("deterministic_math.jl")
+include("calc_interpreter.jl")
 include("cell_areas.jl")
 include("parsing.jl")
+include("thresholds.jl")
 include("md_symmetries.jl")
 include("sequence.jl")
 include("scale.jl")

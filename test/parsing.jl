@@ -234,6 +234,8 @@ end
 
 
 DEFAULT_PRIORITY = MJ.MarkovRewritePriority_Everything()
+"An expected threshold, which compares equal to a parsed one with the same source"
+TH(expr) = MJ.Threshold(MJ.CalcInterpreter.calc_compile(expr, MJ.THRESHOLD_CALC_ENV))
 
 BIG_TEST = @markovjunior 4 'R' begin
     @pragma Hi 1 3 22
@@ -400,7 +402,7 @@ BIG_TEST_ANSWER = MJ.MarkovAlgorithm(
                     MJ.GridDir[ MJ.GridDir(1, 1) ], nothing
                 )
             ),
-            3,
+            TH(3),
             ()
         ),
         MJ.MarkovOpRewrite(
@@ -414,7 +416,7 @@ BIG_TEST_ANSWER = MJ.MarkovAlgorithm(
                     MJ.GridDir[ MJ.GridDir(1, 1) ], nothing
                 )
             ),
-            MJ.ThresholdByArea(0.5f0),
+            TH(:(area/2)),
             ()
         ),
         MJ.MarkovOpRewrite(
@@ -428,7 +430,7 @@ BIG_TEST_ANSWER = MJ.MarkovAlgorithm(
                     MJ.GridDir[ MJ.GridDir(1, 1) ], nothing
                 )
             ),
-            MJ.ThresholdByArea(2.0f0),
+            TH(:(area*2)),
             ()
         ),
         MJ.MarkovOpRewrite(
@@ -471,7 +473,7 @@ BIG_TEST_ANSWER = MJ.MarkovAlgorithm(
                     MJ.GridDir[ ], 1
                 )
             ),
-            MJ.ThresholdByArea(1.5f0),
+            TH(:(1.5*area)),
             ()
         ),
         MJ.MarkovOpRewrite(
@@ -487,7 +489,7 @@ BIG_TEST_ANSWER = MJ.MarkovAlgorithm(
                     MJ.GridDir[ ], 1
                 )
             ),
-            MJ.ThresholdByLength(0.5f0),
+            TH(:(length/2.0)),
             ()
         ),
         MJ.MarkovOpRewrite(
@@ -510,7 +512,7 @@ BIG_TEST_ANSWER = MJ.MarkovAlgorithm(
                     MJ.GridDir[ ], 1
                 )
             ),
-            MJ.ThresholdByLength(3.0f0),
+            TH(:(length*3.0)),
             ()
         ),
 
@@ -526,7 +528,7 @@ BIG_TEST_ANSWER = MJ.MarkovAlgorithm(
                     MJ.GridDir[ MJ.GridDir(1, 1) ], nothing
                 )
             ),
-            MJ.ThresholdByLength(4.0f0),
+            TH(:(4.0*length)),
             ()
         ),
         MJ.MarkovOpRewrite(
@@ -540,7 +542,7 @@ BIG_TEST_ANSWER = MJ.MarkovAlgorithm(
                     MJ.GridDir[ MJ.GridDir(1, 1) ], nothing
                 )
             ),
-            MJ.ThresholdRange(2, 10),
+            TH(:(2:10)),
             ()
         ),
         MJ.MarkovOpRewrite(
@@ -571,10 +573,7 @@ BIG_TEST_ANSWER = MJ.MarkovAlgorithm(
                     [ MJ.GridDir(1, -1), MJ.GridDir(1, 1) ], nothing
                 )
             ),
-            MJ.ThresholdRange(
-                MJ.ThresholdByArea(4.2f0),
-                MJ.ThresholdByLength(0.5f0)
-            ),
+            TH(:((area*4.2):(0.5*length))),
             ()
         ),
         MJ.MarkovOpRewrite(
@@ -589,10 +588,7 @@ BIG_TEST_ANSWER = MJ.MarkovAlgorithm(
                     [ MJ.GridDir(1, 1) ], nothing
                 )
             ),
-            MJ.ThresholdRange(
-                8,
-                MJ.ThresholdByArea(convert(Float32, 1/4.2))
-            ),
+            TH(:(8:(area/4.2))),
             ()
         ),
         MJ.MarkovOpRewrite(
@@ -723,7 +719,7 @@ BIG_TEST_ANSWER = MJ.MarkovAlgorithm(
                             MJ.GridDir[ MJ.GridDir(1, 1) ], nothing
                         )
                     ),
-                    10,
+                    TH(10),
                     ()
                 )
             ],
@@ -743,11 +739,11 @@ BIG_TEST_ANSWER = MJ.MarkovAlgorithm(
                             MJ.GridDir[ MJ.GridDir(1, 1) ], nothing
                         )
                     ),
-                    10,
+                    TH(10),
                     ()
                 )
             ],
-            MJ.ThresholdByArea(0.5f0),
+            TH(:(area/2)),
             tuple(
                 MJ.MarkovBiasTemperature(convert(Float32, 11.2))
             )
@@ -1079,6 +1075,7 @@ BIG_TEST_ANSWER = MJ.MarkovAlgorithm(
             Any[ ]
         ]
     ),
+    MJ.OrderedDict{Symbol, MJ.CalcMacro}(),
     Dict{Symbol, Any}()
 )
 

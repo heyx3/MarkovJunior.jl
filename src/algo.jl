@@ -84,6 +84,11 @@ struct MarkovAlgorithm
     pragmas_chronological::Vector{Pair{Symbol, Int}} # Each key to its index -- `args = pragmas_map[key][value]`
     pragmas_map::Dict{Symbol, Vector{Vector{Any}}} # Each key maps to a list of its arguments each time it was invoked, in chronological order
 
+    # User functions for calculations, from `@calc` statements anywhere in the algorithm.
+    # Calls look these up by name whenever they run, so users may add or replace them between runs
+    #    (e.g. `push!(algo.calc_macros, calc_macro_parse("room_width() = 8"))`) to parameterize the algorithm.
+    calc_macros::OrderedDict{Symbol, CalcInterpreter.CalcMacro}
+
     # "Add-ons" can be added by the user after parsing is finished,
     #    to inject per-instance parameters.
     add_ons::Dict{Symbol, Any}
@@ -95,6 +100,7 @@ Base.:(==)(a::MarkovAlgorithm, b::MarkovAlgorithm) = (
     a.sequence == b.sequence &&
     a.pragmas_chronological == b.pragmas_chronological &&
     a.pragmas_map == b.pragmas_map &&
+    a.calc_macros == b.calc_macros &&
     a.add_ons == b.add_ons
 )
 
@@ -203,6 +209,9 @@ mutable struct AlgoState{MinCompileTimeTickPriority}
     rng::PRNG
     allocator::AbstractMarkovAllocator
 
+    # Custom data for the whole run (see docs/add_ons.md).
+    # It's never reset, even when the grid is reallocated or a scoped Op swaps in a view;
+    #   grid-dependent data should check `grid_generation` and `grid_view_id`.
     data_store::Dict{Symbol, Any}
 
     channel::AlgoCommsChannel
@@ -214,11 +223,18 @@ mutable struct AlgoState{MinCompileTimeTickPriority}
 
     # The state of every active bias, in the same order as the inherited-bias tuples.
     bias_state_stack::Vector{Any}
+
     # Incremented every time the grid is reallocated (which may also replace bias states).
     grid_generation::Int
-    # How many scoped Ops (like `@within_box`) are currently running.
-    # While non-zero, the grid is a view and must not be reallocated.
+    # How many scoped Ops (like `@within_box`) deep we currently are.
+    # As long as it's >0, the grid is a slice of a larger array (which also means it can't be resized).
     scope_depth::Int
+    # Unique identifier for the grid view currently being used within a larger grid.
+    # A value of 0 means the whole original grid is being modified.
+    # You can uniquely identify an algorithm scope with (grid_generation, grid_view_id).
+    grid_view_id::Int
+
+    next_grid_view_id::Int
 end
 
 
@@ -377,9 +393,12 @@ function markov_opalgo_on_subgrid(to_do,
         a
     end
 
+    outer_view_id = algo_state.grid_view_id
     try
         algo_state.grid = sub_grid
         algo_state.scope_depth += 1
+        algo_state.next_grid_view_id += 1
+        algo_state.grid_view_id = algo_state.next_grid_view_id
 
         result::OpChangedGrid = try
             prepare_view()
@@ -402,6 +421,7 @@ function markov_opalgo_on_subgrid(to_do,
             restore_view()
 
             algo_state.scope_depth -= 1
+            algo_state.grid_view_id = outer_view_id
             algo_state.grid = outer_grid
 
             empty!(algo_state.bias_state_stack)
@@ -478,7 +498,7 @@ function markov_algo_run(algo::MarkovAlgorithm,
         else
             fill!(initial_grid, algo.initial_fill)
         end
-        algo_state = AlgoState(initial_grid, rng, allocator, data_store, ch, ticking, Any[ ], 0, 0)
+        algo_state = AlgoState(initial_grid, rng, allocator, data_store, ch, ticking, Any[ ], 0, 0, 0, 0)
 
         try
             @logic_logln "Starting algorithm of size " size(algo_state.grid)

@@ -67,6 +67,11 @@ include("compatibility.jl")
 const BUILT_WITH_TOOL = parse(Bool, get(ENV, "JMJ_BUILD_WITH_TOOL", "1"))
 
 
+# Custom dependencies:
+include("DeterministicMath.jl")
+include("CalcInterpreter.jl")
+using .DeterministicMath, .CalcInterpreter
+
 # Core library:
 include("utils.jl")
 include("cells.jl")
@@ -87,7 +92,8 @@ include("bias_field.jl")
 export @markovjunior, markov_algo_parse,
        MarkovAlgorithm, MarkovTickSettings,
        markov_algo_run, markov_algo_next, markov_algo_complete, markov_algo_cleanup,
-       markov_algo_to_string
+       markov_algo_to_string,
+       CalcMacro, calc_macro_parse
 include("precompile_core.jl")
 
 # Tooling:
