@@ -27,6 +27,7 @@ include("sequence.jl")
 include("scale.jl")
 include("within_box.jl")
 include("within_regions.jl")
+include("grammar.jl")
 include("add_ons.jl")
 include("ipc.jl")
 

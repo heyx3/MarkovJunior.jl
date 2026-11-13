@@ -1,5 +1,5 @@
 @markovjunior 2 begin
-	# Generates some rooms, then uses the 'within_regions' Op
+	# Generates some rooms, then uses the '@within_regions' Op
 	#   to fill each room very differently.
 
 	# Build a funky room plan.
@@ -59,18 +59,19 @@
 		wbbw => wwww %0.1
 	end
 
-	# Upscale so we can fill in detail.
-	@upscale 4...
-
-	# Detail each room individually.
-	#   1) Assign a random color to each, indicating room-type.
+	# Assign a color to each room, indicating its style.
 	@sequence repeat begin
 		@rewrite 1 w => {RGB}
 		@rewrite w[RGB] => [2]_
 	end
-	#   2) Mark the boundaries using Yellow.
+
+	# Upscale so we can fill in detail.
+	@upscale 4...
+
+	# Detail each room individually.
+	#   * Mark the boundaries using Yellow.
 	@rewrite b[RGB] => bY
-	#   3) Add the detail!
+	#   * Add the detail!
 	@within_regions begin
 		# Red rooms: pillars around the wall, carpet on the inside
 		RY => @sequence begin
@@ -145,4 +146,13 @@
 	# Clean up.
 	@rewrite [RGB] => w
 	@rewrite Y => w
+
+	# Add some paths between rooms.
+	@rewrite begin
+		wbw => _L_  %0.4
+		wbbw => _LL_  %0.2
+		wbbbw => _LLL_  %0.4
+		wbbbbw => _LLLL_  %0.2
+	end
+	@rewrite L => w
 end

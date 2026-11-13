@@ -125,7 +125,8 @@ end
 # Box values are calculations, with `len`, `center`, and `texel` describing each axis.
 for (box, expected) in (("pixel(min=2, max=len-1)", 2:7), ("pixel(center=center, size=2)", 4:5),
                         ("uv(center=center, size=texel)", 5:5), ("uv(min=1-texel, max=1)", 8:8),
-                        ("pixel(min=size(1) - 2, size=1)", 6:6), ("pixel(min=-3, max=2)", 1:2),
+                        ("pixel(min=size(1) - 2, size=1)", 6:6), ("pixel(min=size(x) - 2, size=1)", 6:6),
+                        ("pixel(min=-3, max=2)", 1:2),
                         ("uv(center=0.5, size=0)", 1:0), ("pixel(min=9, size=2)", 1:0))
     for src in ("@fill 'w' $box", "@within_box $box begin\n @rewrite b => w\n end")
         filled = run_on(markov_algo_parse("@markovjunior 1 begin\n @calc margin() = 2\n $src\nend"), fill(c('b'), 8))

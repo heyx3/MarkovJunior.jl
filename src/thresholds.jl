@@ -7,9 +7,11 @@ What a threshold calculation can reference:
   * `area`: how many cells are being worked on. Usually that's `size_prod()`,
       but sometimes (e.g. `@within_regions`) we are working on a non-rectangular subset of the grid.
   * `ndims`: the number of dimensions, i.e. `size_len()`.
+  * The axis names `x`, `y`, `z`, and `w` (see `CALC_AXIS_CONSTANTS`).
   * The algorithm's user functions (from `@calc`), looked up whenever they're called.
 "
 const THRESHOLD_CALC_ENV = CalcEnvironment(
+    constants = CALC_AXIS_CONSTANTS,
     inputs = (:area, :ndims),
     arrays = (:size, ),
     macros = true

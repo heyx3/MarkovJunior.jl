@@ -29,6 +29,7 @@ end
 
 # Any calculation works, including user functions.
 @bp_check(count_white("@rewrite (clamp(size_prod() ÷ 3, 1, 4)) b => w") == 4)
+@bp_check(count_white("@rewrite (size(x) / 4) b => w") == 5) # Axes can be named
 @bp_check(count_white("@calc wanted() = 7\n@rewrite (wanted()) b => w") == 7)
 @bp_check(count_white("@calc wanted() = 7\n@rewrite wanted() b => w") == 7) # No parentheses needed without spaces
 @bp_check(count_white("@calc wanted() = 7\n@rewrite threshold(wanted()) b => w") == 7)

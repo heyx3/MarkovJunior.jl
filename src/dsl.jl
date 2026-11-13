@@ -185,6 +185,9 @@ end
 ####################################
 ##   Parser Utilities
 
+"The named axes, available to every calculation in the algorithm, e.g. `size(y)`"
+const CALC_AXIS_CONSTANTS = (x=1, y=2, z=3, w=4)
+
 "
 Compiles a calculator expression (see `CalcInterpreter`) for the algorithm.
 "

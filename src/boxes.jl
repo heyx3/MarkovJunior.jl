@@ -54,9 +54,11 @@ What `@fill` and `@within_box` box calculations can reference:
   * The axis inputs (see `CALC_BOX_AXIS_INPUTS`).
   * `size`: the resolution of the current grid -- an array of integers.
   * `ndims`: the number of dimensions, i.e. `size_len()`.
+  * The axis names `x`, `y`, `z`, and `w` (see `CALC_AXIS_CONSTANTS`).
   * The algorithm's user functions (from `@calc`).
 "
 const CALC_BOX_ENV = CalcEnvironment(
+    constants = CALC_AXIS_CONSTANTS,
     inputs = (:ndims, CALC_BOX_AXIS_INPUTS...),
     arrays = (:size, ),
     macros = true

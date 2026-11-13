@@ -61,32 +61,65 @@ Inside the `begin ... end` block of `@markovjunior` should be a chronological se
 For example:
 
 ````julia
-@markovjunior begin
-    @pragma viz 2     # Special notes to the interpreter, no effect on the core algorithm
-    @sequence (size_average()/12) begin    # Do this a few times, proportional to grid length
-        @rewrite 1  b => R         # Place a single red pixel somewhere in the image
-        @rewrite Rbb => RwR        # Randomly connect new pathways to the red pixel
-        @rewrite w => R            # Finish the pathways to make a perfect maze
-        @rewrite area/100  b => R  # Randomly remove some maze walls to form rooms, proportional to grid volume
-        @rewrite Rb => RG          # Add walls around this area before starting the next one.
+@markovjunior 2 begin  # This algorithm only runs on 2D grids
+    @pragma viz 2          # Special notes to the interpreter, no effect on the core algorithm
+    @calc BorderSize() = 5 # Custom function definition, used below
+
+    # Divide the region up at a high level.
+    @grammar begin
+        ROOT => inset(BorderSize(), Border, Main)
+        Border => 'N' # Border area is brown
+
+        Main => @sequence begin
+            # Generate several areas, proportional to the grid's length along each axis.
+            @sequence (size_average()/6) begin  # If the grid is 24x24, this'll run 4 times
+
+                # Grow an organic area to operate in.
+                @rewrite 1 b => P
+                @rewrite (area/10) Pb => PP
+
+                # Generate a maze within that area.
+                @rewrite 1  P => B
+                @rewrite BPP => BgB
+                @rewrite g => B
+
+                # Randomly remove some walls to form a more interesting floor-plan.
+                @rewrite area/100  B=>P
+
+                # Surround the area with Green to mark it as taken,
+                #   then turn the inside back into plain black/white.
+                @rewrite Bb => BG
+                @rewrite [BP] => [bw]
+            end
+        end
     end
-    # Now open some trivial connections between walls, if possible.
-    @rewrite (area/100) begin
-        wRGGRw   => wwwwww
-        wRG_GRw  => wwwwwww # Stomp over whatever was between the two walls, to make things interesting
-        wRG__GRw => wwwwwwww # Slightly larger stomp
+
+    # Next open some trivial connections between areas, if possible.
+    # *Ensuring* there are connections requires more complex code which I won't bother with here.
+    # Use Yellow to represent these hallways.
+    @rewrite (area/50) begin  # If the grid is 24x24, this'll run up to 12 times
+         wGGw  => _YY_  # Underscore means "wildcard" on left and "don't change" on right
+        wG_Gw  => _YYY_ # Stomp over whatever was between the two walls, to make things interesting
+        wG__Gw => _YYYY_ # Larger stomp
     end
 
     # Emit a "tagged event", which pauses the algorithm for users to view its current state.
     @event BeforeFinalSteps
     # If users need to *modify* the grid during a tagged event, prepend the name with '!'.
-    # The IPC server only accepts grid writes during these events;
-    #    in native Julia it's up to you to avoid modifying the grid except during these events!
+    # These are the ONLY time you may modify the grid state by hand!
     @event !BeforeFinalSteps
 
-    # Finally, place a "player start" square.
-    @fill 'B' pixel(min=1, size=4)
-    @fill 'T' pixel(min=1, size=1)
+    # Pick an area to be the "player start" room, painting it with blue hues.
+    @within_region 1 w => @sequence begin
+        @fill 'I'
+        @rewrite 1 I => B
+    end
+
+    # Clean up the various marker colors to be a plain floor.
+    @rewrite [GY] => w
+
+    # Double the grid size and start filling in smaller details.
+    @upscale
 end
 ````
 
@@ -422,7 +455,7 @@ A threshold of 0 or less means the Op does nothing (write e.g. `max(1, size_prod
 Besides the usual math, it can use:
 * `size`: the size of the grid, as an array.
   For example `size_prod()` is its total number of pixels/voxels, `size_average()` is its average length along each axis,
-    and `size(1)` is its length along the x axis (see [the array functions](#calculations)).
+    and `size(1)` (or `size(x)`) is its length along the x axis (see [the array functions](#calculations)).
 * `area`: the number of pixels/voxels being worked on.
   That's usually the same as `size_prod()`, but inside [`@within_regions`](#within_regions)
     it only counts the region's own cells, not the dummy cells filling out its bounding box.
@@ -1003,6 +1036,144 @@ During a run within a region, the special [Calculator value](#calculations) `are
 It's supposed to represent the total number of pixels being operated on,
   and usually that equals the product of the grid size along each axis (`size_prod()`),
   but inside regions it is different (and potentially much smaller!)
+
+## `@grammar`
+
+````julia
+# A tower of floors, each one with walls (and maybe a door) around some rooms.
+@grammar begin
+    ROOT => split(y, Ground(3), Floors, Roof(0.15len))
+    Floors => repeat(y, Floor(6))
+    Floor => inset(1, Wall, Interior)
+    Wall => split(size_max_axis(), Solid, Door(1), Solid)  /2
+    Wall => Solid
+    Solid => 'N'
+    Door => 'b'
+    Interior(size_max() > 12) => split(size_max_axis(), Room(w=1:3), Interior(w=2))
+    Interior => Room
+    Room => 'b'
+    Room => begin
+        @fill 'Y' uv(center=0.5, size=texel)
+        @rewrite Yb => YY
+    end  *3
+    Ground => [ G ; N ]
+    Roof => _
+end
+````
+
+The op `@grammar [inherit_biases] begin ... end` is a *split grammar*.
+Starting with the whole grid, it recursively divides boxes into smaller boxes,
+  then paints the final boxes and runs operations within them.
+
+Each rule is `Symbol => production`. Symbols are bare names, unlike colors which are written as `'C'`.
+The box covering the whole grid is named `ROOT`, and the grammar must have at least one rule for it.
+Like any other symbol, it can have several rules anywhere in the grammar, and other rules may refer to it.
+A symbol with several rules picks one of them at random, using the weights `*N` and `/N` like rewrite rules.
+A rule may have a *guard* in parentheses on the left, e.g. `Interior(size_max() > 12)`,
+  which must be true for the rule to be picked.
+If a rule doesn't fit the box (see below), another one is picked instead;
+  if none of them work, the box is left untouched.
+Rules may be recursive, but a box nested more than 1000 rules deep (e.g. from `A => B` and `B => A`)
+  is painted magenta instead, with an error printed to `stderr`.
+
+The productions that divide a box:
+
+* `split(axis, children...)` splits the box along an axis into a row of children.
+* `repeat(axis, Child(size)[, Separator(size)][; leftover=...])` fits as many copies of the child as possible,
+  with a separator between each pair of copies if one is given (e.g. `repeat(x, Room(6), Wall(1))`).
+  Both sizes are in pixels.
+  Wrap a size in `each(...)` to evaluate it again for every copy, so random sizes differ from copy to copy
+    (e.g. `Room(each(4:8))`); otherwise it's evaluated once and every copy gets the same size.
+  Copies are added until the next one doesn't fit, and `leftover` says where the rest of the space goes:
+  * `stretch` (the default): the copies grow to fill it.
+  * `spread`: the separators grow instead, e.g. for evenly spaced fence posts `repeat(x, Post(1), _(4); leftover=spread)`.
+  * `before(Symbol)`, `after(Symbol)`, or `around(Symbol)`: an extra child takes it,
+      at the start, the end, or split between both ends. The symbol can be `_`.
+  It doesn't fit if not even one copy fits.
+* `inset(amount, Shell, Core, faces...)` splits the box into a shell `amount` pixels thick, and the core inside it.
+  The shell is one box per face, so a 2D box has four shell boxes.
+  The corners go to the faces along the lowest axis (e.g. the left and right walls take the full height).
+  `amount` can also be a list with a separate amount per axis, e.g. `[1, 0]`; missing axes get 0.
+  A per-axis amount can be a `[low, high]` pair, for different amounts on each side:
+    `inset([1, [0, 2]], ...)` has no shell on the top and a 2-pixel shell on the bottom.
+  It doesn't fit if the core would be empty.
+* `place(box, Inner, Outer, faces...)` covers a box inside this one with `Inner`,
+    and splits the rest into one box per face for `Outer`, exactly like `inset()`'s shell.
+  The box is written like the boxes of [`@fill`](#fill), but relative to this box,
+    and its values are calculations (see below), so they can be random or depend on the box's size:
+    `place(uv(center=[0.2:0.8, 1], size=0.4), House, Yard)` or `place(pixel(min=2, size=size_min() - 2), Room, Wall)`.
+  * `uv` values go from 0 (this box's low edge) to 1 (its high edge); `pixel` values count from 1.
+  * Like `@fill`, a value can be one number for every axis (shared by every axis, unless it's wrapped in `each(...)`)
+      or a list with one per axis, and axes past the end of a list cover the whole box.
+  * Values can also use `len`, `center`, and `texel` for their axis, as with `@fill`.
+  * The box's edges are rounded to the nearest pixel and clamped to this box.
+      If that leaves it empty, the alternative doesn't fit.
+  Faces that end up empty are skipped, so if the inner box touches an edge
+    (or covers an axis entirely), no outer box is made there.
+* `mirror(axes, Source[, layout])` expands `Source` within half of the box,
+    then mirrors it onto the other half, making the box symmetric.
+  `axes` is one axis or a list of them; with several axes, `Source` gets one corner,
+    which is mirrored into every other corner (e.g. 4-way symmetry with `[x, y]`).
+  The source is the low half along each axis, or the high half for a negative axis (like `-y`),
+    and if the length is odd it includes the middle slice.
+  * By default the source's final pixels are copied, once everything inside it has finished
+      (including its operations), so the result is exactly symmetric.
+    Anything that runs afterwards (operations in other boxes, or later in the algorithm) can still break the symmetry.
+    A `Source` of `_` mirrors whatever is already in the grid.
+  * With `layout`, only the boxes are mirrored: each box in the source is copied (reflected) onto the other side,
+      then painted and run separately. Colors and blocks match (blocks are reflected),
+      but operations and random picks happen independently on each side,
+      e.g. a symmetric floor plan with different furniture in each room.
+    Copied boxes are cut short where they'd overlap the source's middle slice.
+
+`inset()` and `place()` can cover individual faces with other symbols (or `_`), written like `-y => Floor`
+  where `-y` is the face at the low end of the y axis and `y` is the one at the high end.
+  For example, `inset(1, Wall, Room, -z => Floor, z => Roof)` gives a 3D room a different floor and ceiling.
+  Any face that isn't listed gets the shell or outer symbol.
+
+The axis is `x`, `y`, `z`, `w`, or a number, and a minus sign (like `-y`) lays the children out in reverse.
+
+Lists, such as `mirror()` axes, `inset()` amounts, and `place()` box values, can be written with brackets or parentheses:
+  `[x, -y]` and `(x, -y)` are the same.
+A list of one needs brackets (`[2]`) or a trailing comma (`(2,)`), since `(2)` is just the number 2.
+
+Each child of a `split()` is a symbol with an optional size:
+* `Room(3)` is exactly 3 pixels long.
+You can also use calculator expressions, e.g. `Room(2:4)` randomly selects 2, 3, or 4.
+* `Room` or `Room()` gives this room the space leftover after other nodes with explicit sizes have been processed.
+* If you have multiple nodes which should each take some leftover space,
+you can give them relative weightings: `Room(w=2), Hallway(w=3)`.
+  `Room` and `Room()` are short for `Room(w=1)`, and like sizes, weights can be calculations (e.g. `Room(w=1:3)`).
+
+If there are no weighted children, the explicit pixel sizes are stretched to fill the box.
+If the explicit pixel sizes are too *big*, the rule doesn't fit.
+Sizes are rounded to whole pixels in a way that always fills the box exactly.
+`_` is a child that's left untouched, e.g. `split(x, Room, _(1), Room)`.
+
+The productions that end the recursion:
+
+* Another symbol, to cover the same box (e.g. `Interior => Room`).
+* A color `'C'`, which fills the box.
+* `_`, which leaves the box untouched.
+* A block of colors like `[ G ; N ]`, which is stretched over the box (written like [`@upscale`](#upscale) blocks).
+  Cells can be a color, a `{...}` set (random pick per pixel), or `_` (leave that pixel alone).
+* One operation, or a `begin ... end` block of them, which run within the box exactly like [`@within_box`](#within_box).
+  The same goes for biases, with `inherit_biases` applying to every one of these boxes.
+
+The whole layout is decided first, then every color and block is painted, then the operations are run in order.
+
+Sizes, weights, guards, axes, faces, inset amounts, and `place()` boxes are all [calculations](#Calculations).
+They can use the following information about the box being expanded:
+
+* `size`: the box's size, as an array.
+  Use `size(2)` for one axis, or `size_min()`, `size_max()`, `size_min_axis()`, `size_max_axis()`,
+    `size_sum()`, `size_prod()`, `size_average()`, `size_median()`, and `size_len()` (or just `ndims`).
+* `grid_size`: the whole grid's size, with the same functions as `size` (`grid_size(1)`, `grid_size_max()`, etc).
+* `depth`: how many rules led to this box (0 for `ROOT`).
+* `x`, `y`, `z`, `w`: the numbers 1 to 4, so `size(y)` works and `-y` is just `-2`.
+* `len` (only in child sizes): the length of the box along the axis being split.
+  Because a size is always in pixels, a fraction of the box is written like `0.15len`.
+
 
 ## `@upscale`
 
