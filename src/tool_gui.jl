@@ -491,6 +491,8 @@ function reset_gui_runner_algo(runner::GuiRunner,
     new_resolution::Vector{Int32} = [ Int32.(old_grid_size)... ]
     new_dims = length(old_grid_size)
 
+    runner.algorithm_named_event_display_seconds_left = 0
+
     # Re-parse the algorithm if requested.
     if parse_new_algorithm
         runner.algorithm_error_msg = ""
@@ -644,6 +646,7 @@ end
 function finish_gui_runner_algo(runner::GuiRunner, grid_has_changed::Ref{Bool})
     start_t = time()
     while !gui_runner_is_finished(runner)
+        runner.algorithm_named_event_display_seconds_left = 0 # Force-disable named event popups
         step_gui_runner_algo(runner, 50) #TODO: gradually increase tick count and time it
         grid_has_changed[] = true
 
