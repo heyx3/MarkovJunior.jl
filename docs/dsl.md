@@ -63,7 +63,7 @@ For example:
 ````julia
 @markovjunior begin
     @pragma viz 2     # Special notes to the interpreter, no effect on the core algorithm
-    @sequence (length/12) begin    # Do this a few times, proportional to grid length
+    @sequence (size_average()/12) begin    # Do this a few times, proportional to grid length
         @rewrite 1  b => R         # Place a single red pixel somewhere in the image
         @rewrite Rbb => RwR        # Randomly connect new pathways to the red pixel
         @rewrite w => R            # Finish the pathways to make a perfect maze
@@ -85,8 +85,8 @@ For example:
     @event !BeforeFinalSteps
 
     # Finally, place a "player start" square.
-    @fill B pixel(min=0, size=4)
-    @fill T pixel(min=0, size=1)
+    @fill 'B' pixel(min=1, size=4)
+    @fill 'T' pixel(min=1, size=1)
 end
 ````
 
@@ -94,8 +94,10 @@ end
 
 Many number and boolean values in the language can be arbitrary calculator expressions,
   using standard math functions like `min`, `clamp`, `lerp`, `log`, etc.
+
 All functions are guaranteed to run deterministically across different machines
   (though not across different Julia versions).
+This comes at the cost of extremely small precision loss in places.
 
 Values can also be randomly chosen from a range with `a:b`.
 It's an inclusive integer range when `a` and `b` are both ints,
@@ -122,18 +124,25 @@ The built-in functions and constants are:
 | Rounding | `floor`, `ceil`, `round`, `trunc` (Put `Int` as the first argument to also cast -- `floor(Int, x)`) |
 | Conversion | `Int`, `Float64`, `float`, `iseven`, `isodd` |
 | Powers and logs | `sqrt` (or `√`), `exp`, `exp2`, `log` (or `log(base, x)`), `log2`, `log10` |
-| Logic | `!`, `&&`, `\|\|`, `a ? b : c` (or `if`/`else`), and comparisons `== != < <= > >=` (also `≠ ≤ ≥`), which can be chained like `0 < x <= 10` |
+| Trigonometry | `sin`, `cos`, `tan` (in degrees), and `sinT(t)`/`cosT(t)` which take a number of full turns, so they repeat every 1 (handy with time or a `lerp` `t`) |
+| Logic | `!`, `&&`, `\|\|`, `a ? b : c` (or `if`/`else`), and comparisons `== != < <= > >=` (also `≠ ≤ ≥`). These can be chained like `0 < x <= 10` |
 | Bitwise | `&`, `\|`, `xor` (or `⊻`), `~`, `<<`, `>>`, `>>>`, on `Int`s (or on `Bool`s, as logic without short-circuiting) |
 | Randomness | `a:b`, `curve(a:b, p)` (see above) |
 | Constants | `pi` (or `π`), `ℯ` (or `exp(1)` give or take float error), `Inf`, `true`, `false` |
 
-There's no trigonometry yet; it hasn't been needed and is hard to make deterministic.
+The trigonometry functions are accurate for any angle, and exact at every quarter turn
+  (e.g. `sin(180)` and `cosT(0.25)` are exactly 0).
+Other trigonometry, like `asin` or `atan`, isn't available yet.
 
-Each place that takes a calculation also offers its own inputs, documented with it
-  (e.g. `area` for [thresholds](#threshold), `len` for [boxes](#fill)).
-Inputs which are arrays, like `size`, come with these functions (shown for `size`):
-`size(i)` (the `i`th element), `size_min()`, `size_max()`, `size_min_axis()` and `size_max_axis()` (the index of the smallest/largest element),
-  `size_sum()`, `size_prod()`, `size_average()`, `size_median()`, and `size_ndims()` (the number of elements).
+Most places that take a calc expression also offer custom input, for example `area` is the voxel count.
+Array inputs exist, and come with a specific group of functions to query them.
+Below are those array functions in terms of the ubiquitous input `size`, which stores grid resolution:
+
+* `size(i)` retrieves the `i`th component.
+* `size_len()` retrieves the number of elements.
+  For `size` specifically, `ndims` is a shortcut for this.
+* `size_min()`/`size_max()` and `size_min_axis()`/`size_max_axis()` get the smallest/largest element, or its index, respectively.
+* `size_sum()`, `size_prod()`, `size_average()`, and `size_median()`, calculate a value based on every element in `size`.
 
 ## `@pragma`
 
@@ -228,7 +237,7 @@ The official syntax for this operation is `@rewrite [threshold] rules [bias]`;
 We'll go into detail on everything, but here is a quick cheat sheet of **all** the features:
 
 ````julia
-@rewrite  (length/2 : area/50) #= <-- a Threshold range for how many times to run =#     begin
+@rewrite  (size_average()/2 : area/50) #= <-- a Threshold range for how many times to run =#     begin
     # Rules go here.
     # If you only have one, you don't need to wrap it in this `begin end` block!
 
@@ -409,17 +418,21 @@ However you can provide a *threshold* as the first argument, to limit this.
 
 The threshold is a [calculation](#calculations), evaluated each time the Op starts,
   then rounded to the nearest integer.
-A threshold of 0 or less means the Op does nothing (write e.g. `max(1, area/100)` if you need at least 1).
+A threshold of 0 or less means the Op does nothing (write e.g. `max(1, size_prod()/100)` if you need at least 1).
 Besides the usual math, it can use:
-* `area`: the total number of pixels/voxels in the grid (or the current scope, inside `@within_box` etc).
-* `length`: the average length of the grid along each axis.
+* `size`: the size of the grid, as an array.
+  For example `size_prod()` is its total number of pixels/voxels, `size_average()` is its average length along each axis,
+    and `size(1)` is its length along the x axis (see [the array functions](#calculations)).
+* `area`: the number of pixels/voxels being worked on.
+  That's usually the same as `size_prod()`, but inside [`@within_regions`](#within_regions)
+    it only counts the region's own cells, not the dummy cells filling out its bounding box.
 * The algorithm's [`@calc`](#calc) functions.
 
 ````julia
 @rewrite 10 R=>G                       # A hard-coded number of matches
-@rewrite (area/10) R=>G                # Relative to the grid's size
-@rewrite (0.5*length) R=>G
-@rewrite (area/100):20 R=>G            # A random value; mixing Int and Float gives a Float range
+@rewrite (size_prod()/10) R=>G                # Relative to the grid's size
+@rewrite (0.5*size_average()) R=>G
+@rewrite (size_prod()/100):20 R=>G            # A random value; mixing Int and Float gives a Float range
 @rewrite (clamp(area ÷ 50, 2, 8)) R=>G # Anything else
 @rewrite n_paths() R=>G                # A `@calc` function
 @rewrite threshold(n_paths()) R=>G     # The same, explicitly marked as the threshold
@@ -794,40 +807,42 @@ A rule can optionally filter which color pixels are affected,
 If this box's space is described with vectors, and not scalars,
   then the box can't be higher-dimensional than the grid!
 However it can be lower-dimensional -- for additional grid dimensions the box stretches along the entire space.
+For example a 2D box, when used in a 3D grid, implicitly stretches along the Z axis from top to bottom.
 
 The parameters are as follows:
 * `'C'` is the color to draw.
 * `S` is the kind of space covered by the box, either:
-  * `uv` for continuous space where 0 is the grid's min corner, 1 is the max corner,
-and box size is always at least one pixel (so you can pass `size=0` to draw exactly one pixel).
+  * `uv` for continuous space where 0 is the grid's min edge and 1 is the max edge.
 For example on an 8-pixel axis, `uv(min=0, size=0.5)` covers pixels 1-4 and `uv(min=0.5, size=0.5)` covers 5-8.
-  * `pixel` for integer pixel coordinates (starting at 1).
-You can still provide fractional values, in which case coordinates will be rounded.
+  * `pixel` for pixel coordinates (starting at 1).
 * `A` and `B` are the parameters defining the box, chosen among the following:
   * `min`
   * `max` (inclusive)
   * `size`
   * `center`
-* `X` and `Y` are the values for those parameters, either:
-  * A single number, representing the value along all axes
-  * A vector like `(3, 20)`, *which also forces the entire grid to have at least that many dimensions*.
+* `N` and `M` are the values for those parameters, either:
+  * A single value, used for every axis
+  * A vector like `[3, 20]` or `(3, 20)`, *which also forces the entire grid to have at least that many dimensions*.
 * `[rule]` is an optional condition for which pixels are affected, using `+` to whitelist and `-` to blacklist.
 For example `-RGB` means to affect every pixel in the box except Red Green and Blue;
 `+RGB` means to affect *no* pixels in the box except Red Green and Blue.
 * `[mask]` is an optional mask statement which randomly forbids some of the pixels in the same way as for [rewrite rules](#), for example `%0.75` forbids 25% of all pixels.
 
-Note that a 1D vector like `(5, )` has different behavior than a scalar like `5`
-  when extrapolating to higher dimensions.
-The 1D vector lets every axis from 2 onward take up the entire grid,
-  while the scalar value is used for every axis.
+Each parameter value is a [calculation](#calculations), evaluated every time the Op runs.
+This means it can be random(`pixel(min=3, size=1:10)`), use [`@calc`](#calc) functions,
+  and reference one of these built-in inputs:
+* `len`: the length of the grid-axis being considered, always in pixels. For example `pixel(min=2, max=len-1)` covers everything but a one-pixel border.
+* `center`: the exact middle of the grid along the axis being considered: 0.5 for `uv`, and `len/2.0` for `pixel`.
+* `texel`: the size of one pixel, always in `uv` space -- `1/len`.
+  For example `uv(center=0.5, size=texel)` perfectly covers the middle pixel, while `uv(min=(0, 1-texel), max=1)` covers the last row of a 2D grid.
+* `size`: the pixel size of the current grid along each axis, for example `size(2)` or `size(y)` is the number of pixels along the y axis, and `size_prod()` is the total number of pixels.
 
-Each value is a [calculation](#calculations), evaluated every time the Op runs,
-  so it can be random (`pixel(min=1:10, size=3)`), use [`@calc`](#calc) functions, and use these inputs:
-* `len`: the length of the axis the value is for, in pixels (e.g. `pixel(min=2, max=len-1)` leaves a 1-pixel border).
-* `center`: the middle of that axis, in the box's space: 0.5 for `uv`, and `len/2` for `pixel`.
-* `texel`: the size of one pixel in `uv` space, `1/len`.
-  For example `uv(center=0.5, size=texel)` is the middle pixel, and `uv(min=(0, 1-texel), max=1)` is the last row.
-* `size`: the size of the grid (or the current scope), as an array; `size(2)` is its length along the y axis.
+A single value is normally evaluated once and shared by every axis,
+  for example `pixel(min=3, size=1:10)` always generates a square from 1x1 to 10x10.
+To instead evaluate it separately for each axis, wrap it in `each(...)`:
+  `pixel(min=3, size=each(1:10))`.
+This also happens automatically if you use one of the per-axis constants,
+  `len` or `center` or `texel`.
 
 The box's edges are rounded to the nearest pixel edge, then clamped to the grid.
 If that leaves the box empty (for example `size=0`), nothing happens.
@@ -835,7 +850,7 @@ If that leaves the box empty (for example `size=0`), nothing happens.
 ## `@sequence`
 
 ````julia
-@sequence (length/10) begin
+@sequence (size_average()/10) begin
     # Redden 20% of the pixels in the top-left corner of the grid.
     @fill 'R' uv(min=0, size=0.5) %0.2
     # Turn one of them into green.
@@ -865,7 +880,7 @@ These biases are inherited by all operations within it
 ````julia
 # Grow a maze in the middle half of the grid, leaving the rest alone.
 @within_box uv(min=0.25, size=0.5) begin
-    @fill 'w' uv(center=0.5, size=0) # The center of the box, not the grid
+    @fill 'w' uv(center=0.5, size=texel) # The center of the box, not the grid
     @rewrite wbb => wgw
     @rewrite g => w
 end
@@ -891,46 +906,103 @@ The inner operations may not reallocate the grid, so `@upscale` and `@downscale`
 ## `@within_regions`
 
 ````julia
-# Decorate the 3 rooms (connected areas of Gray/Teal floor) farthest from the entrance,
-#    and fill every Red lake with water.
-@within_regions 3 begin
-    gT => begin
-        @fill 'Y' uv(center=0.5, size=0) # A light in the middle of the room's bounding box
-        @rewrite (area/20) g => N
+@within_regions 10 begin
+
+    # In a solid-red region, generate a maze.
+    R => @sequence begin
+        @rewrite 1 _ => b
+        @rewrite bRR => bgb
+        @rewrite g => b
     end
-    R => @rewrite R => B
-end field(-O)
+
+    # In a solid Blue-and/or-Yellow region, fill with noisy gray.
+    BY => @rewrite(BY => g  %0.5)
+
+    # In a solid black-and/or-Yellow region, cut out the black.
+    #
+    # Any other nearby black/Yellow pixels should be masked out with Magenta,
+    #   to prevent us from wasting CPU time on them.
+    # The default mask color (used by the above regions) is black,
+    #   but that doesn't work here.
+    bY(M) => @rewrite b=>Y
+
+    # Pure-yellow regions will be randomly assigned as a BY or bY region.
+
+end field(-O) # Biases, listed at the end, decide which regions are chosen first.
+              # Important since it can only pick 10!
 ````
 
-The op `@within_regions [threshold] [inherit_biases] ['C'] begin ... end [bias]`
-  finds every connected region of certain colors, then runs a sequence of operations within each one,
-  as if that region's bounding box were the entire grid (just like [`@within_box`](#within_box)).
-The regions are found once at the start, so changes made within one region don't affect the others.
-Cells are connected along each axis, not diagonally.
+The op `@within_regions [args] rules [bias]`
+  splits the grid into separate connected regions by color,
+  then runs some operations on each one.
+Regions must connect orthogonally (diagonals are ignored).
+Operations within a region may not reallocate the grid.
 
-Each rule is formatted as some colors, an arrow, then one operation or a `begin ... end` block of them.
-A region is a connected group of cells whose colors are all in the same rule, e.g. `gT` above.
-Each color can only appear in one rule.
+Each region rule is formatted as a color set (e.g. `RGB`), then an arrow `=>`,
+  then an operation to run within that region.
+Remember that you can use `@sequence` to group several operations together.
 
-Regions usually aren't box-shaped, so the other cells in their bounding box are temporarily replaced
-  with "dummy" black pixels while the region's operations run, and put back afterwards.
-You can pick a different color for these dummy pixels with the `'C'` argument.
-Keep them in mind when writing the inner operations, e.g. `b => w` will also change the dummy pixels
-  (to no effect, as they're discarded), and `uv` boxes may land on a dummy pixel instead of the region.
-If you need inner operations to see something about the region's surroundings,
-  mark those cells beforehand with another color and include it in the rule.
+If there are multiple region rules, you must enclose them in a `begin ... end` block.
 
-The optional `threshold` limits how many regions are run, identical to [the Threshold for `@rewrite`](#threshold);
-  by default every region runs.
-The order of regions is random, unless the op has biases (including ones inherited from outer `@sequence`s).
-In that case, like `@rewrite`, the most desirable region is always picked next.
-A bias may also forbid regions entirely, and the op stops early if every remaining region is forbidden.
-Biases are recalculated before each pick, so `live` biases can react to the regions picked before.
-Region biases work best with the default `combo` for fields (see [the field bias](#bias-field)).
+### Args
 
-The op's biases and inherited biases are only used to choose regions, and don't apply within them,
-  unless you add `inherit_biases` (same as for `@within_box`).
-As with `@within_box`, the inner operations may not reallocate the grid.
+Like many Ops, this one can have a Threshold limiting how many times to run
+  (read: how many regions to operate in).
+It's normally a plain [Calculator](#calculations) expression, like `10` or `sin(area^2)/10`,
+  but to distinguish it from other params you can wrap it in `threshold(...)`.
+By default the threshold is infinite (all regions are operated on);
+  once you set a real threshold then [Biases](#bias-and-weights) become an important way
+  to control which regions are selected at all.
+Without any biases, regions are selected uniform-randomly.
+
+By default each region includes a 1-pixel border of the surrounding area to help rewrite rules
+  (see [Non-square regions](#non-square-regions)), but you can change this with e.g.
+  `border(2)` or `border(0)`.
+Note that this is not affected by the `along(...)` parameter mentioned below.
+
+You can whitelist the axes a region may connect along, using `along(x, z)`.
+Note that this does not restrict the `border(...)` param mentioned above --
+  borders extend out along every axis.
+
+Normally the biases that apply to this Op (both the ones it defines and the ones it inherits from outside)
+  are not used *within* each region.
+You can change this by adding `inherit_biases`, but be aware
+  those inherited biases will "forget" about what's going on outside the region until you zoom back out.
+
+This op's biases (both created and inherited) are only used to choose regions;
+  they do not apply within them.
+You can change this by adding the arg `inherit_biases`.
+
+### Color sets
+
+Region color-sets may share some colors as long as they each have at least one unique element;
+  for example if you have Red and Blue rooms which both use Yellow inside them, you can name `BY` and `RY`.
+
+If the grid contains a region with *only* these shared colors, not touching any of the unique ones,
+  it goes to a random applicable ruleset.
+In the above example, a block of disconnected Yellow can go to either `BY` or `RY`.
+
+### Non-square regions
+
+Many color-regions aren't shaped like boxes, so the smaller grid that a region operates within
+  usually has "external" pixels in it.
+You are allowed to read them, and even write to them,
+  but those external writes are reverted once the region's operations are finished.
+
+Any external pixels which share your region's colors are masked out,
+  so that your ops don't waste time on them.
+By default they are all set to black for the duration of the region work.
+You can override that with a color character:
+  `BY(R) => ...` temporarily replaces external Blue and Yellow pixels with Red.
+
+Within these regions, the ubiquitous [Calculator value](#calculations) `size`
+  includes the full bounds of the region plus its border
+  (by default it'll have a [1-pixel border](#args)).
+
+During a run within a region, the special [Calculator value](#calculations) `area` changes.
+It's supposed to represent the total number of pixels being operated on,
+  and usually that equals the product of the grid size along each axis (`size_prod()`),
+  but inside regions it is different (and potentially much smaller!)
 
 ## `@upscale`
 

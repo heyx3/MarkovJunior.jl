@@ -5,10 +5,10 @@
 	@pragma GuiMaterial T empty
 
     # Draw a road next to the building's future location
-	@fill 'G' uv(min=(0, 0, 0), max=(1, 0.07, 0))
-	@fill 'b' uv(min=(0, 0.07, 0), max=(1, 0.35, 0))
-	@fill 'g' uv(center=(0.5, 0.19, 0), size=(1, 0, 0))
-	@fill 'w' uv(center=(0, 0.19, 0), size=0)
+	@fill 'G' uv(min=(0, 0, 0), max=(1, 0.07, texel))
+	@fill 'b' uv(min=(0, 0.07, 0), max=(1, 0.35, texel))
+	@fill 'g' uv(center=(0.5, 0.19, 0), size=(1, texel, texel))
+	@fill 'w' uv(center=(0, 0.19, 0), size=texel)
 	@rewrite wgg => wbw
 	# Add guard-rails
 	@rewrite [
@@ -24,8 +24,8 @@
 	]  \[ (x, y, z)[ (+x, y, +z) ] ]
 
 	# Draw a parking lot around the building.
-	@fill 'b' uv(min=0, max=(1, 1, 0)) +T
-	@fill 'R' uv(min=(1, 1, 0), size=0)
+	@fill 'b' uv(min=0, max=(1, 1, texel)) +T
+	@fill 'R' uv(min=(1 - texel, 1 - texel, 0), size=texel)
 	@rewrite 2 Rbb=>ROB
 	@rewrite OBbbbb => OBbbOB
 	@rewrite [
@@ -56,7 +56,7 @@
 		_ _ _ _ _ _
 		_ _ _ _ _ _
 	]  %0.5 \[ x[+x], y[+y] ]
-	@sequence (length/3) begin
+	@sequence (size_average()/3) begin
 		@rewrite begin
 			# Most of the time, draw another layer upward:
 			[

@@ -37,6 +37,9 @@ end
 check_calc(:(1 + 2 * 3), 7)
 check_calc(:(7 / 2), 3.5)
 check_calc(:(7 ÷ 2), 3)
+check_calc(:(sin(90)), 1.0) # Degrees
+check_calc(:(cos(0)), 1.0)
+check_calc(:(sinT(0.25) + cosT(0.5)), 0.0) # Full turns
 # Bitwise operators, on Ints or Bools.
 check_calc(:(6 & 3), 2)
 check_calc(:(6 | 3), 7)
@@ -93,8 +96,8 @@ check_calc(:(2.0 ^ 0.5), sqrt(2.0))
 check_calc(:((-2.0) ^ 3), -8.0)
 check_calc(:(2 ^ 10), 1024) # Int powers stay Int
 check_calc(:(log(2, 8)), 3.0)
-# Trigonometry and friends aren't available (they'd need deterministic implementations).
-for f in (:sin, :cos, :tan, :atan, :sinh, :hypot, :cbrt, :deg2rad)
+# Other trigonometry and friends aren't available (they'd need deterministic implementations).
+for f in (:atan, :sinh, :hypot, :cbrt, :deg2rad)
     check_calc_fails(Expr(:call, f, 1))
 end
 check_calc_fails(:(log(-1)))
@@ -143,8 +146,8 @@ for grid_size in ((4, 9, 2, 9), Vec(4, 9, 2, 9))
     check_calc(:(grid_size_prod()), ENV_GRID, 648; grid_size = grid_size)
     check_calc(:(grid_size_average()), ENV_GRID, 6.0; grid_size = grid_size)
     check_calc(:(grid_size_median()), ENV_GRID, 6.5; grid_size = grid_size)
-    check_calc(:(grid_size_ndims()), ENV_GRID, 4; grid_size = grid_size)
-    check_calc(:(grid_size(grid_size_ndims() - 1)), ENV_GRID, 2; grid_size = grid_size)
+    check_calc(:(grid_size_len()), ENV_GRID, 4; grid_size = grid_size)
+    check_calc(:(grid_size(grid_size_len() - 1)), ENV_GRID, 2; grid_size = grid_size)
 end
 check_calc_fails(:(grid_size(5)), ENV_GRID; grid_size = (1, 2))
 check_calc_fails(:(grid_size(1.0)), ENV_GRID; grid_size = (1, 2))
@@ -363,6 +366,21 @@ let m = macros_of(:( f(scale, max) = max(scale, 1) ), :( g(a) = 0 < a <= 2 ), :(
     @bp_check(eval_macros(:( f(5, 0) ), m) === 5) # Call heads aren't parameters
     @bp_check(eval_macros(:( g(2) ), m) === true)
     @bp_check(eval_macros(:( h(scale) ), m; scale = 7) === 7) # `scale` passes through `f`'s parameter of the same name
+end
+
+# Finding out which inputs a calculation uses, even in branches that are never taken or in user functions.
+let m = macros_of(:( uses_area() = area + 1 ), :( shadows_area(area) = area ), :( indirect() = uses_area() ),
+                  :( loops(a) = loops(a) ))
+    mentions_area(expr) = CI.calc_mentions(CI.calc_compile(expr, ENV_MACROS), (:area, ), m)
+    @bp_check(mentions_area(:( area * 2 )))
+    @bp_check(!mentions_area(:( scale * 2 )))
+    @bp_check(mentions_area(:( false ? area : 1 ))) # Folded away while compiling, but still mentioned
+    @bp_check(mentions_area(:( 1 < area <= 3 )))
+    @bp_check(mentions_area(:( indirect() )))
+    @bp_check(!mentions_area(:( shadows_area(3) )))  # The parameter hides the input
+    @bp_check(mentions_area(:( shadows_area(area) ))) # ...but the argument is the caller's
+    @bp_check(!mentions_area(:( loops(1) )))
+    @bp_check(!mentions_area(:( not_defined() )))
 end
 
 # The table may change between evaluations without recompiling the caller.

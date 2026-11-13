@@ -44,11 +44,11 @@ function check_parse_fails(src::String)
 end
 
 
-# Every region of each rule gets its own Ops; other cells are untouched,
-#    including the stand-in cells around non-rectangular regions.
+# Every region of each rule gets its own Ops; other cells are untouched
+#    including the external cells near a non-rectangular region.
 grid = run_on(@markovjunior(begin
-    @within_regions begin
-        R => begin
+    @within_regions border(0) begin
+        R => @sequence begin
             @rewrite R => G
             @rewrite b => w
         end
@@ -65,7 +65,7 @@ end), grid_from_rows("RRbbMO",
 
 # Regions don't mix rules.
 grid = run_on(@markovjunior(begin
-    @within_regions begin
+    @within_regions border(0) begin
         R => @rewrite R => G
         B => @rewrite B => Y
     end
@@ -74,10 +74,10 @@ end), grid_from_rows("RBBR"))
 
 # `uv` boxes and thresholds are relative to each region.
 grid = run_on(@markovjunior(begin
-    @within_regions begin
-        R => begin
-            @fill 'Y' uv(center=0.5, size=0)
-            @rewrite (area/3) R => G
+    @within_regions border(0) begin
+        R => @sequence begin
+            @fill 'Y' uv(center=0.5, size=texel)
+            @rewrite (size_prod()/3) R => G
         end
     end
 end), grid_from_rows("RRRbRRRRRR",
@@ -87,10 +87,13 @@ end), grid_from_rows("RRRbRRRRRR",
 @bp_check(count(==(c('G')), grid[1:3, :]) == 3, rows_of(grid))
 @bp_check(count(==(c('G')), grid[5:10, :]) == 6, rows_of(grid))
 
-# The color used for cells outside the region, and that it never leaks out.
+# External cells within the region's bounding box are visible but have their edits reverted.
 grid = run_on(@markovjunior(begin
-    @within_regions 'w' begin
-        R => @rewrite wR => wM
+    @within_regions border(0) begin
+        R => @sequence begin
+            @rewrite bR => bM
+            @rewrite b => w
+        end
     end
 end), grid_from_rows("RRbN",
                      "RbbN",
@@ -104,7 +107,7 @@ grid_3d = fill(c('b'), 3, 3, 3)
 grid_3d[1, 1, 1:3] .= c('R')
 grid_3d[3, 3, 3] = c('R')
 grid = run_on(@markovjunior(begin
-    @within_regions begin
+    @within_regions border(0) begin
         R => @fill 'G' pixel(min=1, size=1)
     end
 end), grid_3d)
@@ -113,8 +116,8 @@ end), grid_3d)
 # Nesting with `@within_box`, both ways.
 grid = run_on(@markovjunior(begin
     @within_box pixel(min=1, size=(3, 2)) begin
-        @within_regions begin
-            R => begin
+        @within_regions border(0) begin
+            R => @sequence begin
                 @within_box pixel(min=1, size=1) begin
                     @rewrite R => G
                 end
@@ -131,7 +134,7 @@ end), grid_from_rows("RRbRR",
 # Nothing to do.
 grid = run_on(@markovjunior(begin
     @sequence repeat begin
-        @within_regions begin
+        @within_regions border(0) begin
             R => @rewrite b => w
         end
     end
@@ -145,7 +148,7 @@ end), grid_from_rows("bbb"))
 # A threshold limits how many regions run.
 for seed in 1:5
     grid = run_on(@markovjunior(begin
-        @within_regions 2 begin
+        @within_regions border(0) 2 begin
             R => @rewrite R => G
         end
     end), grid_1d("RbRRbRbRRR"); seed=seed)
@@ -158,7 +161,7 @@ end
 # Biases pick which regions run.
 for seed in 1:5
     grid = run_on(@markovjunior(begin
-        @within_regions 1 begin
+        @within_regions border(0) 1 begin
             R => @rewrite R => G
         end field(Y)
     end), grid_1d("RRbbbRRbYbRRbbbbbRR"); seed=seed)
@@ -170,7 +173,7 @@ end
 for (live, expected) in ((false, "YbbbbRRbbbGGbbbYYYY"), (true, "YbbbbGGbbbRRbbbYYYY"))
     for seed in 1:5
         grid = run_on(markov_algo_parse("""@markovjunior 1 begin
-            @within_regions 2 begin
+            @within_regions border(0) 2 begin
                 O => @fill 'Y'
                 R => @rewrite R => G
             end field(-Y$(live ? ", live" : ""))
@@ -181,7 +184,7 @@ end
 
 # Biases that forbid every region stop the Op.
 grid = run_on(@markovjunior(begin
-    @within_regions begin
+    @within_regions border(0) begin
         R => @rewrite R => G
     end field(Y->bR)
 end), grid_1d("RRwYbbRR"))
@@ -190,7 +193,7 @@ end), grid_1d("RRwYbbRR"))
 # `inherit_biases` brings the Op's biases into each region (seeing only that region).
 for seed in 1:5
     grid = run_on(@markovjunior(begin
-        @within_regions inherit_biases begin
+        @within_regions border(0) inherit_biases begin
             RY => @rewrite 1 R => G
         end field(Y)
     end), grid_1d("RRRRYbYRRRR"); seed=seed)
@@ -201,7 +204,7 @@ end
 for inherit in (false, true)
     mj = markov_algo_parse("""@markovjunior 1 begin
         @sequence begin
-            @within_regions $(inherit ? "inherit_biases" : "") begin
+            @within_regions border(0) $(inherit ? "inherit_biases" : "") begin
                 R => @rewrite R => G counting()
             end counting()
         end counting()
@@ -235,18 +238,97 @@ for inherit in (false, true)
 end
 
 
+################
+# Shared colors
+
+# Rules can share colors: regions start from a rule's own colors, earlier rules win contested cells,
+#    and leftover groups of shared colors go to a random rule which has them.
+let str(grid) = String([ MJ.CELL_TYPES[v + 1].char for v in grid ]),
+    initial = [ MJ.CELL_CODE_BY_CHAR[ch] for ch in "RYbYBbYbRYB" ],
+    mj = markov_algo_parse("""@markovjunior 1 begin
+        @within_regions border(0) begin
+            RY => @rewrite Y => G
+            BY => @rewrite Y => N
+        end
+    end""")
+    lone_yellows = Set{Char}()
+    for seed in 1:20
+        s = str(run_on(mj, initial; seed=seed))
+        @bp_check(occursin(r"^RGbNBb[GN]bRGB$", s), s)
+        push!(lone_yellows, s[7])
+    end
+    @bp_check(lone_yellows == Set([ 'G', 'N' ]), lone_yellows)
+end
+
+# Inside a region, `area` counts the region's own cells rather than its bounding box.
+let mj = markov_algo_parse("@markovjunior 2 begin
+ @within_regions border(0) R => @rewrite (area - 1) R => G
+end"),
+    initial = fill(MJ.CELL_CODE_BY_CHAR['b'], 3, 3)
+    initial[1, 1] = initial[2, 1] = initial[1, 2] = MJ.CELL_CODE_BY_CHAR['R'] # An L shape, in a 2x2 box
+    grid = run_on(mj, initial)
+    @bp_check(count(==(MJ.CELL_CODE_BY_CHAR['G']), grid) == 2, grid)
+end
+
+# By default the region's Ops can see one cell of real colors around it, but changes to those cells are undone.
+let str(grid) = String([ MJ.CELL_TYPES[v + 1].char for v in grid ]),
+    run_1D(src, row) = str(run_on(markov_algo_parse("@markovjunior 1 begin
+ $src
+end"),
+                                   [ MJ.CELL_CODE_BY_CHAR[ch] for ch in row ]))
+    @bp_check((s = run_1D("@within_regions R => @rewrite LR => LG", "LRRL")) == "LGGL", s) # Mirrored too
+    @bp_check((s = run_1D("@within_regions border(0) R => @rewrite LR => LG", "LRRL")) == "LRRL", s)
+    @bp_check((s = run_1D("@within_regions R => @rewrite RL => RY", "LRRL")) == "LRRL", s)
+    # Farther cells are outside the view.
+    @bp_check((s = run_1D("@within_regions R => @rewrite LR => LG", "LbRR")) == "LbRR", s)
+    @bp_check((s = run_1D("@within_regions border(2) R => @rewrite LbR => LbG", "LbRR")) == "LbGR", s)
+    # Other cells with the rule's colors are masked out with the 'C' color, even within the border.
+    @bp_check((s = run_1D("@within_regions border(2) RG(w) => @rewrite Rbw => Gbw", "RbR")) == "GbG", s)
+    @bp_check((s = run_1D("@within_regions border(2) RG(w) => @rewrite RbR => GbR", "RbR")) == "RbR", s)
+end
+
+# A concave region never sees another region of its colors inside its box.
+let initial = [ MJ.CELL_CODE_BY_CHAR[ch] for ch in [ 'R' 'R' 'R' 'R' 'R'
+                                                      'R' 'b' 'b' 'b' 'R'
+                                                      'R' 'b' 'R' 'b' 'R'
+                                                      'R' 'b' 'b' 'b' 'R' ] ],
+    mj = markov_algo_parse("@markovjunior 2 begin\n @within_regions R => @rewrite 1 R => G\nend")
+    for seed in 1:20
+        grid = run_on(mj, initial; seed = seed)
+        @bp_check(grid[3, 3] == MJ.CELL_CODE_BY_CHAR['G'], seed, ": ", grid)
+        @bp_check(count(==(MJ.CELL_CODE_BY_CHAR['G']), grid) == 2, seed, ": ", grid)
+    end
+end
+
+# Regions can be limited to spreading along certain axes.
+let initial = fill(MJ.CELL_CODE_BY_CHAR['R'], 3, 2)
+    for (setting, n_regions) in (("", 1), ("along(x)", 2), ("along(y)", 3), ("along(x, y)", 1))
+        mj = markov_algo_parse("@markovjunior 2 begin
+ @within_regions border(0) $setting R => @rewrite 1 R => G
+end")
+        grid = run_on(mj, initial)
+        @bp_check(count(==(MJ.CELL_CODE_BY_CHAR['G']), grid) == n_regions, setting, ": ", grid)
+    end
+end
+
+# A single rule can be written without a block.
+let mj = markov_algo_parse("@markovjunior 1 begin\n @within_regions border(0) 1 R => @rewrite R => G\nend"),
+    grid = run_on(mj, [ MJ.CELL_CODE_BY_CHAR[ch] for ch in "RRbRR" ])
+    @bp_check(count(==(MJ.CELL_CODE_BY_CHAR['G']), grid) == 2, grid)
+end
+
+
 ##############
 # Parse errors
 
-check_parse_fails("@markovjunior begin\n @within_regions begin\n R => @upscale (2)\n end\nend")
-check_parse_fails("@markovjunior begin\n @within_regions begin\n R\n end\nend")
-check_parse_fails("@markovjunior begin\n @within_regions begin\n {RG} => @rewrite R => G\n end\nend")
-check_parse_fails("@markovjunior begin\n @within_regions begin\n RX => @rewrite R => G\n end\nend")
-check_parse_fails("@markovjunior begin\n @within_regions begin\n end\nend")
-check_parse_fails("@markovjunior begin\n @within_regions begin\n R => @rewrite R => G\n BR => @rewrite B => Y\n end\nend")
+check_parse_fails("@markovjunior begin\n @within_regions border(0) begin\n R => @upscale (2)\n end\nend")
+check_parse_fails("@markovjunior begin\n @within_regions border(0) begin\n R\n end\nend")
+check_parse_fails("@markovjunior begin\n @within_regions border(0) begin\n {RG} => @rewrite R => G\n end\nend")
+check_parse_fails("@markovjunior begin\n @within_regions border(0) begin\n RX => @rewrite R => G\n end\nend")
+check_parse_fails("@markovjunior begin\n @within_regions border(0) begin\n end\nend")
 check_parse_fails("@markovjunior begin\n @within_regions\nend")
-check_parse_fails("@markovjunior begin\n @within_regions sometimes begin\n R => @rewrite R => G\n end\nend")
-check_parse_fails("@markovjunior begin\n @within_regions 2 3 begin\n R => @rewrite R => G\n end\nend")
-check_parse_fails("@markovjunior begin\n @within_regions 'X' begin\n R => @rewrite R => G\n end\nend")
+check_parse_fails("@markovjunior begin\n @within_regions border(0) sometimes begin\n R => @rewrite R => G\n end\nend")
+check_parse_fails("@markovjunior begin\n @within_regions border(0) 2 3 begin\n R => @rewrite R => G\n end\nend")
+check_parse_fails("@markovjunior begin\n @within_regions border(0) begin\n R(X) => @rewrite R => G\n end\nend")
 
 end)()

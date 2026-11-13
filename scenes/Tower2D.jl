@@ -1,5 +1,5 @@
 @markovjunior 2 'T' begin
-    @fill 'b' uv(min=(0.35, 1), max=(0.65, 1))
+    @fill 'b' uv(min=(0.35, 1 - texel), max=(0.65, 1))
 
 	# Build the skeleton of the tower.
 	@sequence repeat begin

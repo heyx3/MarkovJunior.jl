@@ -1,14 +1,9 @@
-#NOTE: this file takes some things from op_fill.jl and op_sequence.jl, and should be included after them.
+#NOTE: this file takes some things from op_sequence.jl, and should be included after it.
 
 "Runs a sequence of Ops within a box-shaped part of the grid, as if that part were the entire grid"
-struct MarkovOpWithinBox{N} <: AbstractMarkovOp
+struct MarkovOpWithinBox <: AbstractMarkovOp
     inherit_biases::Bool
-
-    # Same as `@fill`:
-    space::E_DrawBoxSpace
-    box_is_1D_scalar::Bool # Only important if N=1
-    box::Union{Box{N, Float32}, Box{N, Int32}}
-
+    box::CalcBox # Same as `@fill`
     ops::Vector{AbstractMarkovOp}
 end
 
@@ -22,11 +17,12 @@ function markov_algo_run(op::MarkovOpWithinBox,
         return nothing
     end
 
-    area = get_draw_box_pixels(
-        op.space, op.box,
-        convert(Vec{NGrid, Int32}, vsize(grid)),
-        op.box_is_1D_scalar
-    )
+    area = eval_calc_box(op.box, grid, algo_state.rng, algo.calc_macros)
+    if isnothing(area)
+        @logic_logln("@within_box's area is empty")
+        markov_opalgo_tick(algo_state, STANDARD_END_OF_OP_TICK_PRIORITY + 1)
+        return false
+    end
     (area_min, area_max) = (min_inclusive(area), max_inclusive(area))
     # Views of views get flattened by Julia into one view of the original array,
     #    so nested scopes don't create new grid types.
@@ -58,7 +54,7 @@ markov_op_reallocates_grid(op::MarkovOpWithinBox) = any(markov_op_reallocates_gr
 dsl_format(op::MarkovOpWithinBox) = string(
     "@within_box ",
     op.inherit_biases ? "inherit_biases " : "",
-    dsl_format_draw_box(op.space, op.box, op.box_is_1D_scalar),
+    dsl_format(op.box),
     " begin\n    ",
     iter_join(Iterators.map(dsl_format, op.ops), "\n    ")...,
     "\nend"
@@ -76,8 +72,8 @@ function parse_markovjunior_op(::Val{Symbol("@within_box")}, inputs::MacroParser
     end
     (box_expr, ops_expr) = args
 
-    (space, box_is_1D_scalar, box) = with_parser_stacktrace(inputs, "Box") do
-        parse_markovjunior_draw_box(inputs, loc, box_expr)
+    box = with_parser_stacktrace(inputs, "Box") do
+        parse_markovjunior_calc_box(inputs, loc, box_expr, CALC_BOX_ENV)
     end
 
     # Parse the inner Ops.
@@ -93,5 +89,5 @@ function parse_markovjunior_op(::Val{Symbol("@within_box")}, inputs::MacroParser
     end
     check_markovjunior_scoped_ops(inputs, loc, "@within_box", ops)
 
-    return MarkovOpWithinBox(inherit_biases, space, box_is_1D_scalar, box, ops)
+    return MarkovOpWithinBox(inherit_biases, box, ops)
 end

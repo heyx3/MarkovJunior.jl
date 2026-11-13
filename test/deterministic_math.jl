@@ -25,6 +25,23 @@ check_close(DM.det_log10, log10, spread(10_000, 1e-6, 1e6), 2)
 check_close(DM.det_pow, ^, [ (a, b) for a in spread(100, 0.001, 10.0) for b in spread(100, -8.0, 8.0) ], 40)
 check_close(DM.det_pow, ^, [ (a, Float64(n)) for a in spread(100, -3.0, 3.0) for n in -20:20 ], 40)
 check_close(DM.det_pow, ^, [ (Float32(a), Float32(b)) for a in spread(100, 0.001, 1.0) for b in spread(100, 0.3, 1.0) ], 1)
+check_close(DM.det_sin, sin, spread(10_000, -10, 10), 3)
+check_close(DM.det_cos, cos, spread(10_000, -10, 10), 3)
+check_close(DM.det_tan, tan, spread(10_000, -10, 10), 4)
+check_close(DM.det_sin, sin, spread(10_000, -1e6, 1e6), 3)
+check_close(DM.det_cos, cos, spread(10_000, -1e6, 1e6), 3)
+check_close(DM.det_sind, sind, spread(10_000, -720, 720), 3)
+check_close(DM.det_cosd, cosd, spread(10_000, -720, 720), 3)
+check_close(DM.det_tand, tand, spread(10_000, -720, 720), 4)
+check_close(DM.det_sind, sind, spread(10_000, -1e12, 1e12), 3) # Degrees reduce exactly, so huge angles are fine
+check_close(DM.det_sin_turns, t -> sinpi(2t), spread(10_000, -1e6, 1e6), 3)
+check_close(DM.det_cos_turns, t -> cospi(2t), spread(10_000, -1e6, 1e6), 3)
+check_close(DM.det_sin, sin, Float32.(spread(10_000, -100, 100)), 1)
+# Degrees and turns are exact at every quarter turn.
+@bp_check(all(n -> DM.det_sind(90.0 * n) == sind(90.0 * n), -8:8))
+@bp_check(all(n -> DM.det_cosd(90.0 * n) == cosd(90.0 * n), -8:8))
+@bp_check(all(n -> DM.det_sin_turns(0.25 * n) == sinpi(0.5 * n), -8:8))
+@bp_check(all(n -> DM.det_cos_turns(0.25 * n) == cospi(0.5 * n), -8:8))
 
 # Special cases behave like Base.
 outcome(f, args...) = try f(args...) catch e; typeof(e) end
@@ -33,8 +50,10 @@ for (a, b) in ((0.0, 2.0), (0.0, -1.0), (-0.0, 3.0), (Inf, 2.0), (Inf, -2.0), (0
     @bp_check(isequal(outcome(DM.det_pow, a, b), outcome(^, a, b)),
               "pow(", a, ", ", b, "): ", outcome(DM.det_pow, a, b), " vs Base ", outcome(^, a, b))
 end
-for (det_f, base_f) in ((DM.det_exp, exp), (DM.det_exp2, exp2), (DM.det_log, log), (DM.det_log2, log2), (DM.det_log10, log10)),
-    x in (0.0, -0.0, 1.0, Inf, -Inf, NaN, -1.0, 1e-320, 800.0, -800.0)
+for (det_f, base_f) in ((DM.det_exp, exp), (DM.det_exp2, exp2), (DM.det_log, log), (DM.det_log2, log2), (DM.det_log10, log10),
+                         (DM.det_sin, sin), (DM.det_cos, cos), (DM.det_tan, tan),
+                         (DM.det_sind, sind), (DM.det_cosd, cosd), (DM.det_tand, tand)),
+    x in (0.0, -0.0, 1.0, Inf, -Inf, NaN, -1.0, 1e-320, 800.0, -800.0, 0.5, -1.5)
     (d, b) = (outcome(det_f, x), outcome(base_f, x))
     @bp_check(isequal(d, b) || ((d isa Float64) && (b isa Float64) && (ulps(d, b) < 4)),
               det_f, "(", x, "): ", d, " vs Base ", b)
@@ -54,7 +73,9 @@ if Sys.ARCH == :x86_64
             t = i / 20_000
             for v in (det_exp(-700 + 1400t), det_exp2(-1070 + 2090t), det_log(t * 1e6), det_log2(t * 1e-300),
                       det_log10(t * 1e300), det_pow(t * 3.0, -20 + 40t), det_pow(-2.5 * t, Float64(i % 41 - 20)),
-                      Float64(det_pow(Float32(t), 0.52f0)))
+                      Float64(det_pow(Float32(t), 0.52f0)), det_sin(-1e6 + 2e6t), det_cos(-10 + 20t),
+                      det_tan(-10 + 20t), det_sind(-1e9 + 2e9t), det_cosd(-720 + 1440t), det_tand(-720 + 1440t),
+                      det_sin_turns(-1e3 + 2e3t), det_cos_turns(-10 + 20t))
                 global h = hash(reinterpret(UInt64, v), h)
             end
         end

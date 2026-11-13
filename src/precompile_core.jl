@@ -31,8 +31,8 @@
                     @rewrite (2) [w b] => [w g]
                 end field(w)
             end
-            @within_regions 2 begin
-                wg => begin
+            @within_regions border(0) 2 begin
+                wg => @sequence begin
                     @rewrite (2) w => g
                 end
                 R => @fill 'G' pixel(min=1, size=1)

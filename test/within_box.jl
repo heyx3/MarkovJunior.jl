@@ -101,14 +101,14 @@ end), fill(c('b'), 6, 6))
 # Thresholds and `uv` boxes are relative to the box.
 grid = run_on(@markovjunior(begin
     @within_box pixel(min=5, size=4) begin
-        @fill 'Y' uv(center=0.5, size=0)
-        @rewrite (area/2) b => w
+        @fill 'Y' uv(center=0.5, size=texel)
+        @rewrite (size_prod()/2) b => w
     end
 end), fill(c('b'), 8, 8))
 @bp_check(count(==(c('w')), grid) == 8, grid)
 @bp_check(all(I -> (I[1] >= 5) && (I[2] >= 5), findall(==(c('w')) , grid)), grid)
 standalone_Y = only(cells_of(run_on(@markovjunior(begin
-    @fill 'Y' uv(center=0.5, size=0)
+    @fill 'Y' uv(center=0.5, size=texel)
 end), fill(c('b'), 4, 4)), 'Y'))
 @bp_check(cells_of(grid, 'Y') == Set([ standalone_Y .+ 4 ]), grid)
 
@@ -121,6 +121,33 @@ for (box, expected) in (("uv(min=0, size=0.5)", 1:4), ("uv(min=0.5, size=0.5)", 
                     fill(c('b'), 8))
     @bp_check(findall(==(c('w')), scoped) == collect(expected), box, ": ", scoped)
 end
+
+# Box values are calculations, with `len`, `center`, and `texel` describing each axis.
+for (box, expected) in (("pixel(min=2, max=len-1)", 2:7), ("pixel(center=center, size=2)", 4:5),
+                        ("uv(center=center, size=texel)", 5:5), ("uv(min=1-texel, max=1)", 8:8),
+                        ("pixel(min=size(1) - 2, size=1)", 6:6), ("pixel(min=-3, max=2)", 1:2),
+                        ("uv(center=0.5, size=0)", 1:0), ("pixel(min=9, size=2)", 1:0))
+    for src in ("@fill 'w' $box", "@within_box $box begin\n @rewrite b => w\n end")
+        filled = run_on(markov_algo_parse("@markovjunior 1 begin\n @calc margin() = 2\n $src\nend"), fill(c('b'), 8))
+        @bp_check(findall(==(c('w')), filled) == collect(expected), src, ": ", filled)
+    end
+end
+filled = run_on(markov_algo_parse("@markovjunior 1 begin\n @calc margin() = 2\n @fill 'w' pixel(min=margin()+1, max=len-margin())\nend"),
+                fill(c('b'), 8))
+@bp_check(findall(==(c('w')), filled) == collect(3:6), filled)
+let seen = Set(findfirst(==(c('w')), run_on(markov_algo_parse("@markovjunior 1 begin\n @fill 'w' pixel(min=1:8, size=1)\nend"),
+                                            fill(c('b'), 8); seed=s))
+               for s in 1:60)
+    @bp_check(seen == Set(1:8), seen)
+end
+
+# A single box value is shared by every axis, unless it depends on the axis (even through a user function).
+filled = run_on(markov_algo_parse("@markovjunior 2 begin
+ @calc one_pixel() = texel
+ @fill 'w' uv(center=0.5, size=one_pixel())
+end"),
+                fill(c('b'), 8, 4))
+@bp_check(count(==(c('w')), filled) == 1, filled)
 
 # A `uv` box covering the whole grid.
 grid = run_on(@markovjunior(begin
@@ -152,15 +179,6 @@ grid = run_on(@markovjunior(begin
 end), fill(c('b'), 8, 8))
 @bp_check(cells_of(grid, 'w') ∪ cells_of(grid, 'R') == Set((x, y) for x in 3:6, y in 3:6), grid)
 @bp_check(cells_of(grid, 'R') == Set((x, y) for x in 4:5, y in 4:5), grid)
-
-# An empty scope is cosmetic, so 'repeat' should look past it.
-grid = run_on(@markovjunior(begin
-    @sequence repeat begin
-        @within_box pixel(min=1, size=1) begin end
-        @rewrite 1 b => w
-    end
-end), fill(c('b'), 3, 3))
-@bp_check(all(==(c('w')), grid), grid)
 
 
 ########

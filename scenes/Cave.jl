@@ -1,6 +1,6 @@
 @markovjunior 'I' begin
 	# Place a seed.
-	@fill 'b' uv(center=0.5, size=0)
+	@fill 'b' uv(center=0.5, size=texel)
 
 	# Randomly carve outward, and
 	#    randomly carve outward with partial (Slate) rock.

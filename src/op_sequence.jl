@@ -21,7 +21,7 @@ function markov_algo_run(sequence::MarkovOpSequence{NSelfBiases},
     elseif sequence.threshold isa SequenceRepeatModeTag
         sequence.threshold
     elseif sequence.threshold isa Threshold
-        get_threshold(sequence.threshold, grid, algo_state.rng, algo.calc_macros)
+        get_threshold(sequence.threshold, grid, algo_state.grid_area, algo_state.rng, algo.calc_macros)
     else
         error("Unhandled: ", typeof(sequence.threshold))
     end

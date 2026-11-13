@@ -43,7 +43,7 @@ end)
 "Makes an algorithm state for the given grid, for evaluating biases directly"
 make_state(grid) = MJ.AlgoState(grid, MJ.PRNG(0x1234), MJ.MarkovAllocatorHeap(),
                                 Dict{Symbol, Any}(), MJ.AlgoCommsChannel(0), MarkovTickSettings(),
-                                Any[ ], 0, 0, 0, 0)
+                                Any[ ], 0, 0, 0, 0, length(grid))
 "Gets the bias from a `@rewrite` written with exactly one"
 parse_bias(src::String) = only(markov_algo_parse("@markovjunior 2 begin\n @rewrite b => w $src\nend").sequence[1].biases)
 algo = @markovjunior 2 begin

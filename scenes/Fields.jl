@@ -19,11 +19,11 @@
 	# The fields can be constrained to specific path cells.
 	#   1) generate a maze of w' paths and 'b' walls
     @fill 'b'
-	@fill 'w' uv(center=0.5, size=0)
+	@fill 'w' uv(center=0.5, size=texel)
 	@rewrite wbb=>wgw
 	@fill 'w' +g
 	#   2) place seeds and fill the spaces outward from those seeds.
-	@rewrite (length/12) w=>P
+	@rewrite (size_average()/12) w=>P
     @rewrite (area/6) w=>O field(P -> w)
     @rewrite (area/6) w=>L field(O -> w)
 	@rewrite          w=>N field(L -> w)

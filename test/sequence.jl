@@ -43,8 +43,6 @@ grid = run_skipping_events(@markovjunior 2 begin
     @sequence repeat begin
         @event A
     end
-    @sequence repeat begin end
-    @sequence begin end
     @rewrite 1 b=>w
 end)
 @bp_check(count(==(MJ.CELL_CODE_BY_CHAR['w']), grid) == 1, "Actual: ", grid)

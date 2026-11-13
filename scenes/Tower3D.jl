@@ -10,19 +10,20 @@
 	@pragma GuiMaterial E dielectric  1.0 (1, 0.9, 0.8)
     #   Y: lamps
 	@pragma GuiMaterial Y light_source   (10, 10, 6)
-    #   g: furniture/ceiling/stairs
+    #   g: furniture/ceiling/stairs
 	@pragma GuiMaterial g dielectric  1.0  0.5
 	#   I: windows/guidelines
 	@pragma GuiMaterial I glass  0.4  1.0 (0, 0.2, 0.5)
 
 	# Define the lot
-	@fill 'L' uv(min=0, max=(1, 1, 0))
-	@fill 'g' uv(min=(0.27, 0.27, 0), max=(0.73, 0.73, 0))
+	@fill 'L' uv(min=0, max=(1, 1, texel))
+	@fill 'g' uv(min=(0.27, 0.27, 0), max=(0.73, 0.73, texel))
+
 	# Define the bounding box of the building.
-	@fill 'I' uv(min=(0.27, 0.27, 0), max=(0.27, 0.73, 1))
-	@fill 'I' uv(min=(0.27, 0.27, 0), max=(0.73, 0.27, 1))
-	@fill 'I' uv(min=(0.27, 0.73, 0), max=(0.73, 0.73, 1))
-	@fill 'I' uv(min=(0.73, 0.27, 0), max=(0.73, 0.73, 1))
+	@fill 'I' uv(min=(0.27, 0.27, 0), max=(0.27 + texel, 0.73, 1))
+	@fill 'I' uv(min=(0.27, 0.27, 0), max=(0.73, 0.27 + texel, 1))
+	@fill 'I' uv(min=(0.27, 0.73 - texel, 0), max=(0.73, 0.73, 1))
+	@fill 'I' uv(min=(0.73 - texel, 0.27, 0), max=(0.73, 0.73, 1))
 
 	# Plant bushes
 	@rewrite [
@@ -87,7 +88,7 @@
 	@rewrite R=>N
 
 	# Build upwards
-	@fill 'w' uv(center=(0.5, 0.5, 0), size=0)
+	@fill 'w' uv(center=(0.5, 0.5, 0), size=texel)
 	@sequence repeat begin
 		# Start a new floor.
 		# Each floor has 4 z-levels, with different logic on each
@@ -230,7 +231,7 @@
 		@rewrite RN => RR \[ x, y ]
 
 		# Find a place for staircases.
-		@rewrite (length/64) begin
+		@rewrite (size_average()/64) begin
 			# Try to do a cleaner staircase; if not possible then tear up the level outline a bit.
 			PRIORITIZE(earliest)
 			[

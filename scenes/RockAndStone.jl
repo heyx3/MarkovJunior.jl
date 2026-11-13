@@ -1,8 +1,8 @@
 @markovjunior 2 'I' begin
 	# Place cave seeds.
-	@fill 'R' uv(min=0.1, size=0)
-	@fill 'R' uv(min=0.5, size=0)
-	@fill 'R' uv(min=0.9, size=0)
+	@fill 'R' uv(min=0.1, size=texel)
+	@fill 'R' uv(min=0.5, size=texel)
+	@fill 'R' uv(min=0.9, size=texel)
 
 	# Grow the cave seeds and leave some veins behind.
     @rewrite (area*4.5) begin

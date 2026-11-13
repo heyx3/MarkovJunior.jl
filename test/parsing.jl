@@ -236,6 +236,15 @@ end
 DEFAULT_PRIORITY = MJ.MarkovRewritePriority_Everything()
 "An expected threshold, which compares equal to a parsed one with the same source"
 TH(expr) = MJ.Threshold(MJ.CalcInterpreter.calc_compile(expr, MJ.THRESHOLD_CALC_ENV))
+"An expected `@fill` box, written as two `name => value` pairs (values may be tuples, for lists)"
+function BOX(space::Symbol, a::Pair, b::Pair)
+    compile(v) = MJ.CalcInterpreter.calc_compile(v, MJ.CALC_BOX_ENV)
+    values(v) = (v isa Tuple) ? (MJ.CalcProgram[ compile(x) for x in v ], true) : (MJ.CalcProgram[ compile(v) ], false)
+    # The names are always in the canonical order.
+    (a, b) = (findfirst(==(a[1]), MJ.CALC_BOX_ARG_NAMES) < findfirst(==(b[1]), MJ.CALC_BOX_ARG_NAMES)) ? (a, b) : (b, a)
+    (va, vb) = (values(a[2]), values(b[2]))
+    return MJ.CalcBox(MJ.DrawBoxSpace.from(space), (a[1], b[1]), (va[1], vb[1]), (va[2], vb[2]), (false, false))
+end
 
 BIG_TEST = @markovjunior 4 'R' begin
     @pragma Hi 1 3 22
@@ -245,23 +254,23 @@ BIG_TEST = @markovjunior 4 'R' begin
     @rewrite R => G
     @rewrite RGB => bgw
     @rewrite 3 R => G
-    @rewrite (area/2) R => _
-    @rewrite (area*2) _ => R
+    @rewrite (size_prod()/2) R => _
+    @rewrite (size_prod()*2) _ => R
     @rewrite RGB => [2]_[1]
 
     # Next op is 7
-    @rewrite (1.5*area)    R[Gw]B  => b[MR]{wgb}
-    @rewrite (length/2.0)  ___     => [1][3][2]  *2
-    @rewrite (length*3.0)  [Rw][G] => {wgb}[M]   /1.5
+    @rewrite (1.5*size_prod())    R[Gw]B  => b[MR]{wgb}
+    @rewrite (size_average()/2.0)  ___     => [1][3][2]  *2
+    @rewrite (size_average()*3.0)  [Rw][G] => {wgb}[M]   /1.5
 
     # Next op is 10
-    @rewrite (4.0*length)  R=>G  %0.1       \[ +w ] #NOTE: symmetry should be ignored by parser because the rule is a single pixel
+    @rewrite (4.0*size_average())  R=>G  %0.1       \[ +w ] #NOTE: symmetry should be ignored by parser because the rule is a single pixel
     @rewrite (2:10)        R=>G  %0.2  *3.5
     @rewrite               R=>G  %0.3  /4.1
 
     # Next op is 13
-    @rewrite ((area*4.2):(0.5*length)) RM=>GT  \[ x ]
-    @rewrite (8:(area/4.2))            RM=>GT  \[ +(1) ]
+    @rewrite ((size_prod()*4.2):(0.5*size_average())) RM=>GT  \[ x ]
+    @rewrite (8:(size_prod()/4.2))            RM=>GT  \[ +(1) ]
     @rewrite                           RgR=>GMG                   temperature(0.2)
     @rewrite                           RgR=>G[1]G  \[ x, -(2), 4... ] temperature(0.1)
 
@@ -283,7 +292,7 @@ BIG_TEST = @markovjunior 4 'R' begin
 
     # Next op is 23
     @sequence @rewrite(10, R=>b)
-    @sequence (area/2) @rewrite(10, R=>R) begin
+    @sequence (size_prod()/2) @rewrite(10, R=>R) begin
         temperature(11.2)
     end
     @sequence begin
@@ -416,7 +425,7 @@ BIG_TEST_ANSWER = MJ.MarkovAlgorithm(
                     MJ.GridDir[ MJ.GridDir(1, 1) ], nothing
                 )
             ),
-            TH(:(area/2)),
+            TH(:(size_prod()/2)),
             ()
         ),
         MJ.MarkovOpRewrite(
@@ -430,7 +439,7 @@ BIG_TEST_ANSWER = MJ.MarkovAlgorithm(
                     MJ.GridDir[ MJ.GridDir(1, 1) ], nothing
                 )
             ),
-            TH(:(area*2)),
+            TH(:(size_prod()*2)),
             ()
         ),
         MJ.MarkovOpRewrite(
@@ -473,7 +482,7 @@ BIG_TEST_ANSWER = MJ.MarkovAlgorithm(
                     MJ.GridDir[ ], 1
                 )
             ),
-            TH(:(1.5*area)),
+            TH(:(1.5*size_prod())),
             ()
         ),
         MJ.MarkovOpRewrite(
@@ -489,7 +498,7 @@ BIG_TEST_ANSWER = MJ.MarkovAlgorithm(
                     MJ.GridDir[ ], 1
                 )
             ),
-            TH(:(length/2.0)),
+            TH(:(size_average()/2.0)),
             ()
         ),
         MJ.MarkovOpRewrite(
@@ -512,7 +521,7 @@ BIG_TEST_ANSWER = MJ.MarkovAlgorithm(
                     MJ.GridDir[ ], 1
                 )
             ),
-            TH(:(length*3.0)),
+            TH(:(size_average()*3.0)),
             ()
         ),
 
@@ -528,7 +537,7 @@ BIG_TEST_ANSWER = MJ.MarkovAlgorithm(
                     MJ.GridDir[ MJ.GridDir(1, 1) ], nothing
                 )
             ),
-            TH(:(4.0*length)),
+            TH(:(4.0*size_average())),
             ()
         ),
         MJ.MarkovOpRewrite(
@@ -573,7 +582,7 @@ BIG_TEST_ANSWER = MJ.MarkovAlgorithm(
                     [ MJ.GridDir(1, -1), MJ.GridDir(1, 1) ], nothing
                 )
             ),
-            TH(:((area*4.2):(0.5*length))),
+            TH(:((size_prod()*4.2):(0.5*size_average()))),
             ()
         ),
         MJ.MarkovOpRewrite(
@@ -588,7 +597,7 @@ BIG_TEST_ANSWER = MJ.MarkovAlgorithm(
                     [ MJ.GridDir(1, 1) ], nothing
                 )
             ),
-            TH(:(8:(area/4.2))),
+            TH(:(8:(size_prod()/4.2))),
             ()
         ),
         MJ.MarkovOpRewrite(
@@ -668,39 +677,29 @@ BIG_TEST_ANSWER = MJ.MarkovAlgorithm(
         # Next op is 18
         MJ.MarkovOpDrawBox(
             CELL_CODE['R'],
-            MJ.DrawBoxSpace.uv,
-            true,
-            Box1Df(min=Vec(0), size=Vec(0.2)),
+            BOX(:uv, :min => 0, :size => 0.2),
             nothing, nothing
         ),
         MJ.MarkovOpDrawBox(
             CELL_CODE['b'],
-            MJ.DrawBoxSpace.uv,
-            true,
-            Box1Df(size=Vec(1), center=Vec(0)),
+            BOX(:uv, :size => 1, :center => 0),
             nothing, 0.2f0
         ),
         MJ.MarkovOpDrawBox(
             CELL_CODE['w'],
-            MJ.DrawBoxSpace.uv,
-            false,
-            Box2Df(size=Vec(0.1f0, 0.5f0), max=Vec(1.0f0, 1.0f0)),
+            BOX(:uv, :size => (0.1, 0.5), :max => 1),
             (Val(:whitelist), MJ.CellTypeSet("R")),
             nothing
         ),
         MJ.MarkovOpDrawBox(
             CELL_CODE['M'],
-            MJ.DrawBoxSpace.pixel,
-            true,
-            Box1Di(min=Vec(1), max=Vec(5)),
+            BOX(:pixel, :min => 1, :max => 5),
             (Val(:blacklist), MJ.CellTypeSet("wgb")),
             (0.1f0, 0.9f0)
         ),
         MJ.MarkovOpDrawBox(
             CELL_CODE['w'],
-            MJ.DrawBoxSpace.uv,
-            true,
-            Box1Df(min=Vec(0), max=Vec(1)),
+            BOX(:uv, :min => 0, :max => 1),
             (Val(:whitelist), MJ.CellTypeSet("gbw")),
             nothing
         ),
@@ -743,7 +742,7 @@ BIG_TEST_ANSWER = MJ.MarkovAlgorithm(
                     ()
                 )
             ],
-            TH(:(area/2)),
+            TH(:(size_prod()/2)),
             tuple(
                 MJ.MarkovBiasTemperature(convert(Float32, 11.2))
             )

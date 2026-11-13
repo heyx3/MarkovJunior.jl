@@ -1,6 +1,6 @@
 @markovjunior 'b' 2 begin
     # Mark the min corner.
-    @fill 'B' uv(min=0, size=0)
+    @fill 'B' uv(min=0, size=texel)
     # Pick an "across-brick" axis (ideally vertical but let's make it axis-agnostic for fun).
     @rewrite 1 Bbb => BYY
 

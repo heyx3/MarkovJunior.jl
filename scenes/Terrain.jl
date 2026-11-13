@@ -2,7 +2,7 @@
 	#TODO: Make a variant that can be seeded by the outer edges, to create infinite terrain!
 
 	# Place seeds
-    @rewrite (length/10) b=>w
+    @rewrite (size_average()/10) b=>w
 
 	# Place tiles growing outward from that seed
 	@rewrite wb => wg
@@ -15,7 +15,7 @@
 		@rewrite Mb => Mg
 	end
 	# Break some of the borders to merge adjacent tiles
-	@rewrite (length/15 : length/10) gMg=>ggg
+	@rewrite (size_average()/15 : size_average()/10) gMg=>ggg
 
 	# Flood-fill from the seeds to create plains
 	@rewrite w => G

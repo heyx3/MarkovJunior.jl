@@ -16,7 +16,7 @@ Supported syntax:
   `floor`, `ceil`, `round`, and `trunc` also accept `Int` as their first argument, like in Julia.
 * Named 1D arrays given each time the calculation is evaluated.
   An array called `a` offers the functions `a(i)`, `a_min()`, `a_max()`, `a_min_axis()`, `a_max_axis()`,
-    `a_sum()`, `a_prod()`, `a_average()`, `a_median()`, and `a_ndims()`.
+    `a_sum()`, `a_prod()`, `a_average()`, `a_median()`, and `a_len()`.
 * Comparisons, including chains like `0 < x <= 1`
 * `!`, `&&`, `||`, `a ? b : c`, and `if`/`elseif`/`else` (which must have an `else`)
 * Random intervals `a:b`, which pick a random value from `a` to `b` (inclusive) every time they're evaluated.
@@ -43,7 +43,7 @@ export CalcValue, CalcError,
        CalcFunction, CalcEnvironment, CalcProgram,
        CalcMacro, CalcMacros, calc_macro_parse, calc_macro_expr,
        calc_compile, calc_evaluate, calc_throw,
-       calc_is_constant, calc_constant_value
+       calc_is_constant, calc_constant_value, calc_mentions
 
 
 #########################
@@ -167,10 +167,9 @@ const BUILTIN_FUNCTIONS = Dict{Symbol, CalcFunction}(
     :iseven => CalcFunction(iseven, 1),
     :isodd => CalcFunction(isodd, 1),
 
-    # Powers and logarithms.
+    # Powers, logarithms, and trigonometry.
     # These come from `DeterministicMath`, as Base's versions can differ between machines in the last bit.
     # `sqrt` is exactly rounded by IEEE 754, so Base's is already deterministic.
-    # (There's no trigonometry; it hasn't been needed, and doing it deterministically is a lot of work.)
     :sqrt => CalcFunction(sqrt, 1),
     :√ => CalcFunction(sqrt, 1),
     :exp => CalcFunction(det_exp, 1),
@@ -178,6 +177,12 @@ const BUILTIN_FUNCTIONS = Dict{Symbol, CalcFunction}(
     :log => CalcFunction(det_log_any_base, 1, 2),
     :log2 => CalcFunction(det_log2, 1),
     :log10 => CalcFunction(det_log10, 1),
+    # Angles are in degrees, or in full turns for the `T` versions (which have a period of 1, like a `lerp` `t`).
+    :sin => CalcFunction(det_sind, 1),
+    :cos => CalcFunction(det_cosd, 1),
+    :tan => CalcFunction(det_tand, 1),
+    :sinT => CalcFunction(det_sin_turns, 1),
+    :cosT => CalcFunction(det_cos_turns, 1),
 
     # Bitwise, on Ints (or on Bools, as logic which doesn't short-circuit):
     :& => CalcFunction(&, 2),
@@ -233,7 +238,7 @@ const ARRAY_QUERIES = Dict{String, Any}(
     "_prod" => sequential_prod,
     "_average" => sequential_mean,
     "_median" => median,
-    "_ndims" => length
+    "_len" => length
 )
 
 
@@ -486,6 +491,38 @@ calc_constant_value(p::CalcProgram)::CalcValue = if calc_is_constant(p)
     p.root.value
 else
     error("Calculation `", p.expr, "` isn't constant")
+end
+
+"
+Finds whether the calculation mentions any of the given input (or array) names,
+  either directly or in the body of any nested user function calls.
+
+Works by examining the source, so it intentionally includes dead code
+  which is normally optimized away.
+"
+function calc_mentions(p::CalcProgram, names, macros::CalcMacros = NO_CALC_MACROS)::Bool
+    checked_macros = Set{Symbol}()
+    mentions(x, hidden::Vector{Symbol}) = false
+    mentions(name::Symbol, hidden::Vector{Symbol}) = (name in names) && !(name in hidden)
+    function mentions(e::Expr, hidden::Vector{Symbol})
+        if e.head == :call
+            any(a -> mentions(a, hidden), @view e.args[2:end]) && return true
+            # A user function's body only sees its own parameters, not its caller's.
+            f = e.args[1]
+            if (f isa Symbol) && haskey(macros, f) && !(f in checked_macros)
+                push!(checked_macros, f)
+                m = macros[f]
+                return mentions(m.body, m.params)
+            end
+            return false
+        elseif e.head == :comparison
+            # Operators are between the values.
+            return any(i -> mentions(e.args[i], hidden), 1:2:length(e.args))
+        else
+            return any(a -> mentions(a, hidden), e.args)
+        end
+    end
+    return mentions(p.expr, Symbol[ ])
 end
 
 
@@ -910,7 +947,7 @@ sample_curved(a::Bool, b::Bool, t::Float64)::Bool = Bool(sample_curved(Int(a), I
         :( x > 2 ? (1:6) + (0.5:1.5) + curve(9:1, x) : floor(Int, sqrt(x)) ),
         :( curve(false:true, 2) ? curve(0.0:float(x), 0.5) : x ),
         :( if false:true
-               lerp(0.0, a_prod(), inv_lerp(1, a_ndims(), x))
+               lerp(0.0, a_prod(), inv_lerp(1, a_len(), x))
            else
                max(a_min(), x, a_max_axis(), exp(-x) ^ 1.5, log(2, x + 1), log10(x) + exp2(-x))
            end )

@@ -2,9 +2,9 @@
     # Draw guidelines that the tower edges must stay within,
     #   and initial drawing "heads" at the inside-bottom of either side of the tower.
     @fill 'R' uv(min=(0.2, 0.23), max=(0.4, 1))
-    @fill 'G' uv(min=(0.4, 1), size=0)
+    @fill 'G' uv(min=(0.4, 1 - texel), size=texel)
     @fill 'R' uv(min=(0.6, 0.23), max=(0.8, 1))
-    @fill 'B' uv(min=(0.6, 1), size=0)
+    @fill 'B' uv(min=(0.6, 1 - texel), size=texel)
 
     # Each drawing head has three colors --
     #   'drawing upward' (GB), 'drawing outward' (LI), and 'drawing inward' (YS).
@@ -34,7 +34,7 @@
 	end
 
     # Fill the inside of the tower.
-    @fill 'g' uv(center=0.5, size=0)
+    @fill 'g' uv(center=0.5, size=texel)
     @rewrite gT => gg
 	# Trim hanging walls.
 	@rewrite TbT => TTT
@@ -99,7 +99,7 @@
 	@rewrite [RBO] => G
 	#  4) Place windows in each area within the green lines.
 	#     Exclude the bottom part of the tower.
-	@fill 'M' uv(center=(0.5, 1), size=0)
+	@fill 'M' uv(center=(0.5, 1 - (texel / 2)), size=texel)
 	@rewrite Mg => MM
 	#  5) Clean up colors.
 	@fill 'Y' +g

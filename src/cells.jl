@@ -228,6 +228,7 @@ end
 # Optimize hashing by compressing the GridDir into its index.
 Base.hash(d::GridDir, u::UInt) = Base.hash(grid_dir_index(d), u)
 
+
 "A contiguous and oriented line of cells; see `CellRegion{N}` for the multidimensional version"
 struct CellLine{N}
     start_cell::CellIdx{N}
@@ -263,7 +264,7 @@ Base.print(io::IO, l::CellList) = print(io, "L{", length(l.cells), " cells}")
 "
 An arbitrary set of cells, given as a grid of booleans placed somewhere within the full grid:
   `mask[i]` represents grid cell `i + offset`.
-It should contain at least one `true` cell.
+It is assumed to contain at least one `true` cell.
 "
 struct CellMask{N, TMask<:AbstractArray{Bool, N}}
     mask::TMask
@@ -271,15 +272,9 @@ struct CellMask{N, TMask<:AbstractArray{Bool, N}}
 end
 Base.print(io::IO, m::CellMask) = print(io, "M{", count(m.mask), " cells, offset ", m.offset, "}")
 
-"
-Any group of cells that a Bias may be asked about (see `markov_bias_calculate()`).
-
-* `CellLine` is a contiguous strip, for 1D rewrite rules
-* `CellRegion` is a contiguous box, for multidimensional rewrite rules
-* `CellList` is an arbitrary list of cells
-* `CellMask` is an arbitrary set of cells, as a grid of booleans with an offset
-"
+"Any group of cells that a Bias may be asked about (see `markov_bias_calculate()`)"
 const CellArea{N} = Union{CellLine{N}, CellRegion{N}, CellList{N}, CellMask{N}}
+
 
 "
 Walks through every cell in the given area.

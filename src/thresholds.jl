@@ -2,12 +2,16 @@
 
 "
 What a threshold calculation can reference:
-  * `area`: the number of cells in the grid (or the current scope), as an `Int`.
-  * `length`: the grid's average side length, as a `Float64`.
+  * `size`: the size of the current grid, as an array,
+      so `size_prod()` is its number of cells and `size_average()` its average side length.
+  * `area`: how many cells are being worked on. Usually that's `size_prod()`,
+      but sometimes (e.g. `@within_regions`) we are working on a non-rectangular subset of the grid.
+  * `ndims`: the number of dimensions, i.e. `size_len()`.
   * The algorithm's user functions (from `@calc`), looked up whenever they're called.
 "
 const THRESHOLD_CALC_ENV = CalcEnvironment(
-    inputs = (:area, :length),
+    inputs = (:area, :ndims),
+    arrays = (:size, ),
     macros = true
 )
 
@@ -31,10 +35,11 @@ dsl_format(th::Threshold) = string("threshold(", th.calc, ")")
 threshold_log_error(msg...) = println(stderr, "Threshold error: ", msg...)
 
 "
-Evaluates the threshold for the given grid.
+Evaluates the threshold for the given grid, where `area` is how many of its cells are being worked on
+  (see `AlgoState.grid_area`).
 Errors are logged, and the threshold falls back to 1.
 "
-function get_threshold(th::Threshold, grid::CellGrid, rng::PRNG,
+function get_threshold(th::Threshold, grid::CellGrid, area::Int, rng::PRNG,
                        calc_macros::CalcMacros)::Int
     raw = calc_evaluate(
         th.calc, rng,
@@ -44,8 +49,9 @@ function get_threshold(th::Threshold, grid::CellGrid, rng::PRNG,
         end,
         calc_macros
         ;
-        area = prod(size(grid)),
-        length = sum(size(grid)) / ndims(grid)
+        size = size(grid),
+        area = area,
+        ndims = ndims(grid)
     )
     if (raw isa Bool) || !isfinite(raw)
         threshold_log_error("`", th.calc, "` should give a finite number; got `", raw, "`. Using 1")
@@ -74,6 +80,9 @@ function parse_markovjunior_threshold(inputs::MacroParserInputs, location, thres
     inner = unwrap_markovjunior_threshold(threshold_expr)
     calc_expr = isnothing(inner) ? threshold_expr : inner
     with_parser_stacktrace(inputs, "Threshold") do
-        Threshold(parse_markovjunior_calc(inputs, location, calc_expr, THRESHOLD_CALC_ENV, "Invalid threshold"))
+        Threshold(parse_markovjunior_calc(
+            inputs, location, calc_expr,
+            THRESHOLD_CALC_ENV, "Invalid syntax"
+        ))
     end
 end

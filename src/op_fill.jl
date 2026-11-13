@@ -1,79 +1,7 @@
-#NOTE: this file takes some things from op_rewrite.jl and should be included after it
+#NOTE: this file takes some things from op_rewrite.jl, and should be included after it
 
 #############
 #  Data
-
-@bp_enum(DrawBoxSpace,
-    uv,
-    pixel
-)
-
-"Gets the clamped grid area covered by the given draw-box settings"
-function get_draw_box_pixels(space::E_DrawBoxSpace,
-                             box::Box{N2, R},
-                             resolution::VecI{N},
-                             box_is_1D_scalar::Bool
-                            )::Box{N, Int32} where {N, N2, R<:Union{Float32, Int32}}
-    # The box size becomes infinity on any unmentioned axis.
-    if N2 != N
-        mi = min_inclusive(box)
-        sz = size(box)
-        return get_draw_box_pixels(
-            space,
-            Box(
-                min=Vec{N, R}() do i
-                    if i > N2
-                        box_is_1D_scalar ? mi[1] : 0
-                    else
-                        mi[i]
-                    end
-                end,
-                size=Vec{N, R}() do i
-                    if i > N2
-                        if box_is_1D_scalar
-                            sz[1]
-                        elseif space == DrawBoxSpace.uv
-                            1
-                        elseif space == DrawBoxSpace.pixel
-                            resolution[i] + 1
-                        else
-                            error("Unhandled: ", space)
-                        end
-                    else
-                        sz[i]
-                    end
-                end
-            ),
-            resolution,
-            false
-        )
-    else
-        if space == DrawBoxSpace.uv
-            # UV 0 is the min edge of pixel 1, so the pixel-space box is offset by 1.
-            return get_draw_box_pixels(DrawBoxSpace.pixel, Box(
-                min = (min_inclusive(box) * resolution) + one(Vec{N, R}),
-                size = size(box) * resolution
-            ), resolution, box_is_1D_scalar)
-        elseif space == DrawBoxSpace.pixel
-            mi = min_inclusive(box)
-            ma = max_inclusive(box)
-            V = Vec{N, Int32}
-            if R == Int32
-                b_min = convert(V, clamp(mi, one(V), resolution))
-                b_max = convert(V, max(b_min, clamp(ma, one(V), resolution)))
-                return Box(min=b_min, max=b_max)
-            elseif R == Float32
-                b_min = convert(V, clamp(floor(V, mi), one(V), resolution))
-                b_max = convert(V, max(b_min, clamp(floor(V, ma), one(V), resolution)))
-                return Box(min=b_min, max=b_max)
-            else
-                error("Unhandled: ", R)
-            end
-        else
-            error("Unhandled: ", space)
-        end
-    end
-end
 
 const DrawBoxRule = Union{Tuple{Val{:whitelist}, CellTypeSet},
                           Tuple{Val{:blacklist}, CellTypeSet},
@@ -87,30 +15,25 @@ check_draw_box_rule(rule::Tuple{Val{:blacklist}, CellTypeSet}, u::UInt8) = !(u i
 #  Op
 
 "Conditionally fills a color in a rectangular area of pixels"
-struct MarkovOpDrawBox{N, TRule<:DrawBoxRule} <: AbstractMarkovOp
+struct MarkovOpDrawBox{TRule<:DrawBoxRule} <: AbstractMarkovOp
     value::UInt8
-
-    space::E_DrawBoxSpace
-    box_is_1D_scalar::Bool # Only important if N=1
-    box::Union{Box{N, Float32}, Box{N, Int32}}
-
+    box::CalcBox
     rule::TRule
     mask::Union{Nothing, Float32, NTuple{2, Float32}}
 end
 
-function markov_algo_run(op::MarkovOpDrawBox{NBox, TRule},
+function markov_algo_run(op::MarkovOpDrawBox{TRule},
                          algo::MarkovAlgorithm, algo_state::AlgoState,
                          inherited_bias_tuple::Tuple{Vararg{AbstractMarkovBias}},
                          inherited_bias_state_tuple::Tuple,
                          grid::CellGrid{NGrid} = algo_state.grid
-                        )::Bool where {NBox, TRule, NGrid}
-    box = get_draw_box_pixels(
-        op.space, op.box,
-        convert(Vec{NGrid, Int32}, vsize(grid)),
-        op.box_is_1D_scalar
-    )
-    box_a = min_inclusive(box)
-    box_b = max_inclusive(box)
+                        )::Bool where {TRule, NGrid}
+    box = eval_calc_box(op.box, grid, algo_state.rng, algo.calc_macros)
+    if isnothing(box)
+        markov_opalgo_tick(algo_state, STANDARD_END_OF_OP_TICK_PRIORITY - 1)
+        return false
+    end
+    (box_a, box_b) = (min_inclusive(box), max_inclusive(box))
     grid_slice_idcs = ntuple(i -> box_a[i]:box_b[i], Val(NGrid))
 
     mask_grid = if isnothing(op.mask)
@@ -182,133 +105,12 @@ dsl_format_box_rule(r::Nothing) = ""
 dsl_format_box_rule(r::Tuple{Val{:whitelist}, CellTypeSet}) = "+$(dsl_format(r[2]))"
 dsl_format_box_rule(r::Tuple{Val{:blacklist}, CellTypeSet}) = "-$(dsl_format(r[2]))"
 
-"Formats a box (as used by `@fill` and `@within_box`), like `uv(min=0.25, size=0.5)`"
-dsl_format_draw_box(space::E_DrawBoxSpace, box::Box, box_is_1D_scalar::Bool) = string(
-    space, "(",
-    "min=", box_is_1D_scalar ? min_inclusive(box).x : min_inclusive(box).data,
-    ", size=", box_is_1D_scalar ? size(box).x : size(box).data,
-    ")"
-)
-
 dsl_format(b::MarkovOpDrawBox) = string(
     "@fill '", dsl_format(b.value), "'",
-    " ", dsl_format_draw_box(b.space, b.box, b.box_is_1D_scalar),
+    " ", dsl_format(b.box),
     " ", dsl_format_box_rule(b.rule),
     " ", dsl_format_rewrite_mask(b.mask)
 )
-
-"
-Parses a box (as used by `@fill` and `@within_box`) from its space and two arguments,
-  like `uv(min=0, size=0.5)` => `(:uv, :min, 0, :size, 0.5)`.
-Returns `(space::E_DrawBoxSpace, box_is_1D_scalar::Bool, box::Box)`,
-  and raises the algorithm's minimum dimensionality to fit the box.
-"
-function parse_markovjunior_draw_box(inputs::MacroParserInputs, loc,
-                                     exSpace, exArgNameA, exArgValA, exArgNameB, exArgValB)
-    # Do some quick error-checking of expression types.
-    !in(exArgNameA, (:min, :max, :size, :center)) && raise_parse_error(
-        loc, inputs,
-        "Box space arguments should be two of `min`, `max`, `size`, and `center`! Got `",
-          exArgNameA, "`"
-    )
-    !in(exArgNameB, (:min, :max, :size, :center)) && raise_parse_error(
-        loc, inputs,
-        "Box space arguments should be two of `min`, `max`, `size`, and `center`! Got `",
-          exArgNameB, "`"
-    )
-    (exArgNameA == exArgNameB) && raise_parse_error(
-        loc, inputs,
-        "Used the same space parameter twice: `", exArgNameA, "`"
-    )
-
-    # Parse the space type.
-    space = try
-        DrawBoxSpace.from(exSpace)
-    catch e
-        raise_parse_error(loc, inputs,
-                          "Invald space! Got `", exSpace, "`; expected one of `",
-                            string.(DrawBoxSpace.instances()), "`")
-    end
-
-    # Parse the space arguments.
-    parse_space_arg(arg, name)::Union{Int32, Float32, Tuple{Vararg{Int32}}, Tuple{Vararg{Float32}}} =
-        if arg isa Integer
-            convert(Int32, arg)
-        elseif arg isa Real
-            convert(Float32, arg)
-        elseif Base.isexpr(arg, :tuple) && all(a -> a isa Real, arg.args)
-            if all(a -> a isa Integer, arg.args)
-                Tuple(convert(Int32, a) for a in arg.args)
-            else
-                Tuple(convert(Float32, a) for a in arg.args)
-            end
-        else
-            raise_parse_error(loc, inputs,
-                           "Invalid value for argument `", name, "`! ",
-                             "Expected scalar or vector `(x, y, ...)`; got `",
-                             arg, "`")
-        end
-    argValA = parse_space_arg(exArgValA, exArgNameA)
-    argValB = parse_space_arg(exArgValB, exArgNameB)
-
-    # Reconcile the space arguments:
-    #   * If one is scalar and one is vector, promote the scalar
-    if (argValA isa Tuple) && !(argValB isa Tuple)
-        argValB = ntuple(i -> argValB, length(argValA))
-    elseif !(argValA isa Tuple) && (argValB isa Tuple)
-        argValA = ntuple(i -> argValA, length(argValB))
-    end
-    #   * If at least one is float, promote the other to float
-    if (eltype(argValA) == Float32) || (eltype(argValB) == Float32)
-        argValA = convert.(Ref(Float32), argValA)
-        argValB = convert.(Ref(Float32), argValB)
-    end
-    # If the rect is in UV space, make sure the values are float and not integer.
-    # Integer boxes with the same min and max are size 1,
-    #    so thin lines would get casted to cover the entire space!
-    if (space == DrawBoxSpace.uv) && all(f -> f isa Integer, tuple(argValA..., argValB...))
-        argValA = convert.(Ref(Float32), argValA)
-        argValB = convert.(Ref(Float32), argValB)
-    end
-
-    # Finally, put the space arguments into an actual value.
-    box_is_1D_scalar = argValA isa Real
-    space_box = if argValA isa Tuple
-        Box(namedtuple(
-            (exArgNameA, exArgNameB),
-            (Vec(argValA...), Vec(argValB...))
-        ))
-    elseif argValA isa Real
-        Box(namedtuple(
-            (exArgNameA, exArgNameB),
-            (Vec(argValA), Vec(argValB))
-        ))
-    else
-        error("Unhandled: ", typeof(argValA))
-    end
-
-    inputs.min_dims = max(inputs.min_dims,
-        if box_is_1D_scalar
-            1
-        else
-            length(min_inclusive(space_box))
-        end
-    )
-    return (space, box_is_1D_scalar, space_box)
-end
-"Parses a box expression like `uv(min=0, size=0.5)` (see the other overload for details)"
-function parse_markovjunior_draw_box(inputs::MacroParserInputs, loc, box_expr)
-    exSpace = nothing
-    exArgNameA = nothing
-    exArgValA = nothing
-    exArgNameB = nothing
-    exArgValB = nothing
-    if !@capture(box_expr, exSpace_Symbol(exArgNameA_=exArgValA_, exArgNameB_=exArgValB_))
-        raise_parse_error(loc, inputs, "Expected a box like `uv(min=0, size=0.5)` or `pixel(min=1, max=10)`; got `",
-                            box_expr, "`")
-    end
-    return parse_markovjunior_draw_box(inputs, loc, exSpace, exArgNameA, exArgValA, exArgNameB, exArgValB)
-end
 
 function parse_markovjunior_op(::Val{Symbol("@fill")},
                                inputs::MacroParserInputs,
@@ -390,10 +192,13 @@ function parse_markovjunior_op(::Val{Symbol("@fill")},
     end
 
     # Parse the box.
-    (space, box_is_1D_scalar, space_box) = parse_markovjunior_draw_box(
-        inputs, loc,
-        exSpace, exArgNameA, exArgValA, exArgNameB, exArgValB
-    )
+    box = with_parser_stacktrace(inputs, "Box") do
+        parse_markovjunior_calc_box(
+            inputs, loc,
+            Expr(:call, exSpace, Expr(:kw, exArgNameA, exArgValA), Expr(:kw, exArgNameB, exArgValB)),
+            CALC_BOX_ENV
+        )
+    end
 
     # Get the value of the fill color.
     if !haskey(CELL_CODE_BY_CHAR, exCol)
@@ -405,5 +210,5 @@ function parse_markovjunior_op(::Val{Symbol("@fill")},
     end
     col = CELL_CODE_BY_CHAR[exCol]
 
-    return MarkovOpDrawBox(col, space, box_is_1D_scalar, space_box, rule, mask)
+    return MarkovOpDrawBox(col, box, rule, mask)
 end

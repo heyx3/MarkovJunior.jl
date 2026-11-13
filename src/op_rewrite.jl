@@ -1097,7 +1097,7 @@ function markov_algo_run(rewrite::MarkovOpRewrite{TRules, TBias, TPriority},
     threshold = if isnothing(rewrite.threshold)
         nothing
     else
-        get_threshold(rewrite.threshold, grid, algo_state.rng, algo.calc_macros)
+        get_threshold(rewrite.threshold, grid, algo_state.grid_area, algo_state.rng, algo.calc_macros)
     end
 
     desirability_overall = RewriteGroupDesirability()
@@ -1130,6 +1130,9 @@ function markov_algo_run(rewrite::MarkovOpRewrite{TRules, TBias, TPriority},
         function finish_op()
             markov_opalgo_tick(algo_state, STANDARD_END_OF_OP_TICK_PRIORITY)
             return made_modifications
+        end
+        if exists(threshold) && (threshold < 1)
+            return finish_op()
         end
 
         while true

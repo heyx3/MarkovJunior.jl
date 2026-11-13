@@ -235,6 +235,10 @@ mutable struct AlgoState{MinCompileTimeTickPriority}
     grid_view_id::Int
 
     next_grid_view_id::Int
+
+    # How many cells of the current grid are actually being worked on.
+    # Usually it's the whole grid, but some ops (`@within_regions`) work on a subset of that.
+    grid_area::Int
 end
 
 
@@ -316,6 +320,7 @@ function markov_opalgo_new_grid(new_state_setup_fn,
         end
 
         state.grid = new_grid
+        state.grid_area = length(new_grid)
         state.grid_generation += 1
         try
             # Replace each bias's state as soon as it's ready, so cleanup always sees the live one.
@@ -359,6 +364,9 @@ This is enforced already, but you should implement `markov_op_reallocates_grid()
 
 Note that `restore_view` is called even if the inner Ops throw,
   though the exception is rethrown afterward.
+
+`n_cells` is how many of the view's cells are actually being worked on (see `AlgoState.grid_area`),
+  if it's not all of them (e.g. a `@within_regions` region, whose bounding box also holds dummy cells).
 "
 function markov_opalgo_on_subgrid(to_do,
                                   algo::MarkovAlgorithm, algo_state::AlgoState,
@@ -368,6 +376,8 @@ function markov_opalgo_on_subgrid(to_do,
                                   outer_bias_states::Tuple,
                                   prepare_view = () -> nothing,
                                   restore_view = () -> nothing
+                                  ;
+                                  n_cells::Int = length(sub_grid)
                                  ) where {N}
     @markovjunior_assert(vsize(sub_grid) == size(area),
                          "sub_grid size is ", vsize(sub_grid), " but reported box is ", area)
@@ -394,11 +404,13 @@ function markov_opalgo_on_subgrid(to_do,
     end
 
     outer_view_id = algo_state.grid_view_id
+    outer_grid_area = algo_state.grid_area
     try
         algo_state.grid = sub_grid
         algo_state.scope_depth += 1
         algo_state.next_grid_view_id += 1
         algo_state.grid_view_id = algo_state.next_grid_view_id
+        algo_state.grid_area = n_cells
 
         result::OpChangedGrid = try
             prepare_view()
@@ -422,6 +434,7 @@ function markov_opalgo_on_subgrid(to_do,
 
             algo_state.scope_depth -= 1
             algo_state.grid_view_id = outer_view_id
+            algo_state.grid_area = outer_grid_area
             algo_state.grid = outer_grid
 
             empty!(algo_state.bias_state_stack)
@@ -498,7 +511,8 @@ function markov_algo_run(algo::MarkovAlgorithm,
         else
             fill!(initial_grid, algo.initial_fill)
         end
-        algo_state = AlgoState(initial_grid, rng, allocator, data_store, ch, ticking, Any[ ], 0, 0, 0, 0)
+        algo_state = AlgoState(initial_grid, rng, allocator, data_store, ch, ticking, Any[ ], 0, 0, 0, 0,
+                               length(initial_grid))
 
         try
             @logic_logln "Starting algorithm of size " size(algo_state.grid)

@@ -2,7 +2,7 @@
     # A neat algorithm that demonstrates how to run sequences within a sub-region of the grid.
 
 	# Grow part-way out from the center of the level.
-	@fill 'w' uv(center=0.5, size=0)
+	@fill 'w' uv(center=0.5, size=texel)
 	@rewrite (area/1.5) wb => ww
 
 	# Draw some streaks back inward.
