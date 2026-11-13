@@ -1,9 +1,9 @@
 #NOTE: this file takes some things from op_sequence.jl, and should be included after it.
 
-"Runs a sequence of Ops within a box-shaped part of the grid, as if that part were the entire grid"
+"Runs a sequence of Ops within a slice of the grid"
 struct MarkovOpWithinBox <: AbstractMarkovOp
     inherit_biases::Bool
-    box::CalcBox # Same as `@fill`
+    box::CalcBox
     ops::Vector{AbstractMarkovOp}
 end
 
@@ -24,15 +24,17 @@ function markov_algo_run(op::MarkovOpWithinBox,
         return false
     end
     (area_min, area_max) = (min_inclusive(area), max_inclusive(area))
-    # Views of views get flattened by Julia into one view of the original array,
-    #    so nested scopes don't create new grid types.
+
+    # Note that views of views collapse into a view of the original array,
+    #    so nested scopes can't create a zoo of new grid types.
     sub_grid = view(grid, ntuple(i -> area_min[i]:area_max[i], Val(NGrid))...)
 
-    @logic_logln("Running ", length(op.ops), " ops within ", area_min, " to ", area_max)
+    @logic_logln("Running ", length(op.ops), " ops within ", area)
     result = markov_opalgo_on_subgrid(algo, algo_state, sub_grid, area,
                                       op.inherit_biases, inherited_biases, inherited_bias_states
                                      ) do inner_biases, inner_bias_states
-        # The grid can't be reallocated in here, so the bias states never get replaced.
+        # Note that since the grid can't be reallocated in here,
+        #   the bias states never get replaced and are therefore type-stable.
         inner_result::OpChangedGrid = nothing
         for inner_op in op.ops
             inner_result = combine_op_results(inner_result, markov_algo_run(
@@ -55,6 +57,7 @@ dsl_format(op::MarkovOpWithinBox) = string(
     "@within_box ",
     op.inherit_biases ? "inherit_biases " : "",
     dsl_format(op.box),
+
     " begin\n    ",
     iter_join(Iterators.map(dsl_format, op.ops), "\n    ")...,
     "\nend"
@@ -62,15 +65,21 @@ dsl_format(op::MarkovOpWithinBox) = string(
 
 function parse_markovjunior_op(::Val{Symbol("@within_box")}, inputs::MacroParserInputs,
                                loc, expr_args, expr_line)
+    # Validate.
     args = collect(Any, expr_args)
-    inherit_biases = !isempty(args) && (args[1] == :inherit_biases)
-    inherit_biases && popfirst!(args)
-    if length(args) != 2
+    if !(length(args) in 2:3)
         raise_parse_error(loc, inputs,
                           "Expected `@within_box [inherit_biases] S(A=N, B=M) begin ... end`; got ",
-                            length(expr_args), " arguments")
+                            length(expr_args), " arguments instead")
     end
-    (box_expr, ops_expr) = args
+
+    # Interpret args.
+    inherit_biases = !isempty(args) && (args[1] == :inherit_biases)
+    (box_expr, ops_expr) = if inherit_biases
+        @view args[2:end]
+    else
+        args
+    end
 
     box = with_parser_stacktrace(inputs, "Box") do
         parse_markovjunior_calc_box(inputs, loc, box_expr, CALC_BOX_ENV)
@@ -79,7 +88,9 @@ function parse_markovjunior_op(::Val{Symbol("@within_box")}, inputs::MacroParser
     # Parse the inner Ops.
     # Without inherited biases, they shouldn't be validated against the outer biases either.
     outer_bias_stack = inputs.bias_stack
-    inherit_biases || (inputs.bias_stack = Stack{Vector{AbstractMarkovBias}}(16))
+    if !inherit_biases
+        inputs.bias_stack = Stack{Vector{AbstractMarkovBias}}(16)
+    end
     ops = try
         with_parser_stacktrace(inputs, "Inner Ops") do
             parse_markovjunior_sequence_main_block(ops_expr, loc, inputs)
@@ -87,7 +98,8 @@ function parse_markovjunior_op(::Val{Symbol("@within_box")}, inputs::MacroParser
     finally
         inputs.bias_stack = outer_bias_stack
     end
-    check_markovjunior_scoped_ops(inputs, loc, "@within_box", ops)
 
+    # Put it all together.
+    check_markovjunior_scoped_ops(inputs, loc, "@within_box", ops)
     return MarkovOpWithinBox(inherit_biases, box, ops)
 end

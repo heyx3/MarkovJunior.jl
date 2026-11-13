@@ -344,7 +344,7 @@ function parse_markovjunior_op(::Val{Symbol("@within_regions")}, inputs::MacroPa
                                loc, expr_args, expr_line)
     args = collect(Any, expr_args)
 
-    # The beginning of the rules marks the end of the parameters..
+    # The beginning of the rules marks the end of the parameters.
     # Each rule is `colors => op` or `colors(mask) => op`,
     #    and they come as a single instance or a block of them.
     # None of the other args, including the threshold, can contain a `=>` expression or block.
@@ -363,24 +363,23 @@ function parse_markovjunior_op(::Val{Symbol("@within_regions")}, inputs::MacroPa
     inherit_biases = false
     border::Optional{Int} = nothing
     spread_axes::Optional{Vector{Int}} = nothing
-    is_setting_call(s, name) = Base.isexpr(s, :call) && (s.args[1] == name)
     for setting in args[1:(rule_expr_i - 1)]
         if setting == :inherit_biases
             inherit_biases = true
-        elseif @capture(setting, border(args__))
+        elseif @capture(setting, border(borderArgs__))
             if exists(border)
                 raise_parse_error(loc, inputs, "`border()` is given more than once")
-            elseif (length(args) != 2) || !isa(args[2], Integer) || (args[2] < 0)
+            elseif (length(borderArgs) != 1) || !isa(borderArgs[1], Integer) || (borderArgs[1] < 0)
                 raise_parse_error(loc, inputs, "Expected `border(N)` with a whole number N >= 0; got `", setting, "`")
             end
-            border = convert(Int, args[2])
-        elseif @capture(setting, along(args__))
+            border = convert(Int, borderArgs[1])
+        elseif @capture(setting, along(alongArgs__))
             if exists(spread_axes)
                 raise_parse_error(loc, inputs, "`along()` is given more than once")
-            elseif length(args) < 2
+            elseif length(alongArgs) < 1
                 raise_parse_error(loc, inputs, "`along()` needs at least one axis, like `along(x, z)`")
             end
-            spread_axes = map(args[2:end]) do a
+            spread_axes = map(alongArgs) do a
                 axis = if a isa Integer
                     convert(Int, a)
                 elseif a isa Symbol
